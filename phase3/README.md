@@ -25,19 +25,42 @@ sudo install -Dm755 target/release/omend   /usr/bin/omend
 sudo install -Dm755 target/release/omenctl /usr/bin/omenctl
 sudo install -Dm644 packaging/omend.service /etc/systemd/system/omend.service
 sudo install -Dm644 packaging/omend.toml    /etc/omen/omend.toml
+sudo install -Dm644 packaging/omen-sysusers.conf /usr/lib/sysusers.d/omen.conf
+sudo systemd-sysusers
 sudo systemctl enable --now omend
 ```
 
 Yapilandirma dosyasi zorunlu degil — yoksa gomulu varsayilanlar kullanilir.
 
+Kontrol komutlarini sudo'suz kullanmak icin `omen` grubuna katil:
+
+```bash
+sudo usermod -aG omen $USER      # sonra yeniden oturum ac
+```
+
 ## Kullanim
 
 ```bash
-omenctl status                # donanim, profil, fan, sicakliklar
+omenctl status                # daemon + donanim durumu
 omenctl curve                 # etkin egri ve guvenlik esikleri
+
+omenctl set curve             # egri sursun (varsayilan)
+omenctl set manual 2400       # sabit hedef
+omenctl set auto              # kontrolu EC'ye birak
+omenctl set max               # tam guc
+omenctl profile performance   # balanced / performance / low-power
+omenctl reload                # yapilandirmayi yeniden okut
+
 omend --dry-run --once        # hicbir sey yazmadan ne yapacagini goster
 journalctl -u omend -f        # canli
 ```
+
+`omenctl` fana **dogrudan yazmaz**; kontrol komutlari unix socket uzerinden
+daemon'a gider. `status` daemon calismiyorken sysfs'ten okumaya duser, yani
+tanilama araci olarak her durumda ise yarar.
+
+Ikinci bir ornek calistirmak veya root olmadan denemek icin socket yolu
+`OMEND_SOCKET` ile degistirilebilir.
 
 ## Guvenlik
 
@@ -53,7 +76,10 @@ devreye girmez. `omend` bes kurala uyar:
    dusulur. Bilinmeyen durumda son setpoint'te kalmak en tehlikeli davranis.
 4. **Iki katmanli kelepceleme.** Setpoint once `omend`de `min_rpm..max_rpm`
    araligina, sonra cekirdekte fan tablosunun sinirlarina kelepcelenir.
-5. **Yazma yetkisi yalnizca daemon'da.** `omenctl` salt okunur.
+5. **Yazma yetkisi yalnizca daemon'da.** `omenctl` fana dogrudan yazmaz;
+   istegini socket uzerinden iletir. Boylece kelepceleme, kritik sigorta ve
+   cikista otomatige donme tek bir yerde garanti altinda — manuel modda bile.
+   Kritik sigorta kullanici istegini de gecersiz kilar.
 
 Egriyi denemeden once ikinci bir terminalde `watch -n1 sensors` acik olsun.
 
@@ -74,7 +100,7 @@ calismaya devam eder.
 
 | | |
 |---|---|
-| M1 fan egrisi + durum araci | **calisiyor**, canli test bekliyor |
-| M1b `omenctl` kontrol komutlari (unix socket) | siradaki |
+| M1 fan egrisi + durum araci | **calisiyor**, makinede dogrulandi |
+| M1b `omenctl` kontrol komutlari (unix socket) | **calisiyor** |
 | M2 `omen-kbd-rgb` cekirdek modulu | planlandi |
 | M3 Tauri arayuzu | planlandi |

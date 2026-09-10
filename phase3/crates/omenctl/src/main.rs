@@ -1,37 +1,56 @@
-//! `omenctl` — durum ve tanilama araci.
+//! `omenctl` — durum araci ve daemon istemcisi.
 //!
-//! M1'de SALT OKUNUR. Yazma yetkisi bilerek yalnizca daemon'da
-//! (phase3-plan §4, guvenlik kurali 5): fan setpoint'ini tek bir yerden
-//! surmek, iki surecin birbirinin uzerine yazmasindan iyidir. Kontrol
-//! komutlari M1b'de unix socket uzerinden daemon'a gidecek.
+//! Fan'a DOGRUDAN yazmaz. Kontrol komutlari unix socket uzerinden omend'e
+//! gider (phase3-plan §4, guvenlik kurali 5): setpoint'i tek bir yerden
+//! surmek, iki surecin birbirinin uzerine yazmasindan iyidir. Boylece
+//! kelepceleme, kritik sigorta ve cikista otomatige donme her yol icin
+//! tek bir yerde garanti altinda.
+//!
+//! `status` daemon calismiyorken de ise yarasin diye sysfs'ten dogrudan
+//! okumaya duser - tanilama araci olarak degeri buradan geliyor.
+
+mod client;
 
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use omen_core::config::Config;
 use omen_core::fan::Fan;
+use omen_core::ipc::{ControlMode, Request, Response};
 use omen_core::profile::PlatformProfile;
 use omen_core::sysfs;
 use omen_core::thermal::Thermal;
 
 const USAGE: &str = "\
-omenctl - OMEN 16-ap0xxx fan ve termal durum araci
+omenctl - OMEN 16-ap0xxx fan ve termal kontrol araci
 
 KULLANIM:
-    omenctl status              Mevcut durumu goster
-    omenctl curve [-c YOL]      Etkin fan egrisini goster
-    omenctl --help
+    omenctl status                 Mevcut durum (daemon yoksa sysfs'ten okur)
+    omenctl curve [-c YOL]         Etkin fan egrisini goster
 
-NOT: Bu arac salt okunurdur. Fan kontrolu omend uzerinden yapilir.
+    omenctl set curve              Fani egri sursun (varsayilan)
+    omenctl set auto               Kontrolu EC'ye birak
+    omenctl set manual <RPM>       Sabit hedef
+    omenctl set max                Fan tam guc
+
+    omenctl profile <AD>           balanced / performance / low-power
+    omenctl reload                 Yapilandirmayi yeniden okut
+
+Kontrol komutlari omend'e socket uzerinden gider; fan'a yazan tek sey
+daemon'dir. Izin hatasi alirsan sudo ile calistir.
 ";
 
 fn main() -> ExitCode {
+    restore_sigpipe();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("status");
 
     let result = match cmd {
         "status" => status(),
         "curve" => curve(&args),
+        "set" => set_mode(&args),
+        "profile" => set_profile(&args),
+        "reload" => client::send(&Request::Reload).and_then(client::report),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -51,11 +70,73 @@ fn main() -> ExitCode {
     }
 }
 
+/// Rust SIGPIPE'i baslangicta yok sayiyor; bu yuzden `omenctl status | head`
+/// gibi bir boruda okuyan taraf kapaninca yazma hata veriyor ve panic
+/// ciktisi bastiriyor. Bir CLI icin dogru davranis, her filtre programinin
+/// yaptigi gibi sessizce sonlanmak.
+fn restore_sigpipe() {
+    // SAFETY: tek is parcacikliyiz ve yalnizca varsayilan davranisi
+    // geri koyuyoruz.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 fn field(name: &str, value: impl std::fmt::Display) {
     println!("  {name:<16} {value}");
 }
 
+fn set_mode(args: &[String]) -> Result<()> {
+    let mode = match args.get(1).map(String::as_str) {
+        Some("curve") => ControlMode::Curve,
+        Some("auto") => ControlMode::Auto,
+        Some("max") => ControlMode::Max,
+        Some("manual") => {
+            let rpm: u32 = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("manual bir RPM degeri bekliyor"))?
+                .parse()
+                .map_err(|_| anyhow::anyhow!("RPM sayi olmali"))?;
+            ControlMode::Manual { rpm }
+        }
+        Some(other) => bail!("bilinmeyen mod: {other} (curve / auto / manual <RPM> / max)"),
+        None => bail!("mod bekleniyor: curve / auto / manual <RPM> / max"),
+    };
+    client::report(client::send(&Request::SetMode(mode))?)
+}
+
+fn set_profile(args: &[String]) -> Result<()> {
+    let profile = args
+        .get(1)
+        .ok_or_else(|| anyhow::anyhow!("profil adi bekleniyor"))?
+        .clone();
+    client::report(client::send(&Request::SetProfile { profile })?)
+}
+
 fn status() -> Result<()> {
+    // Daemon calisiyorsa onun gorunumu daha zengin: surus modu, kritik
+    // sigortanin durumu, hedef setpoint. Yoksa sysfs'ten okumaya duseriz.
+    if let Ok(Response::Ok(snap)) = client::send(&Request::Status) {
+        println!("omend");
+        field("mod", snap.mode.map(|m| m.to_string()).unwrap_or_default());
+        if snap.safety_fallback {
+            println!("  ! kritik sigorta atti - kontrol EC'de");
+        }
+        if let (Some(l), Some(c)) = (&snap.driver_label, snap.driver_temp_c) {
+            field("egriyi suren", format!("{l} {c:.1} C"));
+        }
+        // target_rpm yalnizca sabit bir setpoint varken dolu. Bos olmasi
+        // "otomatik" demek DEGIL - max modunda da bos, ve orada fan tam
+        // guctedir. Modu birlikte okumak gerekiyor.
+        match (snap.mode, snap.target_rpm) {
+            (_, Some(rpm)) => field("hedef", format!("{rpm} RPM")),
+            (Some(ControlMode::Max), None) => field("hedef", "tam guc"),
+            (_, None) => field("hedef", "otomatik (kontrol EC'de)"),
+        }
+        field("calisma suresi", format!("{} s", snap.uptime_secs));
+        println!();
+    }
+
     println!("donanim");
     let board = sysfs::read_string(std::path::Path::new("/sys/class/dmi/id/board_name"))
         .unwrap_or_else(|_| "?".into());

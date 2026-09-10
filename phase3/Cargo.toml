@@ -13,6 +13,7 @@ repository = "https://github.com/WinTone01/omen-linux-driver"
 omen-core = { path = "crates/omen-core" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+serde_json = "1"
 thiserror = "2"
 anyhow = "1"
 log = "0.4"

@@ -35,6 +35,12 @@ CapabilityBoundingSet=
 # /sys varsayilan olarak salt okunur baglanir; yazacagimiz iki yolu aciyoruz.
 ProtectSystem=strict
 ReadWritePaths=/sys/class/hwmon /sys/devices
+
+# Socket buraya acilir; systemd dizini olusturur ve kapanista siler.
+# /run'in tamamini yazilabilir yapmaktan iyi. Dizin 0755, erisimi
+# socket'in kendi izinleri (0660, grup omen) belirliyor.
+RuntimeDirectory=omend
+RuntimeDirectoryMode=0755
 PrivateNetwork=yes
 PrivateTmp=yes
 

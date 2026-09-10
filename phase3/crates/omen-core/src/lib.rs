@@ -14,6 +14,7 @@ pub mod config;
 pub mod curve;
 pub mod error;
 pub mod fan;
+pub mod ipc;
 pub mod profile;
 pub mod sysfs;
 pub mod thermal;
