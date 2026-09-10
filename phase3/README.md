@@ -46,10 +46,10 @@ sudo usermod -aG omen $USER      # then log out and back in
 omenctl status                # daemon + hardware state
 omenctl curve                 # active curve and safety thresholds
 
-omenctl set curve             # let the curve drive (default)
+omenctl set curve             # automatic: the curve drives (default)
 omenctl set manual 2400       # fixed target
-omenctl set auto              # hand control back to the EC
 omenctl set max               # full speed
+omenctl set auto              # advanced: hand the fans to the EC (see below)
 omenctl profile performance   # balanced / performance / low-power
 omenctl reload                # re-read the config
 
@@ -89,6 +89,28 @@ always step in. `omend` follows five rules:
    instead of touching the fan. That way clamping, the cutout and the exit
    behaviour are guaranteed in one place — including in manual mode. The
    overrides beat the user's request too.
+
+### On the fan modes, and what "Auto" is not
+
+The modes are named for what they do for you, not for how they work inside:
+
+| UI | Protocol | What it does |
+|---|---|---|
+| Automatic | `curve` | The daemon drives the fans from the curve. The normal mode. |
+| Manual | `manual` | A fixed target. |
+| Max | `max` | Full power. |
+| *EC default* | `auto` | Hands the fans to the EC and stops managing them. |
+
+`Automatic` is the equivalent of what OMEN Gaming Hub calls Auto. That is not
+a loose analogy: Phase 1 §6.4 found HP's Auto runs the curve **in the Windows
+application**, writing setpoints continuously, exactly as this daemon does.
+Nobody's "automatic" hands the fans to the EC.
+
+`EC default` does hand them over, which is why it is set apart in the UI. It is
+there for comparing against stock behaviour, not for daily use - on this
+machine the EC does not take the fans at all (see below). The earlier naming
+had this backwards: `Curve` sounded like the advanced option and `Auto` like
+the safe default, when the opposite is true.
 
 ### The incident that rewrote rules 1 to 4 (2026-09-11)
 

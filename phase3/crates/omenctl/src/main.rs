@@ -27,10 +27,13 @@ USAGE:
     omenctl status                 Current state (reads sysfs if no daemon)
     omenctl curve [-c PATH]        Show the active fan curve
 
-    omenctl set curve              Let the curve drive the fan (default)
-    omenctl set auto               Hand control back to the EC
+    omenctl set curve              Automatic: the curve drives the fan (default)
     omenctl set manual <RPM>       Fixed target
     omenctl set max                Fans at full power
+    omenctl set auto               Advanced: hand the fans to the EC and stop
+                                   managing them. On this machine the EC does
+                                   not take them - for comparing against stock
+                                   behaviour, not for daily use.
 
     omenctl profile <NAME>         balanced / performance / low-power
     omenctl reload                 Make the daemon re-read its configuration

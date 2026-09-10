@@ -213,10 +213,21 @@ function buildZonePickers() {
 /* ── fan ─────────────────────────────────────────────────────── */
 
 const MODE_HELP = {
-  curve: "The curve in /etc/omen/omend.toml drives the fan. Below its lowest point control is handed back to the EC, which keeps the fans stopped at idle.",
-  auto: "Hands the fans to the EC - and on this machine the EC does not take them. Measured: the fans sat at 0 RPM while the CPU climbed 78 to 85 C in twelve seconds under load. omend will force full power if that happens and put you back on the curve.",
-  manual: "A fixed target. The critical cutout still applies — a request here does not disable thermal protection.",
-  max: "Fans at full power (WMI 0x27). The EC takes over the curve while this is on.",
+  curve:
+    "Fans follow the curve in /etc/omen/omend.toml by temperature. This is the " +
+    "normal mode, and it is the equivalent of what OMEN Gaming Hub calls Auto - " +
+    "HP runs its curve in software too. Below the curve's lowest point the fans " +
+    "are left alone, which keeps the machine silent at idle.",
+  manual:
+    "A fixed target. The critical cutout still applies - a request here does not " +
+    "disable thermal protection.",
+  max: "Fans at full power (WMI 0x27).",
+  auto:
+    "Advanced: hands the fans to the EC and stops managing them. On this machine " +
+    "the EC does not take them - measured, the fans sat at 0 RPM while the CPU " +
+    "climbed 78 to 85 C in twelve seconds under load. omend forces full power if " +
+    "that happens and puts you back on Automatic. Useful for comparing against " +
+    "stock behaviour, not for daily use.",
 };
 
 $$("#fan-modes button").forEach((b) =>
