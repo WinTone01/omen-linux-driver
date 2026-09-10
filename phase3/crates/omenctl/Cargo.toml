@@ -1,0 +1,12 @@
+[package]
+name = "omenctl"
+description = "OMEN 16-ap0xxx fan ve termal durum araci"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+omen-core = { workspace = true }
+anyhow = { workspace = true }

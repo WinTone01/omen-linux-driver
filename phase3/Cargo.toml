@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["crates/omen-core", "crates/omend", "crates/omenctl"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "GPL-2.0-only"
+repository = "https://github.com/WinTone01/omen-linux-driver"
+
+[workspace.dependencies]
+omen-core = { path = "crates/omen-core" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+thiserror = "2"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+signal-hook = "0.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

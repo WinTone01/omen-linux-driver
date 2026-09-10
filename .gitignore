@@ -9,3 +9,6 @@ verify-*.txt
 
 # build-module.sh calisma dizini
 phase2/build/
+
+# Rust derleme ciktisi
+phase3/target/

@@ -1,0 +1,42 @@
+[Unit]
+Description=OMEN 16-ap0xxx fan egrisi servisi
+Documentation=https://github.com/WinTone01/omen-linux-driver
+# hp-wmi'nin hwmon'u hazir olmadan baslarsak pwm1 bulunamaz.
+After=systemd-modules-load.service
+ConditionPathExists=/sys/class/dmi/id/board_name
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/omend --config /etc/omen/omend.toml
+Restart=on-failure
+RestartSec=5
+
+# Guvenlik kurali 1, ucuncu kapi: daemon SIGKILL ile olduyse Drop
+# calismaz ve fan son setpoint'te kalir. Bu satir her cikis yolunda
+# fani EC'ye geri verir. '-' oneki: bu adim basarisiz olsa bile
+# servisin kapanmasini engellemesin.
+ExecStopPost=-/usr/bin/omend --restore-auto
+
+# Yalnizca sysfs'e yaziyoruz; geri kalan her sey kapali olabilir.
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectClock=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+# /sys varsayilan olarak salt okunur baglanir; yazacagimiz iki yolu aciyoruz.
+ProtectSystem=strict
+ReadWritePaths=/sys/class/hwmon /sys/devices
+PrivateNetwork=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

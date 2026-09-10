@@ -1,0 +1,14 @@
+[package]
+name = "omen-core"
+description = "HP OMEN 16-ap0xxx (8D24) fan, termal ve RGB kontrolu icin ortak katman"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }

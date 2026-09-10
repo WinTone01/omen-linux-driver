@@ -1,0 +1,15 @@
+[package]
+name = "omend"
+description = "OMEN 16-ap0xxx fan egrisi ve termal yonetim servisi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+omen-core = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+signal-hook = { workspace = true }

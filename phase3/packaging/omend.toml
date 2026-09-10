@@ -1,0 +1,45 @@
+# omend yapilandirmasi - /etc/omen/omend.toml
+#
+# Bu dosya YOKSA gomulu varsayilanlar kullanilir; kurulum sarti degil.
+# Ama VARSA ve bozuksa daemon baslamaz: fan egrisinde "herhalde bunu
+# demek istedi" diye tahmin yurutmek dogru degil.
+
+[fan]
+# false yapilirsa daemon yalnizca izler, hicbir sey yazmaz.
+enabled = true
+
+# Olcum araligi (saniye).
+interval_secs = 2
+
+# Setpoint'i DUSURMEK icin sicakligin bu kadar dusmesi gerekir.
+# Yukari cikmak her zaman aninda - sogutmayi artirmak guvenli taraf.
+hysteresis_c = 5.0
+
+# Iki setpoint degisikligi arasi asgari sure (saniye).
+min_dwell_secs = 20
+
+# Faz 1 §6.3: OGH'nin kendi sinirlari 1800-4800 RPM.
+min_rpm = 1800
+max_rpm = 4800
+
+# Fan egrisi. rpm = 0 -> o sicaklikta kontrolu EC'ye birak.
+#
+# Alt bolgenin otomatik olmasi bilincli: EC rolantide fanlari tamamen
+# durduruyor (Faz 2'de olculdu, 45C'de 0 RPM). Orada manuel moda gecip
+# 1800 RPM dayatsaydik makine fabrika ayarindan daha gurultulu olurdu.
+curve = [
+  { temp_c = 60.0, rpm = 0    },
+  { temp_c = 70.0, rpm = 1800 },
+  { temp_c = 80.0, rpm = 2400 },
+  { temp_c = 90.0, rpm = 3300 },
+  { temp_c = 95.0, rpm = 4800 },
+]
+
+[safety]
+# Bu sicakligin ustunde egri birakilir, kontrol EC'ye doner.
+# Egrinin ust ucundan (95C) BUYUK olmali - aksi halde egrinin en
+# agresif bolgesi hic kullanilamaz. omend bunu baslangicta denetler.
+critical_c = 97.0
+
+# Sigortadan cikis: 97 - 10 = 87C'ye dusunce egri yeniden devreye girer.
+recover_delta_c = 10.0

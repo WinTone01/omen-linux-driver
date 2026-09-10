@@ -98,10 +98,17 @@ zorunlu: HP'nin kendi "Auto" modu bile yazılımda koşuyor.
   düşüş eşiği yükseliş eşiğinden ayrı, ve setpoint değişimleri arası asgari süre
 - **Sınırlar:** 18–48 (1800–4800 RPM), Faz 1 §6.3'teki `profiles.json` sınırları
 
-### 2.3 `omenctl` + web arayüzü
+### 2.3 `omenctl` + Tauri arayüzü
 
-`omend` ile aynı binary, alt komut olarak. Web arayüzü daemon'ın `127.0.0.1`
-üzerinde sunduğu HTTP + WebSocket'e bağlanır (canlı sıcaklık/RPM akışı).
+`omenctl` salt okunur bir durum aracı olarak başladı; kontrol komutları
+(profil değiştir, eğri yükle, manuel setpoint) M1b'de unix socket üzerinden
+daemon'a gidecek. Yazma yetkisi tek bir yerde kalsın diye CLI doğrudan
+sysfs'e yazmıyor.
+
+Masaüstü arayüzü **Tauri** ile. Electron yerine tercih sebebi: zaten Rust,
+yani daemon ile aynı dil ve `omen-core` doğrudan kullanılabilir; çıkan binary
+Electron'un ~150 MB'ı yerine birkaç MB; sistem WebView'ını kullandığı için
+ayrı bir Chromium taşımıyor. Arayüz daemon'ın socket'ine bağlanır.
 
 ## 3. Dil seçimi
 
@@ -136,7 +143,7 @@ Daemon'ın uyacağı kurallar:
 |---|---|---|
 | M1 | `omend` fan eğrisi + `omenctl` | Faz 2 zaten `pwm1`'i açtı; en çok işe yarayan eksik parça bu |
 | M2 | `omen-kbd-rgb` modülü | Harita hazır, ama çekirdek kodu yazmak daha uzun |
-| M3 | Web arayüzü | Altındaki iki katman oturduktan sonra |
+| M3 | Tauri arayüzü | Altındaki iki katman oturduktan sonra |
 | M4 | Paketleme (systemd, udev, DKMS, PKGBUILD) | — |
 | M5 | Upstream `8D24` yaması | Faz 2'nin kalan işi, diğerlerinden bağımsız |
 
