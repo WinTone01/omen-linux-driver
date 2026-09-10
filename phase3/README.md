@@ -112,9 +112,20 @@ Two mistakes, both ours:
   it is not a safety net.** Every override now forces full power, which is the
   one state that is unambiguously safe at these temperatures.
 
-Selecting `Auto` no longer risks this: the stall detector forces full power
-within a few seconds and puts the machine back on the curve, saying so in the
-log and in the UI.
+Selecting `Auto` no longer risks this. The full cycle, measured on the machine
+under load:
+
+```
+02:32:38  mode: curve -> auto
+02:32:50  EMERGENCY: cpu/Tctl 77.5C with both fans stopped for 8s - forcing full power
+02:32:50  auto mode is not cooling this machine - switching to the curve
+02:33:10  leaving emergency
+02:33:10  cpu/Tctl 75.9C -> 2200 RPM
+```
+
+Twelve seconds from the fans stopping to full power, the peak at 82.6 °C
+rather than 98 °C, and back on the curve twenty seconds later without needing
+the machine to cool down first.
 
 Rule 2 is not a formality: the first version defaulted the cutout to 90 °C
 while the curve ran to 4800 RPM at 95 °C, which made the most aggressive part
