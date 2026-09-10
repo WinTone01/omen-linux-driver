@@ -53,26 +53,140 @@ fn snapshot() -> (Option<Snapshot>, Option<String>, Option<String>) {
     }
 }
 
-/// Turns a connection failure into a next step.
+/// Where this process stands with respect to the 'omen' group.
 ///
-/// The two causes are almost always: the socket is there but we are not in
-/// the 'omen' group yet (a fresh usermod only applies to new login sessions),
-/// or the service is not running. "Permission denied" on its own tells the
-/// user neither.
+/// "Are you a member" and "did this process get the group" are different
+/// questions, and confusing them costs real time: a `usermod -aG` only takes
+/// effect for sessions started afterwards, so a window launched from an older
+/// session is denied even though the user is plainly a member.
+#[derive(Debug, PartialEq)]
+enum GroupState {
+    /// The group does not exist - the sysusers file was never installed.
+    Missing,
+    /// The group exists but the user is not in it.
+    NotMember,
+    /// The user is a member, but this process did not inherit it.
+    MemberNotEffective,
+    Effective,
+}
+
+fn omen_gid() -> Option<u32> {
+    let content = std::fs::read_to_string("/etc/group").ok()?;
+    content.lines().find_map(|line| {
+        let mut f = line.split(':');
+        (f.next()? == "omen").then(|| f.nth(1)?.parse().ok())?
+    })
+}
+
+/// The login name for our real uid.
+///
+/// Deliberately not $USER: that is not guaranteed to be set - a desktop
+/// launcher may start us without it - and an empty value would make the
+/// membership check say "you are not a member" with confidence. The uid is
+/// always there.
+fn current_user() -> Option<String> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let uid: u32 = status
+        .lines()
+        .find_map(|l| l.strip_prefix("Uid:"))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
+
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd.lines().find_map(|line| {
+        let mut f = line.split(':');
+        let name = f.next()?;
+        (f.nth(1)? == uid.to_string()).then(|| name.to_owned())
+    })
+}
+
+fn user_is_member() -> bool {
+    let Some(user) = current_user() else {
+        return false;
+    };
+    let Ok(content) = std::fs::read_to_string("/etc/group") else {
+        return false;
+    };
+    content.lines().any(|line| {
+        let mut f = line.split(':');
+        f.next() == Some("omen")
+            && f.nth(2)
+                .is_some_and(|m| m.split(',').any(|n| !n.is_empty() && n == user))
+    })
+}
+
+/// Reads this process's own credentials from /proc rather than pulling in
+/// libc for getgroups(). `Gid` covers the primary group - which is what
+/// `newgrp` sets - and `Groups` the supplementary list; a process can hold
+/// the group through either, so both have to be checked.
+fn process_has_gid(gid: u32) -> bool {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return false;
+    };
+    status.lines().any(
+        |line| match line.strip_prefix("Groups:").or(line.strip_prefix("Gid:")) {
+            Some(rest) => rest.split_whitespace().any(|g| g.parse() == Ok(gid)),
+            None => false,
+        },
+    )
+}
+
+fn group_state() -> GroupState {
+    let Some(gid) = omen_gid() else {
+        return GroupState::Missing;
+    };
+    if process_has_gid(gid) {
+        GroupState::Effective
+    } else if user_is_member() {
+        GroupState::MemberNotEffective
+    } else {
+        GroupState::NotMember
+    }
+}
+
+/// Turns a connection failure into a next step. "Permission denied" on its
+/// own does not tell anyone what to do about it.
 fn daemon_hint(e: &client::ClientError) -> Option<String> {
     use std::io::ErrorKind;
-    match e {
-        client::ClientError::Connect { source, .. } => Some(match source.kind() {
-            ErrorKind::PermissionDenied => "You are not in the 'omen' group in this session.                  Run <code>sudo usermod -aG omen $USER</code> if you have not, then log out                  and back in - an open session keeps the group list it started with."
-                .into(),
-            ErrorKind::NotFound | ErrorKind::ConnectionRefused => {
-                "The service does not appear to be running. Start it with                  <code>sudo systemctl enable --now omend</code>."
-                    .into()
-            }
-            _ => return None,
-        }),
-        _ => None,
-    }
+
+    let client::ClientError::Connect { source, .. } = e else {
+        return None;
+    };
+
+    let text = match source.kind() {
+        ErrorKind::PermissionDenied => match group_state() {
+            GroupState::Missing => concat!(
+                "The 'omen' group does not exist. Install the sysusers file ",
+                "(<code>packaging/omen-sysusers.conf</code>) and run ",
+                "<code>sudo systemd-sysusers</code>."
+            ),
+            GroupState::NotMember => concat!(
+                "You are not in the 'omen' group. Run ",
+                "<code>sudo usermod -aG omen $USER</code>, then log out and back in."
+            ),
+            GroupState::MemberNotEffective => concat!(
+                "You are a member of the 'omen' group, but <strong>this window did not ",
+                "inherit it</strong> - it was started from a session that began before the ",
+                "membership was granted. Log out and back in, or launch it from a fresh ",
+                "session."
+            ),
+            // Denied while we do hold the group: the socket's own permissions
+            // are the problem, not ours.
+            GroupState::Effective => concat!(
+                "This process does hold the 'omen' group, so the socket's permissions are ",
+                "the problem. Check <code>ls -l /run/omend/omend.sock</code> - it should be ",
+                "<code>root:omen</code>, mode 0660."
+            ),
+        },
+        ErrorKind::NotFound | ErrorKind::ConnectionRefused => concat!(
+            "The service does not appear to be running. Start it with ",
+            "<code>sudo systemctl enable --now omend</code>."
+        ),
+        _ => return None,
+    };
+    Some(text.to_owned())
 }
 
 #[tauri::command]
