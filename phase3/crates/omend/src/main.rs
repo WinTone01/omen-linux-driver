@@ -235,8 +235,13 @@ fn run(args: Args) -> Result<()> {
 #[derive(Debug)]
 struct Emergency {
     reason: String,
-    /// Normal driving resumes once the temperature falls below this.
-    recover_below: f32,
+    /// Normal driving resumes once the temperature falls below this. `None`
+    /// when the trigger was not a temperature threshold, so waiting for a big
+    /// drop would make no sense.
+    recover_below: Option<f32>,
+    /// Full power is held at least this long, so the machine cannot flap
+    /// between the override and whatever tripped it.
+    hold_until: Instant,
 }
 
 /// What did we last write to the fan? Used to avoid rewriting the same value.
@@ -313,11 +318,12 @@ impl Runtime {
                 // about; the EC cannot be trusted to take over (see
                 // Emergency).
                 if self.emergency.is_none() {
+                    // Nothing to compare against, so resume as soon as a
+                    // reading comes back.
                     self.declare_emergency(
                         format!("no temperature could be read ({e})"),
-                        // Nothing to compare against, so hold until a reading
-                        // comes back.
-                        f32::NEG_INFINITY,
+                        None,
+                        Duration::from_secs(0),
                     );
                 }
                 None
@@ -374,15 +380,13 @@ impl Runtime {
         // Already in an emergency: hold full power until it is properly cool
         // again. Leaving early just re-enters it a few seconds later.
         if let Some(e) = &self.emergency {
-            if temp > e.recover_below {
+            let still_hot = e.recover_below.is_some_and(|limit| temp > limit);
+            if Instant::now() < e.hold_until || still_hot {
                 debug!("emergency hold ({}), {label} {temp:.1}C", e.reason);
                 self.apply(Applied::Max, "emergency");
                 return false;
             }
-            info!(
-                "{label} {temp:.1}C <= {:.1}C - leaving emergency ({})",
-                e.recover_below, e.reason
-            );
+            info!("{label} {temp:.1}C - leaving emergency ({})", e.reason);
             self.emergency = None;
             self.stall_since = None;
             self.applied = Applied::Unknown;
@@ -392,9 +396,15 @@ impl Runtime {
         // The critical cutout. Applies in EVERY mode - a manual request from
         // the user does not disable thermal protection.
         if temp >= self.cfg.safety.critical_c {
+            // A temperature threshold tripped this, so a temperature drop is
+            // the right thing to wait for.
             self.declare_emergency(
-                format!("{label} {temp:.1}C >= critical {:.1}C", self.cfg.safety.critical_c),
-                self.cfg.safety.critical_c - self.cfg.safety.recover_delta_c,
+                format!(
+                    "{label} {temp:.1}C >= critical {:.1}C",
+                    self.cfg.safety.critical_c
+                ),
+                Some(self.cfg.safety.critical_c - self.cfg.safety.recover_delta_c),
+                Duration::from_secs(10),
             );
             return false;
         }
@@ -409,12 +419,20 @@ impl Runtime {
         if stopped && temp >= self.cfg.safety.stall_temp_c {
             let since = *self.stall_since.get_or_insert_with(Instant::now);
             if since.elapsed() >= self.cfg.stall_grace() {
+                // Deliberately NOT waiting for a big temperature drop here.
+                // The condition was "fans stopped", and forcing full power
+                // ends it immediately - the fans are turning. Under a
+                // sustained load the machine never reaches a low temperature,
+                // so a temperature-based recovery would pin it at full power
+                // for as long as the load lasts. A fixed hold is enough: if
+                // the cause is still there, the detector fires again.
                 self.declare_emergency(
                     format!(
                         "{label} {temp:.1}C with both fans stopped for {}s",
                         since.elapsed().as_secs()
                     ),
-                    self.cfg.safety.stall_temp_c - self.cfg.safety.recover_delta_c,
+                    None,
+                    Duration::from_secs(20),
                 );
                 // Auto is the mode that produces this on purpose, by handing
                 // the fans to an EC that does not take them. Staying in it
@@ -435,11 +453,12 @@ impl Runtime {
         true
     }
 
-    fn declare_emergency(&mut self, reason: String, recover_below: f32) {
+    fn declare_emergency(&mut self, reason: String, recover_below: Option<f32>, hold: Duration) {
         error!("EMERGENCY: {reason} - forcing the fans to full power");
         self.emergency = Some(Emergency {
             reason,
             recover_below,
+            hold_until: Instant::now() + hold,
         });
         self.governor.reset();
         self.applied = Applied::Unknown;
@@ -487,7 +506,7 @@ impl Runtime {
                         // state, and the EC will not pick the curve up on its
                         // own. Full power is the state we can be sure about.
                         let reason = format!("could not write the setpoint ({e})");
-                        self.declare_emergency(reason, self.cfg.safety.stall_temp_c);
+                        self.declare_emergency(reason, None, Duration::from_secs(20));
                     }
                 }
             }
