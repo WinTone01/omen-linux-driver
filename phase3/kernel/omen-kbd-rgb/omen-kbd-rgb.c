@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * HP OMEN 16-ap0xxx (board 8D24) 4 bolge RGB klavye aydinlatmasi.
+ * 4-zone RGB keyboard backlight for the HP OMEN 16-ap0xxx (board 8D24).
  *
- * Protokol: phase3/docs/rgb-protocol.md - hepsi DSDT'den cikarildi.
+ * Protocol: phase3/docs/rgb-protocol.md - all of it extracted from the DSDT.
  *
- * Bu modul BILEREK yalnizca aydinlatma komut grubunu (0x020009) kullanir.
- * Fan ve termal taraf in-tree hp-wmi'nin isi (0x020008). Ikisi ayni WMI
- * GUID'ini kullanir ama hp-wmi GUID'i SAHIPLENMEZ - wmi_evaluate_method
- * ile cagirir ve kendisi bir platform_driver'dir. Gruplar ayrik oldugu
- * icin iki modul yan yana calisir; hp_wmi'yi blacklist etmek gerekmez.
+ * This module deliberately uses only the lighting command group (0x020009).
+ * Fans and thermals are in-tree hp-wmi's job (0x020008). Both use the same
+ * WMI GUID, but hp-wmi does NOT own it - it calls through
+ * wmi_evaluate_method() and registers itself as a platform_driver. Since the
+ * groups are disjoint the two modules run side by side; there is no need to
+ * blacklist hp_wmi.
  *
  * Copyright (C) 2026 WinTone
  */
@@ -37,35 +38,36 @@ enum lighting_query {
 #define ZONE_COUNT		4
 #define COLORS_PER_ZONE		3
 /*
- * LM03: LDAT[0..11] = WBUF[0x19..0x24]. Renkler 128 baytlik veri alaninin
- * BASINDA degil, 25. bayttan itibaren duruyor.
+ * LM03: LDAT[0..11] = WBUF[0x19..0x24]. The colours sit 25 bytes into the
+ * 128-byte data area, not at its start.
  */
 #define ZONE_DATA_OFFSET	0x19
 #define STATE_SIZE		128
-
-/*
- * sysfs bolge numarasi -> donanim yuvasi.
- *
- * Yuva sirasi fiziksel sirayla ne ayni ne de tam ters; karisik. Makinede
- * tek tek bolge yakarak olculdu (2026-09-11):
- *
- *   yuva 0 (ofset 25) -> numpad, en sag
- *   yuva 1 (ofset 28) -> orta-sag  (JKL / Enter tarafi)
- *   yuva 2 (ofset 31) -> EN SOL    (Esc / Tab / Caps sutunu)
- *   yuva 3 (ofset 34) -> WASD
- *
- * Kullanici zone0'in soldaki oldugunu bekler (okuma yonu), ve arayuzun
- * klavyeyi soldan saga cizebilmesi icin numaralarin fiziksel sirayi
- * izlemesi gerekiyor. Cevrim burada:
- *
- *   zone0 = en sol, zone1 = WASD, zone2 = orta-sag, zone3 = numpad
- */
-static const u8 zone_slot[] = { 2, 3, 1, 0 };
-/* LM04'teki olu atama (Local1 = 0x64) olcegin 0-100 oldugunu soyluyor. */
+/* The dead assignment in LM04 (Local1 = 0x64) says the scale is 0-100. */
 #define BRIGHTNESS_MAX		100
 
+/*
+ * sysfs zone number -> hardware slot.
+ *
+ * The slot order is neither the same as nor the reverse of the physical
+ * order; it is scrambled. Measured by lighting one zone at a time
+ * (2026-09-11):
+ *
+ *   slot 0 (offset 25) -> numpad, rightmost
+ *   slot 1 (offset 28) -> centre-right (JKL / Enter side)
+ *   slot 2 (offset 31) -> LEFTMOST     (Esc / Tab / Caps column)
+ *   slot 3 (offset 34) -> WASD
+ *
+ * Users expect zone0 to be the left-hand one (reading order), and a UI that
+ * draws a keyboard needs the numbers to follow physical order. Hence the
+ * translation here:
+ *
+ *   zone0 = leftmost, zone1 = WASD, zone2 = centre-right, zone3 = numpad
+ */
+static const u8 zone_slot[] = { 2, 3, 1, 0 };
+
 static_assert(ARRAY_SIZE(zone_slot) == ZONE_COUNT,
-	      "zone_slot ile ZONE_COUNT uyusmuyor");
+	      "zone_slot does not match ZONE_COUNT");
 
 struct bios_args {
 	u32 signature;
@@ -82,7 +84,7 @@ struct bios_return {
 
 struct omen_rgb {
 	struct device *dev;
-	/* Oku-degistir-yaz dizisini bolunmez tutar. */
+	/* Keeps the read-modify-write sequence indivisible. */
 	struct mutex lock;
 	struct led_classdev kbd_bl;
 	struct led_classdev_mc zone[ZONE_COUNT];
@@ -91,8 +93,8 @@ struct omen_rgb {
 };
 
 /*
- * Arg0 cikis tamponu boyutunu SECER (Faz 1 §2): 1->0, 2->4, 3->128,
- * 4->1024, 5->4096. hp-wmi ile ayni esleme.
+ * Arg0 SELECTS the output buffer size (Phase 1 §2): 1->0, 2->4, 3->128,
+ * 4->1024, 5->4096. Same mapping as hp-wmi.
  */
 static int encode_outsize_for_pvsz(int outsize)
 {
@@ -123,7 +125,7 @@ static int omen_wmi_query(int query, void *buffer, int insize, int outsize)
 	if (mid < 0)
 		return mid;
 
-	/* Firmware her zaman en az 128 baytlik bir veri alani bekliyor. */
+	/* The firmware always expects a data area of at least 128 bytes. */
 	actual_insize = max(insize, 128);
 	args_size = struct_size(args, data, actual_insize);
 	args = kzalloc(args_size, GFP_KERNEL);
@@ -150,7 +152,7 @@ static int omen_wmi_query(int query, void *buffer, int insize, int outsize)
 		goto out_free;
 	}
 	if (obj->type != ACPI_TYPE_BUFFER) {
-		pr_warn("sorgu 0x%x gecersiz nesne dondurdu (tur %d)\n",
+		pr_warn("query 0x%x returned an invalid object (type %d)\n",
 			query, obj->type);
 		ret = -EINVAL;
 		goto out_free;
@@ -163,7 +165,7 @@ static int omen_wmi_query(int query, void *buffer, int insize, int outsize)
 	bios_return = (struct bios_return *)obj->buffer.pointer;
 	ret = bios_return->return_code;
 	if (ret) {
-		pr_warn("sorgu 0x%x hata dondurdu 0x%x\n", query, ret);
+		pr_warn("query 0x%x returned error 0x%x\n", query, ret);
 		goto out_free;
 	}
 
@@ -178,7 +180,7 @@ static int omen_wmi_query(int query, void *buffer, int insize, int outsize)
 	}
 	memcpy(buffer, obj->buffer.pointer + sizeof(*bios_return),
 	       actual_outsize);
-	/* Firmware bekledigimizden az verdiyse kalani sifirla. */
+	/* If the firmware gave us less than expected, zero the remainder. */
 	memset(buffer + actual_outsize, 0, outsize - actual_outsize);
 
 out_free:
@@ -187,7 +189,7 @@ out_free:
 	return ret;
 }
 
-/* --- parlaklik (LBRT) --- */
+/* --- brightness (LBRT) --- */
 
 static enum led_brightness omen_bl_get(struct led_classdev *cdev)
 {
@@ -205,11 +207,11 @@ static int omen_bl_set(struct led_classdev *cdev, enum led_brightness value)
 	return omen_wmi_query(LIGHTING_BRIGHT_SET, &level, sizeof(level), 0);
 }
 
-/* --- bolge renkleri (LRGB) --- */
+/* --- zone colours (LRGB) --- */
 
 /*
- * Yazma OKU-DEGISTIR-YAZ olmali. 128 baytlik durumun yalnizca 12 bayti
- * bolge renkleri; gerisinin ne tasidigi bilinmiyor, korunmasi gerekiyor.
+ * The write has to be READ-MODIFY-WRITE. Only 12 of the 128 state bytes are
+ * zone colours; what the rest carries is unknown and has to be preserved.
  */
 static int omen_zone_set(struct led_classdev *cdev, enum led_brightness brightness)
 {
@@ -241,7 +243,9 @@ static int omen_zone_set(struct led_classdev *cdev, enum led_brightness brightne
 			      sizeof(state));
 }
 
-/* Acilista donanimdaki rengi okuyup LED sinifina yansitir. */
+/* Reads the colours out of the hardware at probe and reflects them into the
+ * LED class.
+ */
 static int omen_zone_read_initial(struct omen_rgb *rgb)
 {
 	u8 state[STATE_SIZE];
@@ -261,10 +265,10 @@ static int omen_zone_read_initial(struct omen_rgb *rgb)
 			rgb->subled[i][c].intensity = slot[c];
 
 		/*
-		 * Bolgenin parlakligi olarak en yuksek bileseni aliyoruz:
-		 * multicolor sinifi rengi intensity * brightness / max
-		 * olarak hesapliyor, boylece okunan renk aynen geri
-		 * yazildiginda degismiyor.
+		 * Use the largest component as the zone's brightness: the
+		 * multicolor class computes the colour as
+		 * intensity * brightness / max, so writing back what we just
+		 * read leaves the colour unchanged.
 		 */
 		rgb->zone[i].led_cdev.brightness =
 			max3(slot[0], slot[1], slot[2]);
@@ -303,19 +307,19 @@ static int omen_rgb_probe(struct platform_device *pdev)
 		rgb->zone[i].led_cdev.max_brightness = 255;
 		rgb->zone[i].led_cdev.brightness_set_blocking = omen_zone_set;
 		/*
-		 * LED sinifi kayit silinirken LED'i kapatiyor
+		 * The LED class switches a LED off when it is unregistered
 		 * (led_classdev_unregister -> led_set_brightness(LED_OFF)).
-		 * Klavye aydinlatmasi icin yanlis: 'rmmod' ya da kapanis
-		 * klavyeyi karartmamali, kullanicinin ayarladigi renk
-		 * kalmali. Makinede yasandi (2026-09-11): rmmod sonrasi
-		 * LBRT 0 oldu ve klavye tamamen sondu.
+		 * Wrong for a keyboard backlight: 'rmmod' or a shutdown must
+		 * not darken the keyboard, and the colour the user chose
+		 * should stay. Seen on the machine (2026-09-11): after rmmod
+		 * LBRT went to 0 and the keyboard went completely dark.
 		 */
 		rgb->zone[i].led_cdev.flags |= LED_RETAIN_AT_SHUTDOWN;
 	}
 
 	ret = omen_zone_read_initial(rgb);
 	if (ret) {
-		dev_err(&pdev->dev, "bolge renkleri okunamadi: %d\n", ret);
+		dev_err(&pdev->dev, "could not read the zone colours: %d\n", ret);
 		return ret;
 	}
 
@@ -324,13 +328,13 @@ static int omen_rgb_probe(struct platform_device *pdev)
 							    &rgb->zone[i]);
 		if (ret)
 			return dev_err_probe(&pdev->dev, ret,
-					     "bolge %d kaydedilemedi\n", i);
+					     "could not register zone %d\n", i);
 	}
 
 	/*
-	 * Genel parlaklik ayri bir LED. Adi bilerek "omen::kbd_backlight" -
-	 * masaustu ortamlari ve upower klavye isigini *::kbd_backlight
-	 * kalibiyla ariyor, boylece parlaklik tuslari calisiyor.
+	 * Global brightness is a separate LED. The name "omen::kbd_backlight"
+	 * is deliberate - desktop environments and upower look for keyboard
+	 * backlights matching *::kbd_backlight, so the brightness keys work.
 	 */
 	rgb->kbd_bl.name = "omen::kbd_backlight";
 	rgb->kbd_bl.max_brightness = BRIGHTNESS_MAX;
@@ -340,23 +344,22 @@ static int omen_rgb_probe(struct platform_device *pdev)
 	rgb->kbd_bl.brightness = omen_bl_get(&rgb->kbd_bl);
 
 	/*
-	 * Modul yuklendiginde klavye kapaliysa (onceki bir surumun
-	 * rmmod'da sondurmesi, ya da kullanicinin kendi tercihi) renk
-	 * yazmak hicbir sey gostermez ve "calismiyor" gibi gorunur.
-	 * Bunu sessizce duzeltmiyoruz - kullanicinin tercihi olabilir -
-	 * ama gorunur kiliyoruz.
+	 * If the keyboard is off when the module loads (an older version
+	 * switching it off at rmmod, or simply the user's choice), writing a
+	 * colour shows nothing and looks like a broken driver. We do not fix
+	 * it silently - it may well be deliberate - but we make it visible.
 	 */
 	if (rgb->kbd_bl.brightness == 0)
 		dev_info(&pdev->dev,
-			 "klavye aydinlatmasi kapali; acmak icin: echo %d > /sys/class/leds/%s/brightness\n",
+			 "keyboard backlight is off; turn it on with: echo %d > /sys/class/leds/%s/brightness\n",
 			 BRIGHTNESS_MAX, rgb->kbd_bl.name);
 
 	ret = devm_led_classdev_register(&pdev->dev, &rgb->kbd_bl);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret,
-				     "parlaklik LED'i kaydedilemedi\n");
+				     "could not register the brightness LED\n");
 
-	dev_info(&pdev->dev, "%d bolge RGB klavye hazir\n", ZONE_COUNT);
+	dev_info(&pdev->dev, "%d-zone RGB keyboard ready\n", ZONE_COUNT);
 	return 0;
 }
 
@@ -377,15 +380,15 @@ static int __init omen_rgb_init(void)
 		return -ENODEV;
 
 	/*
-	 * DMI listesi tutmuyoruz - kart basina yama gerektiriyor ve
-	 * Faz 2'de basimiza acilan is tam olarak buydu. Onun yerine
-	 * yetenegi soruyoruz: parlaklik okunabiliyorsa aydinlatma
-	 * grubu bu makinede destekleniyor demektir.
+	 * We keep no DMI list. It needs a patch per board, and that is exactly
+	 * the work Phase 2 landed us with. We ask about the capability
+	 * instead: if the brightness can be read, this machine supports the
+	 * lighting group.
 	 */
 	ret = omen_wmi_query(LIGHTING_BRIGHT_GET, probe_buf, 0,
 			     sizeof(probe_buf));
 	if (ret) {
-		pr_info("aydinlatma komut grubu desteklenmiyor (%d)\n", ret);
+		pr_info("the lighting command group is unsupported (%d)\n", ret);
 		return -ENODEV;
 	}
 
@@ -404,7 +407,7 @@ static void __exit omen_rgb_exit(void)
 module_init(omen_rgb_init);
 module_exit(omen_rgb_exit);
 
-MODULE_DESCRIPTION("HP OMEN 16-ap0xxx (8D24) 4 bolge RGB klavye");
+MODULE_DESCRIPTION("HP OMEN 16-ap0xxx (8D24) 4-zone RGB keyboard");
 MODULE_AUTHOR("WinTone");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("wmi:" HPWMI_BIOS_GUID);

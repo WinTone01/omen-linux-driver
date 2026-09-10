@@ -1,91 +1,94 @@
-# 4 Bölge RGB Klavye Protokolü (8D24)
+# 4-Zone RGB Keyboard Protocol (8D24)
 
-Kaynak: `phase1/extract/GM-LM-methods.asl` ve `HWMC.asl` — hepsi DSDT'den.
-Her satır doğrulanabilir.
+Source: `phase1/extract/GM-LM-methods.asl` and `HWMC.asl` — all of it from the
+DSDT. Every line here is verifiable against those files.
 
-## 1. Taşıma
+## 1. Transport
 
-`hp-wmi` ile **aynı** WMI arayüzü, farklı komut grubu:
+The **same** WMI interface as `hp-wmi`, a different command group:
 
-| | Fan/termal | Aydınlatma |
+| | Fan / thermal | Lighting |
 |---|---|---|
-| GUID | `5FB7F034-2C63-45E9-BE91-3D44E2C707E4` | aynı |
+| GUID | `5FB7F034-2C63-45E9-BE91-3D44E2C707E4` | same |
 | `COMD` | `0x00020008` | **`0x00020009`** |
-| İmza | `0x55434553` (`"SECU"`) | aynı |
+| Signature | `0x55434553` (`"SECU"`) | same |
 
-Giriş tamponu (`HWMC` başı):
+Input buffer layout (top of `HWMC`):
 
 ```
-0x00  SGIN  imza, 0x55434553
-0x04  COMD  komut grubu
-0x08  CMDT  alt komut
-0x0C  DSZI  veri boyutu
-0x10  veri  <- DSZI bayt
+0x00  SGIN  signature, 0x55434553
+0x04  COMD  command group
+0x08  CMDT  sub-command
+0x0C  DSZI  data size
+0x10  data  <- DSZI bytes
 ```
 
-`CreateField(Arg1, 0x80, DSZI*8, DAIN)` — `0x80` **bit** ofseti, yani veri
-alanı `0x10`'dan başlıyor. `DSZI <= 0x80` iken `WBUF = DAIN`, yani metotların
-gördüğü `WBUF[n]` giriş tamponunda `0x10 + n`.
+`CreateField(Arg1, 0x80, DSZI*8, DAIN)` — `0x80` is a **bit** offset, so the
+data area starts at `0x10`. While `DSZI <= 0x80` the firmware does
+`WBUF = DAIN`, meaning the `WBUF[n]` the methods see is input buffer
+`0x10 + n`.
 
-## 2. Alt komutlar
+## 2. Sub-commands
 
-| `CMDT` | Metot | İşlev |
+| `CMDT` | Method | Function |
 |---|---|---|
-| `0x02` | LM02 | Bölge renklerini oku |
-| `0x03` | LM03 | Bölge renklerini yaz |
-| `0x04` | LM04 | Parlaklık oku |
-| `0x05` | LM05 | Parlaklık yaz |
+| `0x02` | LM02 | read zone colours |
+| `0x03` | LM03 | write zone colours |
+| `0x04` | LM04 | read brightness |
+| `0x05` | LM05 | write brightness |
 
-### LM03 — renk yazma
+### LM03 — writing colours
 
 ```
-LDAT[0..11] = WBUF[0x19 .. 0x24]        // 12 bayt
-LRGB = LDAT ; Stall(15µs)
-BRGB = LDAT ; Stall(15µs)
+LDAT[0..11] = WBUF[0x19 .. 0x24]        // 12 bytes
+LRGB = LDAT ; Stall(15us)
+BRGB = LDAT ; Stall(15us)
 LCMC = One                               // commit
 ```
 
-Üç nokta dikkat çekiyor:
+Three things stand out:
 
-1. **Veri `WBUF[0x19]`'dan başlıyor** — yani 128 baytlık veri alanının
-   25. baytından. Baştan değil.
-2. **İki register'a da aynı 12 bayt yazılıyor** (`LRGB` ve `BRGB`), aralarda
-   15 µs bekleme var.
-3. **`LCMC = 1` bir commit bayrağı** — yazma tek başına yetmiyor.
+1. **The data starts at `WBUF[0x19]`** — byte 25 of the 128-byte data area,
+   not at the beginning.
+2. **The same 12 bytes go to two registers** (`LRGB` and `BRGB`), with a 15 µs
+   stall between them.
+3. **`LCMC = 1` is a commit flag** — the write alone is not enough.
 
-`Local2 = 0x03` alt komutu ezip sabitliyor, yani firmware `WBUF[0]`'ı
-yok sayıp her zaman 12 baytlık bölge yazması yapıyor.
+`Local2 = 0x03` overrides the sub-command and pins it, so the firmware ignores
+`WBUF[0]` and always performs the 12-byte zone write.
 
-### LM05 — parlaklık yazma
+### LM05 — writing brightness
 
 ```
 LBRT = WBUF[0]
 LCMC = One
 ```
 
-Tek bayt. LM04'teki `Local1 = 0x64` ölü atama, ölçeğin **0–100** olduğunu
-ele veriyor.
+A single byte. The dead assignment in LM04 (`Local1 = 0x64`) gives away that
+the scale is **0–100**.
 
-## 3. EC alanları
+## 3. EC fields
 
-`phase1/extract/ec-h2ra-field.asl` — belleğe eşlenmiş genişletilmiş EC RAM
-(`0xFE700000`, bkz. Faz 1 §4.1). Standart EC penceresinin (`0x00–0xFE`)
-**dışında**, yani `ec_sys` ile okunamaz:
+From `phase1/extract/ec-h2ra-field.asl` — the memory-mapped extended EC RAM at
+`0xFE700000` (Phase 1 §4.1). These are **outside** the standard EC window
+(`0x00–0xFE`), so they cannot be read with `ec_sys`:
 
-| Alan | Genişlik | Anlam |
+| Field | Width | Meaning |
 |---|---|---|
-| `LRGB` | 96 bit | 12 bayt = 4 bölge × 3 |
-| `BRGB` | 96 bit | ikinci kopya |
-| `LBRT` | 8 bit | parlaklık, 0–100 |
-| `LCMC` | 1 bit | commit bayrağı |
+| `LRGB` | 96 bits | 12 bytes = 4 zones × 3 |
+| `BRGB` | 96 bits | second copy |
+| `LBRT` | 8 bits | brightness, 0–100 |
+| `LCMC` | 1 bit | commit flag |
 
-## 4. DSDT'nin söylemediği: bayt sırası
+## 4. What the DSDT does not say: byte order
 
-DSDT baytları yalnızca kopyalıyor; 3 baytın hangisi kırmızı, bölgelerin
-hangi sırada olduğu oradan çıkmıyor. Bu iki bilgi
+The DSDT only copies bytes; which of the three is red, and what order the zones
+are in, is not derivable from it. Both were established empirically.
+
+The byte order was confirmed against
 [`OmenLinux/omen-rgb-keyboard`](https://github.com/OmenLinux/omen-rgb-keyboard)
-(GPL-2.0, `src/zones/omen_zones.c`) okunarak doğrulandı — kod kopyalanmadı,
-yalnızca protokol bilgisi alındı:
+(GPL-2.0, `src/zones/omen_zones.c`) — no code was copied, only protocol
+knowledge:
 
 ```
 offset = 25 + zone * 3
@@ -94,69 +97,70 @@ state[offset + 1] = green
 state[offset + 2] = blue
 ```
 
-`25` bizim DSDT'den çıkardığımız `0x19` ile birebir aynı — iki bağımsız
-kaynak aynı yeri gösteriyor.
+That `25` is exactly the `0x19` we derived from the DSDT — two independent
+sources pointing at the same place.
 
-### Bölge sırası — makinede ölçüldü (2026-09-11)
+One behaviour also learned there: the write must be **read-modify-write**. The
+128-byte state is first read with `0x02`, only the relevant 3 bytes are
+changed, and it is written back with `0x03`. What the rest of the buffer
+carries is unknown, so preserving it is the correct thing to do.
 
-Renkler doğru çıktığı için R/G/B bayt sırası kesin. Ama **yuva sırası
-fiziksel sırayla ne aynı ne de tam ters — karışık.** Tek tek bölge
-yakarak ölçüldü:
+### Zone order — measured on the machine (2026-09-11)
 
-| Donanım yuvası | Veri ofseti | Fiziksel bölge |
+Because the colours came out correct, the R/G/B byte order is settled. But the
+**slot order is neither the same as nor the reverse of the physical order — it
+is scrambled.** Determined by lighting one zone at a time:
+
+| Hardware slot | Data offset | Physical zone |
 |---|---|---|
-| 0 | 25 | numpad (en sağ) |
-| 1 | 28 | orta-sağ (JKL / Enter tarafı) |
-| 2 | 31 | **en sol** (Esc / Tab / Caps sütunu) |
+| 0 | 25 | numpad (rightmost) |
+| 1 | 28 | centre-right (JKL / Enter side) |
+| 2 | 31 | **leftmost** (Esc / Tab / Caps column) |
 | 3 | 34 | WASD |
 
-İlk bakışta "tam ters" görünüyor çünkü yuva 0 en sağa, yuva 3 sola yakın
-düşüyor; ama ortadaki ikisi de yer değiştirmiş durumda. Bu yüzden ilk
-gözlem yanıltıcı oldu ve düz çevirme (`{3,2,1,0}`) yanlış çıktı — doğrusu
-ancak tek bölge yakarak bulundu.
+At first glance it looks like a plain reversal, because slot 0 lands on the far
+right and slot 3 near the left — but the middle two are swapped as well. That
+first impression was misleading and a straight reversal (`{3,2,1,0}`) turned
+out to be wrong; the truth only came out by lighting a single zone.
 
-Modül `zone_slot[] = {2, 3, 1, 0}` ile çeviriyor, böylece sysfs numaraları
-fiziksel sırayı izliyor:
+The module translates with `zone_slot[] = {2, 3, 1, 0}`, so the sysfs numbers
+follow physical order:
 
-| sysfs `zone` | Fiziksel bölge |
+| sysfs `zone` | Physical zone |
 |---|---|
-| `zone0` | en sol |
+| `zone0` | leftmost |
 | `zone1` | WASD |
-| `zone2` | orta-sağ |
+| `zone2` | centre-right |
 | `zone3` | numpad |
 
-Numaraların soldan sağa gitmesi arayüz için de gerekli: klavyeyi çizen bir
-UI bölgeleri sırayla gezebilmeli.
+Left-to-right numbering also matters for the UI: something drawing a keyboard
+must be able to walk the zones in order.
 
-Ayrıca oradan öğrenilen bir davranış: yazma **oku-değiştir-yaz** olmalı.
-Önce `0x02` ile 128 baytlık durum okunuyor, yalnızca ilgili 3 bayt
-değiştirilip `0x03` ile geri yazılıyor. 12 baytın dışındaki alanın ne
-taşıdığı bilinmiyor; korumak doğrusu.
+## 5. Turning the lighting on belongs to the firmware — measured (2026-09-11)
 
-## 5. Açma/kapama firmware'in — makinede ölçüldü (2026-09-11)
+Writing `LRGB`/`LBRT` does **not** switch the lighting on. With the keyboard
+dark, the colours still land in the registers and read back correctly, but
+nothing lights up. Pressing `Fn+F4` brings the lights up showing exactly the
+colours we wrote.
 
-`LRGB`/`LBRT` yazmak aydınlatmayı **açmıyor.** Klavye kapalıyken renkler
-register'lara yazılıyor, geri okuma da doğru değeri veriyor, ama ışık yanmıyor.
-`Fn+F4`'e basılınca ışıklar bizim yazdığımız renklerle geliyor.
+One candidate was ruled out: `KBBL` (EC `0x42` bit 4) read back as zero **while
+the lights were on** (`0x42 = 0x04`), so it does not track the backlight state.
 
-Aday register elendi: `KBBL` (EC `0x42` bit 4) ışıklar **açıkken de** sıfır
-okundu (`0x42 = 0x04`), yani aydınlatma durumunu takip etmiyor.
+The WMI lighting group has no on/off either — `LM06`–`LM0B` are empty stubs
+returning `Package { Zero, Zero }`. The five bits before `LCMC` (`0xEE0` bits
+0–4) are unnamed; one of them might be it, but the DSDT does not say, and that
+region is in H2RA (`0xFE700000 + 0xEE0`), unreachable from userspace.
 
-WMI aydınlatma grubunda da açma/kapama yok — `LM06`–`LM0B` boş saplama,
-`Return (Package { Zero, Zero })`. `LCMC`'den önceki 5 bit (`0xEE0` bit 0–4)
-isimsiz; biri olabilir ama DSDT söylemiyor ve orası H2RA'da
-(`0xFE700000 + 0xEE0`), yani kullanıcı alanından okunamıyor.
+**Conclusion:** the master switch is internal EC state, driven by `Fn+F4`. The
+driver controls colour and brightness; the firmware controls on/off. This is a
+hardware limit rather than a gap in the driver — but it has to be stated, or a
+user will write a colour, see nothing, and blame the driver.
 
-**Sonuç:** master anahtar EC'nin kendi iç durumu ve `Fn+F4` ile yönetiliyor.
-Sürücü rengi ve parlaklığı kontrol ediyor; açıp kapamayı firmware yapıyor.
-Bu bir eksiklik değil, donanımın sınırı — ama kullanıcıya söylenmeli, yoksa
-"renk yazıyorum bir şey olmuyor" diye sürücüyü suçlar.
+## 6. No conflict with `hp-wmi`
 
-## 6. `hp-wmi` ile çakışma yok
+Phase 2 established that `hp-wmi` does not *own* the GUID: it calls through
+`wmi_evaluate_method` and registers itself as a `platform_driver`. The lighting
+group (`0x020009`) is disjoint from the fan group (`0x020008`) and touches
+different EC fields.
 
-Faz 2'de saptandı: `hp-wmi` GUID'i sahiplenmiyor, `wmi_evaluate_method` ile
-çağırıyor ve kendisi bir `platform_driver`. Aydınlatma grubu (`0x020009`)
-fan grubundan (`0x020008`) ayrık, farklı EC alanlarına dokunuyor.
-
-Dolayısıyla bu modül `hp-wmi` ile **yan yana çalışır**; `blacklist hp_wmi`
-gerekmiyor.
+So this module runs **alongside** `hp-wmi`; no `blacklist hp_wmi` is required.

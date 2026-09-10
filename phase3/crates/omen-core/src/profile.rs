@@ -1,9 +1,9 @@
-//! Platform guc/termal profili.
+//! Platform power/thermal profile.
 //!
-//! Bu makinede IKI isleyici var (Faz 2'de saptandi): `amd-pmf` ve - 8D24
-//! yamasindan sonra - `hp-wmi`. Eski (legacy) sysfs dosyasina yazmak ikisini
-//! birden surer; hp-wmi kendi payina EC 0x95'e (HPCM) yazar. O yuzden tek tek
-//! isleyicilere degil, legacy dosyaya yaziyoruz.
+//! This machine has TWO handlers (established in Phase 2): `amd-pmf` and -
+//! after the 8D24 patch - `hp-wmi`. Writing the legacy sysfs file drives both;
+//! hp-wmi does its part by writing EC 0x95 (HPCM). That is why we write the
+//! legacy file rather than an individual handler.
 
 use std::path::{Path, PathBuf};
 
@@ -50,8 +50,8 @@ impl PlatformProfile {
         })
     }
 
-    /// Kayitli isleyiciler. `hp-wmi`nin burada gorunmesi 8D24 yamasinin
-    /// tuttugunun en dogrudan kanitidir (Faz 2).
+    /// Registered handlers. `hp-wmi` showing up here is the most direct
+    /// evidence that the 8D24 patch took effect (Phase 2).
     pub fn handlers() -> Vec<Handler> {
         let Ok(entries) = std::fs::read_dir(CLASS_DIR) else {
             return Vec::new();

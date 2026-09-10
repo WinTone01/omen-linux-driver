@@ -2,35 +2,37 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("{path} okunamadi: {source}")]
+    #[error("could not read {path}: {source}")]
     Read {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
 
-    #[error("{path} yazilamadi: {source}")]
+    #[error("could not write {path}: {source}")]
     Write {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
 
-    #[error("{path} icerigi sayiya cevrilemedi: {raw:?}")]
+    #[error("contents of {path} are not a number: {raw:?}")]
     Parse { path: PathBuf, raw: String },
 
-    /// hp-wmi hwmon'u bulunamadi. Neredeyse her zaman tek bir sebebi var:
-    /// 8D24 DMI kaydi eksik, yani Faz 2 yamasi uygulanmamis.
-    #[error("hp-wmi hwmon bulunamadi - 8D24 yamasi uygulandi mi? (phase2/scripts/verify.sh)")]
+    /// The hp-wmi hwmon is missing. There is almost always one reason: the
+    /// 8D24 DMI entry is absent, i.e. the Phase 2 patch was never applied.
+    #[error("hp-wmi hwmon not found - is the 8D24 patch applied? (phase2/scripts/verify.sh)")]
     HwmonNotFound,
 
-    #[error("pwm1 yok - fan yazma destegi kapali. 8D24 DMI eslesmesi olmadan pwm1 acilmaz.")]
+    #[error(
+        "no pwm1 - fan writes are unsupported. Without the 8D24 DMI match pwm1 never appears."
+    )]
     PwmUnsupported,
 
-    #[error("sicaklik kaynagi bulunamadi (k10temp / amdgpu / acpitz)")]
+    #[error("no temperature source found (k10temp / amdgpu / acpitz)")]
     NoTempSource,
 
-    #[error("gecersiz fan egrisi: {0}")]
+    #[error("invalid fan curve: {0}")]
     Curve(String),
 }
 

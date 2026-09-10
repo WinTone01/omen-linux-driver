@@ -1,13 +1,13 @@
-//! `omend` — OMEN 16-ap0xxx fan egrisi servisi.
+//! `omend` - fan curve service for the OMEN 16-ap0xxx.
 //!
-//! Neden bir daemon gerekiyor: Faz 1 §6.4'te saptandi ki HP'nin "Auto" fan
-//! egrisi EC'de degil, Windows uygulamasinda kosuyor - OGH periyodik olarak
-//! WMI 0x2E setpoint'i yaziyor. Yani `hp-wmi` tek basina "otomatik fan"
-//! vermiyor; egriyi isleten bir sey lazim. Bu o sey.
+//! Why a daemon is needed: Phase 1 §6.4 established that HP's "Auto" fan curve
+//! does not live in the EC but runs in the Windows application - OGH writes
+//! the WMI 0x2E setpoint periodically. So `hp-wmi` on its own does not give
+//! you automatic fan control; something has to run the curve. This is that.
 //!
-//! EC'nin kendi bir otomatigi VAR ve fena degil (Faz 2: 45C'de fan-stop,
-//! 58C'de 2400 RPM). Bu yuzden egrinin alt bolgesinde kontrolu ona
-//! birakiyoruz; yalnizca daha fazlasini istedigimizde devraliyoruz.
+//! The EC *does* have an automatic mode of its own and it is not bad (Phase 2:
+//! fan-stop at 45 C, 2400 RPM at 58 C). So we leave the lower part of the
+//! curve to it and only take over when we want more.
 
 mod guard;
 mod server;
@@ -32,20 +32,20 @@ use crate::guard::AutoRestore;
 use crate::shared::Shared;
 
 const USAGE: &str = "\
-omend - OMEN 16-ap0xxx fan egrisi servisi
+omend - fan curve service for the OMEN 16-ap0xxx
 
-KULLANIM:
-    omend [SECENEKLER]
+USAGE:
+    omend [OPTIONS]
 
-SECENEKLER:
-    -c, --config <YOL>   Yapilandirma dosyasi (varsayilan: /etc/omen/omend.toml)
-        --dry-run        Hicbir sey yazma, ne yapacagini yaz
-        --once           Tek tur calis ve cik (tanilama icin)
-        --restore-auto   Fani otomatige alip cik (systemd ExecStopPost icin)
-    -h, --help           Bu metni goster
+OPTIONS:
+    -c, --config <PATH>  Configuration file (default: /etc/omen/omend.toml)
+        --dry-run        Write nothing; log what would be done
+        --once           Run a single iteration and exit (for diagnostics)
+        --restore-auto   Return the fan to automatic and exit (systemd ExecStopPost)
+    -h, --help           Show this text
 
-ORNEK:
-    omend --dry-run --once        # guvenli: hicbir sey degistirmez
+EXAMPLE:
+    omend --dry-run --once        # safe: changes nothing
 ";
 
 struct Args {
@@ -69,13 +69,11 @@ fn parse_args() -> Result<Option<Args>> {
                 print!("{USAGE}");
                 return Ok(None);
             }
-            "-c" | "--config" => {
-                args.config = it.next().context("--config bir yol bekliyor")?.into()
-            }
+            "-c" | "--config" => args.config = it.next().context("--config expects a path")?.into(),
             "--dry-run" => args.dry_run = true,
             "--once" => args.once = true,
             "--restore-auto" => args.restore_auto = true,
-            other => anyhow::bail!("bilinmeyen secenek: {other}\n\n{USAGE}"),
+            other => anyhow::bail!("unknown option: {other}\n\n{USAGE}"),
         }
     }
     Ok(Some(args))
@@ -105,30 +103,35 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> Result<()> {
-    // Guvenlik kurali 1, ucuncu kapi: SIGKILL'de Drop calismaz. systemd
-    // ExecStopPost bunu cagirir; daemon nasil oldugunden bagimsiz olarak
-    // fan otomatige doner. Yapilandirmaya bakmaz - bozuk bir dosya yuzunden
-    // kurtarma adiminin basarisiz olmasi kabul edilemez.
+    // Safety rule 1, third door: on SIGKILL `Drop` does not run. systemd
+    // ExecStopPost calls this, so the fan returns to automatic no matter how
+    // the daemon died. It deliberately ignores the configuration - a broken
+    // file must not make the recovery step fail.
     if args.restore_auto {
         let fan = Fan::discover(
             omen_core::fan::DEFAULT_MIN_RPM,
             omen_core::fan::DEFAULT_MAX_RPM,
         )
-        .context("fan bulunamadi")?;
-        fan.restore_auto().context("otomatige alinamadi")?;
-        info!("fan otomatige alindi (pwm1_enable=2)");
+        .context("fan not found")?;
+        fan.restore_auto()
+            .context("could not return the fan to automatic")?;
+        info!("fan returned to automatic (pwm1_enable=2)");
         return Ok(());
     }
 
-    let cfg = Config::load(&args.config)
-        .with_context(|| format!("yapilandirma okunamadi: {}", args.config.display()))?;
+    let cfg = Config::load(&args.config).with_context(|| {
+        format!(
+            "could not read the configuration: {}",
+            args.config.display()
+        )
+    })?;
 
-    let thermal = Thermal::discover().context("sicaklik kaynagi bulunamadi")?;
+    let thermal = Thermal::discover().context("no temperature source found")?;
     let fan =
-        Fan::discover(cfg.fan.min_rpm, cfg.fan.max_rpm).context("fan kontrolu hazirlanamadi")?;
+        Fan::discover(cfg.fan.min_rpm, cfg.fan.max_rpm).context("could not set up fan control")?;
 
     info!(
-        "hwmon: {}  fan araligi: {}-{} RPM  adim: {} RPM  olcum: {}s",
+        "hwmon: {}  fan range: {}-{} RPM  step: {} RPM  interval: {}s",
         fan.hwmon_path().display(),
         fan.min_rpm(),
         fan.max_rpm(),
@@ -136,7 +139,7 @@ fn run(args: Args) -> Result<()> {
         cfg.fan.interval_secs
     );
     info!(
-        "sicaklik kaynaklari: {}",
+        "temperature sources: {}",
         thermal
             .sensors
             .iter()
@@ -145,18 +148,18 @@ fn run(args: Args) -> Result<()> {
             .join(", ")
     );
 
-    // Profil isleyicisi listesinde hp-wmi yoksa 8D24 yamasi tutmamis
-    // demektir. Fan yine calisiyor olabilir ama durumu bilmek isteriz.
+    // If hp-wmi is not among the profile handlers the 8D24 patch did not take
+    // effect. The fan may still work, but we want to know.
     if !PlatformProfile::hp_wmi_active() {
-        warn!("platform profil isleyicileri arasinda hp-wmi yok - 8D24 yamasi eksik olabilir");
+        warn!("hp-wmi is not among the platform profile handlers - the 8D24 patch may be missing");
     }
 
     let read_only = args.dry_run || !cfg.fan.enabled;
     if !cfg.fan.enabled {
-        warn!("fan.enabled = false - egri isletilmiyor, yalnizca izleniyor");
+        warn!("fan.enabled = false - the curve is not being run, only observed");
     }
     if args.dry_run {
-        warn!("--dry-run: hicbir sey yazilmayacak");
+        warn!("--dry-run: nothing will be written");
     }
 
     let mut rt = Runtime::new(fan.clone(), thermal, cfg, read_only)?;
@@ -168,9 +171,9 @@ fn run(args: Args) -> Result<()> {
     }
 
     let shared = Shared::new();
-    // Tek turluk tanilama kosusu socket acmaz. dry-run acar: modu
-    // degistirip ne olacagini gormek tam da dry-run'in isi. Cakismayi
-    // onlemek icin OMEND_SOCKET ile ayri bir yol verilebilir.
+    // A single diagnostic iteration does not open a socket. --dry-run does:
+    // changing the mode and watching what would happen is exactly what
+    // dry-run is for. Use OMEND_SOCKET to avoid clashing with a real daemon.
     if !args.once {
         server::spawn(shared.clone())?;
     }
@@ -178,7 +181,7 @@ fn run(args: Args) -> Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
         signal_hook::flag::register(sig, Arc::clone(&stop))
-            .with_context(|| format!("sinyal {sig} yakalanamadi"))?;
+            .with_context(|| format!("could not install a handler for signal {sig}"))?;
     }
 
     loop {
@@ -187,9 +190,9 @@ fn run(args: Args) -> Result<()> {
         if args.once || stop.load(Ordering::Relaxed) {
             break;
         }
-        // Bir sonraki olcume kadar bekle. Istek gelirse erken uyanir;
-        // dilimleme sinyal bayragina bakabilmek icin (SIGTERM'i condvar
-        // ile haber veremiyoruz).
+        // Wait until the next sample. A request wakes us early; the slicing is
+        // there so we can check the signal flag (SIGTERM cannot be delivered
+        // through the condvar).
         let deadline = Instant::now() + rt.cfg.interval();
         while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
             shared.wait_until(deadline, Duration::from_millis(200));
@@ -202,20 +205,21 @@ fn run(args: Args) -> Result<()> {
         }
     }
 
-    info!("kapaniyor");
+    info!("shutting down");
     let _ = std::fs::remove_file(omen_core::ipc::socket_path());
-    // `keeper` burada dusuyor ve fani otomatige aliyor.
+    // `keeper` drops here and returns the fan to automatic.
     Ok(())
 }
 
 #[derive(Debug, PartialEq)]
 enum SafetyState {
     Normal,
-    /// Egri birakildi, kontrol EC'de. Sebep loglandi.
+    /// The curve has been abandoned, control is with the EC. The reason was
+    /// logged.
     Fallback,
 }
 
-/// Fana en son ne yazdik? Ayni degeri tekrar yazmamak icin.
+/// What did we last write to the fan? Used to avoid rewriting the same value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Applied {
     Unknown,
@@ -259,13 +263,13 @@ impl Runtime {
 
     fn log_curve(&self) {
         info!(
-            "egri: {}",
+            "curve: {}",
             self.governor
                 .curve()
                 .points()
                 .iter()
                 .map(|p| if p.rpm == 0 {
-                    format!("{:.0}C:oto", p.temp_c)
+                    format!("{:.0}C:auto", p.temp_c)
                 } else {
                     format!("{:.0}C:{}", p.temp_c, p.rpm)
                 })
@@ -280,9 +284,10 @@ impl Runtime {
         let temp = match self.thermal.hottest() {
             Ok(v) => Some(v),
             Err(e) => {
-                // Guvenlik kurali 3: sicaklik okunamiyorsa egriyi isletme.
+                // Safety rule 3: if the temperature cannot be read, do not run
+                // the curve.
                 if self.state != SafetyState::Fallback {
-                    error!("sicaklik okunamadi ({e}) - otomatige dusuluyor");
+                    error!("could not read a temperature ({e}) - falling back to automatic");
                     self.fall_back();
                 }
                 None
@@ -312,35 +317,35 @@ impl Runtime {
                         );
                         self.cfg = cfg;
                         self.applied = Applied::Unknown;
-                        info!("yapilandirma yeniden okundu");
+                        info!("configuration re-read");
                         self.log_curve();
                     }
-                    Err(e) => error!("yeni egri gecersiz, eskisi korunuyor: {e}"),
+                    Err(e) => error!("the new curve is invalid, keeping the old one: {e}"),
                 },
-                Err(e) => error!("yapilandirma okunamadi, eskisi korunuyor: {e}"),
+                Err(e) => error!("could not read the configuration, keeping the old one: {e}"),
             }
         }
 
         if let Some(mode) = shared.take_request() {
             if mode != self.mode {
-                info!("mod: {} -> {mode}", self.mode);
+                info!("mode: {} -> {mode}", self.mode);
                 self.mode = mode;
-                // Yeni modda sifirdan karar verilsin.
+                // Decide from scratch in the new mode.
                 self.governor.reset();
                 self.applied = Applied::Unknown;
             }
         }
     }
 
-    /// Kritik sigorta. HER modda gecerli - kullanicinin manuel istegi
-    /// termal korumayi devre disi birakmaz.
+    /// The critical cutout. Applies in EVERY mode - a manual request from the
+    /// user does not disable thermal protection.
     ///
-    /// `true` -> normal surus devam edebilir.
+    /// `true` -> normal driving may continue.
     fn check_safety(&mut self, label: &str, temp: f32) -> bool {
         match self.state {
             SafetyState::Normal if temp >= self.cfg.safety.critical_c => {
                 error!(
-                    "{label} {temp:.1}C >= kritik {:.1}C - kontrol EC'ye birakildi",
+                    "{label} {temp:.1}C >= critical {:.1}C - control handed to the EC",
                     self.cfg.safety.critical_c
                 );
                 self.fall_back();
@@ -349,10 +354,10 @@ impl Runtime {
             SafetyState::Fallback => {
                 let recover_at = self.cfg.safety.critical_c - self.cfg.safety.recover_delta_c;
                 if temp > recover_at {
-                    debug!("guvenlik modunda, {label} {temp:.1}C > {recover_at:.1}C");
+                    debug!("in safety fallback, {label} {temp:.1}C > {recover_at:.1}C");
                     return false;
                 }
-                info!("{label} {temp:.1}C <= {recover_at:.1}C - kontrol geri alindi");
+                info!("{label} {temp:.1}C <= {recover_at:.1}C - taking control back");
                 self.state = SafetyState::Normal;
                 true
             }
@@ -364,7 +369,7 @@ impl Runtime {
         match self.mode {
             ControlMode::Curve => {
                 let Some(target) = self.governor.decide(temp, Instant::now()) else {
-                    debug!("{label} {temp:.1}C - degisiklik yok");
+                    debug!("{label} {temp:.1}C - no change");
                     return;
                 };
                 match target {
@@ -372,9 +377,9 @@ impl Runtime {
                     Some(rpm) => self.apply(Applied::Rpm(rpm), &format!("{label} {temp:.1}C")),
                 }
             }
-            ControlMode::Manual { rpm } => self.apply(Applied::Rpm(rpm), "manuel"),
-            ControlMode::Auto => self.apply(Applied::Auto, "manuel"),
-            ControlMode::Max => self.apply(Applied::Max, "manuel"),
+            ControlMode::Manual { rpm } => self.apply(Applied::Rpm(rpm), "manual"),
+            ControlMode::Auto => self.apply(Applied::Auto, "manual"),
+            ControlMode::Max => self.apply(Applied::Max, "manual"),
         }
     }
 
@@ -392,33 +397,33 @@ impl Runtime {
                 match self.fan.set_target_rpm(rpm) {
                     Ok(actual) => {
                         if actual != rpm {
-                            debug!("{rpm} RPM istendi, {actual} RPM'e kelepcelendi");
+                            debug!("{rpm} RPM requested, clamped to {actual} RPM");
                         }
                         self.applied = Applied::Rpm(actual);
                     }
                     Err(e) => {
-                        // Yazma basarisizsa setpoint bilinmeyen bir durumda
-                        // kalir. En guvenlisi kontrolu geri vermek.
-                        error!("setpoint yazilamadi ({e}) - otomatige dusuluyor");
+                        // A failed write leaves the setpoint in an unknown
+                        // state. Handing control back is the safest response.
+                        error!("could not write the setpoint ({e}) - falling back to automatic");
                         self.fall_back();
                     }
                 }
             }
             Applied::Auto => {
-                info!("{why} -> otomatik (kontrol EC'de)");
+                info!("{why} -> automatic (control with the EC)");
                 if !self.read_only {
                     if let Err(e) = self.fan.restore_auto() {
-                        error!("otomatige alinamadi: {e}");
+                        error!("could not switch to automatic: {e}");
                         return;
                     }
                 }
                 self.applied = want;
             }
             Applied::Max => {
-                warn!("{why} -> FAN TAM GUC");
+                warn!("{why} -> FANS AT FULL POWER");
                 if !self.read_only {
                     if let Err(e) = self.fan.set_mode(omen_core::fan::PwmMode::Max) {
-                        error!("tam guce alinamadi: {e}");
+                        error!("could not switch to full power: {e}");
                         return;
                     }
                 }
@@ -430,14 +435,15 @@ impl Runtime {
 
     fn fall_back(&mut self) {
         self.state = SafetyState::Fallback;
-        // Histerezis eski karara takilmasin; cikista sifirdan karar verilsin.
+        // Do not let hysteresis hold on to the old decision; decide fresh on
+        // the way out.
         self.governor.reset();
         self.applied = Applied::Unknown;
         if self.read_only {
             return;
         }
         if let Err(e) = self.fan.restore_auto() {
-            error!("KRITIK: otomatige alinamadi: {e}");
+            error!("CRITICAL: could not switch to automatic: {e}");
         }
     }
 

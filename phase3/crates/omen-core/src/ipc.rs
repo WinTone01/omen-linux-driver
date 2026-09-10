@@ -1,58 +1,58 @@
-//! Daemon ile istemciler arasindaki protokol.
+//! The protocol between the daemon and its clients.
 //!
-//! Satir basina bir JSON nesnesi, unix stream socket uzerinden. Neden bu:
-//! bagimliligi az, `socat`/`nc` ile elle denenebiliyor, ve Tauri arayuzu
-//! (M3) ayni protokolu kullanacagi icin ikinci bir arayuz yazmaya gerek yok.
+//! One JSON object per line over a unix stream socket. Why that: few
+//! dependencies, testable by hand with `socat`/`nc`, and the Tauri UI (M3)
+//! will speak the same protocol, so there is no second interface to write.
 //!
-//! Yetki modeli (phase3-plan §4, guvenlik kurali 5): fan'a yazan tek sey
-//! daemon. Istemciler NE yapilmasini istediklerini soyler, kendileri
-//! yazmaz. Boylece kelepceleme, kritik sigorta ve cikista otomatige donme
-//! her yol icin tek bir yerde garanti altinda.
+//! Authority model (phase3-plan §4, safety rule 5): the daemon is the only
+//! thing that writes to the fan. Clients say what they want done, they do not
+//! do it themselves. That keeps clamping, the critical cutout and
+//! restore-on-exit guaranteed in a single place, on every path.
 
 use serde::{Deserialize, Serialize};
 
 pub const SOCKET_PATH: &str = "/run/omend/omend.sock";
 
-/// Socket yolu. `OMEND_SOCKET` ayarliysa o kullanilir.
+/// Socket path. `OMEND_SOCKET` overrides it when set.
 ///
-/// Root olmadan denemek, ayni makinede ikinci bir ornek kosturmak ve
-/// konteynerde calistirmak icin gerekiyor. Daemon ve istemci ayni
-/// fonksiyonu kullandigi icin ikisi her zaman ayni yere bakar.
+/// Needed to try things without root, to run a second instance on the same
+/// machine, and to run in a container. The daemon and the client use the same
+/// function, so they always agree on where to look.
 pub fn socket_path() -> std::path::PathBuf {
     std::env::var_os("OMEND_SOCKET")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(SOCKET_PATH))
 }
 
-/// Unix socket yollari `sockaddr_un.sun_path` icine sigmali - Linux'ta
-/// 108 bayt, sonlandirici dahil. Asilirsa cekirdegin verdigi hata
-/// ("path must be shorter than SUN_LEN") sebebi soylemiyor.
+/// Unix socket paths must fit in `sockaddr_un.sun_path` - 108 bytes on Linux,
+/// terminator included. Past that the kernel's error ("path must be shorter
+/// than SUN_LEN") does not say why.
 pub const SUN_PATH_MAX: usize = 107;
 
 pub fn check_socket_path(path: &std::path::Path) -> Result<(), String> {
     let len = path.as_os_str().as_encoded_bytes().len();
     if len > SUN_PATH_MAX {
         return Err(format!(
-            "socket yolu cok uzun ({len} bayt, en fazla {SUN_PATH_MAX}): {}\n  \
-             OMEND_SOCKET ile daha kisa bir yol verin",
+            "socket path too long ({len} bytes, max {SUN_PATH_MAX}): {}\n  \
+             pass a shorter one with OMEND_SOCKET",
             path.display()
         ));
     }
     Ok(())
 }
 
-/// Fanin nasil surulecegi.
+/// How the fan should be driven.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum ControlMode {
-    /// Varsayilan: egri surer.
+    /// Default: the curve drives.
     Curve,
-    /// Sabit hedef. Kritik sigorta yine gecerli - kullanici istegi
-    /// termal korumayi devre disi birakmaz.
+    /// Fixed target. The critical cutout still applies - a user request does
+    /// not disable thermal protection.
     Manual { rpm: u32 },
-    /// Kontrol EC'de.
+    /// Control belongs to the EC.
     Auto,
-    /// Fan tam guc (WMI 0x27).
+    /// Fans at full power (WMI 0x27).
     Max,
 }
 
@@ -70,13 +70,13 @@ impl std::fmt::Display for ControlMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Request {
-    /// Anlik durum.
+    /// Current state.
     Status,
-    /// Fan surus modunu degistir.
+    /// Change how the fan is driven.
     SetMode(ControlMode),
-    /// Platform profilini degistir (balanced / performance / low-power).
+    /// Change the platform profile (balanced / performance / low-power).
     SetProfile { profile: String },
-    /// Yapilandirmayi diskten yeniden oku.
+    /// Re-read the config from disk.
     Reload,
 }
 
@@ -88,22 +88,22 @@ pub enum Response {
     Error { message: String },
 }
 
-/// Daemon'in son turdaki gorunumu.
+/// The daemon's view as of its last tick.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     pub mode: Option<ControlMode>,
-    /// Fanin sysfs'te bildirdigi mod (auto/manual/max).
+    /// The mode the fan reports in sysfs (auto/manual/max).
     pub hw_mode: Option<String>,
-    /// Egriyi suren sensor ve degeri.
+    /// The sensor driving the curve, and its reading.
     pub driver_label: Option<String>,
     pub driver_temp_c: Option<f32>,
-    /// O an gecerli setpoint. `None` -> kontrol EC'de.
+    /// The setpoint currently in effect. `None` -> control is with the EC.
     pub target_rpm: Option<u32>,
     pub fan1_rpm: Option<u32>,
     pub fan2_rpm: Option<u32>,
     pub pwm: Option<u8>,
     pub profile: Option<String>,
-    /// Kritik sigorta atmis mi.
+    /// Whether the critical cutout has tripped.
     pub safety_fallback: bool,
     pub temps: Vec<(String, f32)>,
     pub uptime_secs: u64,

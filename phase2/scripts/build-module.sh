@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# 8D24 kaydi eklenmis hp-wmi modulunu out-of-tree derler.
+# Builds an out-of-tree hp-wmi module with the 8D24 entry added.
 #
-# Neden out-of-tree: Arch/CachyOS cekirdek KAYNAGINI paketlemez, yalnizca
-# header verir. O yuzden hp-wmi.c'yi calisan cekirdegin surumune karsilik
-# gelen upstream etiketinden cekip tek modul olarak deriyoruz.
+# Why out-of-tree: Arch/CachyOS do not package the kernel SOURCE, only the
+# headers. So we fetch hp-wmi.c from the upstream tag matching the running
+# kernel and build it as a single module.
 #
-# Kullanim:
-#   bash build-module.sh              # cek, yamala, derle
-#   bash build-module.sh --install    # ustune DKMS'e kaydet (kalici)
+# Usage:
+#   bash build-module.sh              # fetch, patch, build
+#   bash build-module.sh --install    # also register it with DKMS (permanent)
 #
-# Hicbir sey otomatik yuklenmez; sonunda ne yapacagini yazar.
+# Nothing is loaded automatically; it tells you what to do at the end.
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -19,52 +19,52 @@ BUILD=/lib/modules/$KVER/build
 WORK=${WORK:-$HERE/../build}
 
 say() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
-die() { printf '\033[31mHATA:\033[0m %s\n' "$1" >&2; exit 1; }
+die() { printf '\033[31mERROR:\033[0m %s\n' "$1" >&2; exit 1; }
 
-say "1. Onkosullar"
-[ -d "$BUILD" ] || die "$BUILD yok. Cekirdek header paketini kur (or. linux-cachyos-headers)."
-command -v make >/dev/null || die "make yok. 'base-devel' kur."
-command -v curl >/dev/null || die "curl yok."
+say "1. Prerequisites"
+[ -d "$BUILD" ] || die "$BUILD is missing. Install the kernel headers package (e.g. linux-cachyos-headers)."
+command -v make >/dev/null || die "make is missing. Install 'base-devel'."
+command -v curl >/dev/null || die "curl is missing."
 echo "  kernel : $KVER"
 echo "  build  : $BUILD"
 
-# Cekirdek hangi derleyiciyle kuruldu? CachyOS clang+LLD kullaniyor; gcc ile
-# derlemeye kalkarsan kbuild clang'a ozgu bayraklari gcc'ye gecirir
-# (-mllvm, -mretpoline-external-thunk ...) ve derleme daha ilk dosyada patlar.
-# Modulun cekirdekle ayni derleyiciyle uretilmesi gerekiyor.
+# Which compiler was the kernel built with? CachyOS uses clang+LLD; if you try
+# to build with gcc, kbuild hands it clang-only flags (-mllvm,
+# -mretpoline-external-thunk, ...) and the build dies on the very first file.
+# The module has to be produced with the same compiler as the kernel.
 LLVM_ARGS=()
 if grep -q '^CONFIG_CC_IS_CLANG=y' "$BUILD/.config" 2>/dev/null; then
-  command -v clang  >/dev/null || die "cekirdek clang ile derlenmis ama clang yok. 'sudo pacman -S clang lld llvm' ile kur."
-  command -v ld.lld >/dev/null || die "cekirdek LLD ile baglanmis ama ld.lld yok. 'sudo pacman -S lld' ile kur."
+  command -v clang  >/dev/null || die "the kernel was built with clang but clang is missing. Install it: 'sudo pacman -S clang lld llvm'."
+  command -v ld.lld >/dev/null || die "the kernel was linked with LLD but ld.lld is missing. Install it: 'sudo pacman -S lld'."
   LLVM_ARGS=(LLVM=1)
   KCC=$(sed -n 's/^CONFIG_CC_VERSION_TEXT="\(.*\)"$/\1/p' "$BUILD/.config")
   MYCC=$(clang --version | head -1)
   echo "  toolchain : clang (LLVM=1)"
-  echo "    cekirdek: $KCC"
-  echo "    yerel   : $MYCC"
-  # Surum uyusmazligi olumcul degil ama modul yuklenirken sorun cikarabilir.
+  echo "    kernel : $KCC"
+  echo "    local  : $MYCC"
+  # A version mismatch is not fatal but can cause trouble at load time.
   KMAJ=$(printf '%s' "$KCC"  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
   MMAJ=$(printf '%s' "$MYCC" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-  [ "$KMAJ" = "$MMAJ" ] || echo "    UYARI: surumler farkli ($KMAJ vs $MMAJ). Derleme yine de denenecek."
+  [ "$KMAJ" = "$MMAJ" ] || echo "    WARNING: versions differ ($KMAJ vs $MMAJ). Building anyway."
 else
   echo "  toolchain : gcc"
 fi
 
-# Calisan cekirdegin ana surumune karsilik gelen upstream etiketi.
+# The upstream tag matching the running kernel's major version.
 # 7.2.3-1-cachyos -> v7.2 ; 7.3.0-rc2 -> v7.3
 BASE=$(printf '%s' "$KVER" | sed 's/^\([0-9]\+\.[0-9]\+\).*/\1/')
 TAG="v$BASE"
-echo "  etiket : $TAG"
+echo "  tag    : $TAG"
 
-say "2. hp-wmi.c indiriliyor"
+say "2. Downloading hp-wmi.c"
 mkdir -p "$WORK"
 URL="https://raw.githubusercontent.com/torvalds/linux/$TAG/drivers/platform/x86/hp/hp-wmi.c"
 echo "  $URL"
-curl -fsSL "$URL" -o "$WORK/hp-wmi.c" || die "indirilemedi. Etiket $TAG dogru mu?"
-echo "  $(wc -l < "$WORK/hp-wmi.c") satir indirildi"
+curl -fsSL "$URL" -o "$WORK/hp-wmi.c" || die "download failed. Is the tag $TAG correct?"
+echo "  $(wc -l < "$WORK/hp-wmi.c") lines downloaded"
 
-# Indirilen kaynak calisan cekirdekle ayni mi? Modulun DMI string'leriyle
-# karsilastir - dagitim hp-wmi'yi yamalamis olabilir.
+# Is the downloaded source the same as the running kernel's? Compare against
+# the module's DMI strings - the distribution may have patched hp-wmi.
 KO=$(find "/lib/modules/$KVER" -name 'hp-wmi.ko*' 2>/dev/null | head -1)
 if [ -n "$KO" ] && command -v strings >/dev/null; then
   case "$KO" in
@@ -75,14 +75,14 @@ if [ -n "$KO" ] && command -v strings >/dev/null; then
   esac
   KO_N=$("${DUMP[@]}" 2>/dev/null | strings | grep -cxE '8[0-9A-F]{3}' || true)
   SRC_N=$(grep -coE 'DMI_BOARD_NAME, "8[0-9A-F]{3}"' "$WORK/hp-wmi.c" || true)
-  echo "  calisan modulde $KO_N kart string'i, indirilen kaynakta $SRC_N DMI kaydi"
-  echo "  (birebir esit olmasi beklenmez; buyuk fark dagitim yamasina isaret eder)"
+  echo "  $KO_N board strings in the running module, $SRC_N DMI entries in the download"
+  echo "  (they are not expected to match exactly; a large gap suggests a distro patch)"
 fi
 
-say "3. 8D24 kaydi ekleniyor"
+say "3. Adding the 8D24 entry"
 bash "$HERE/add-8d24.sh" "$WORK/hp-wmi.c"
 
-say "4. Derleniyor"
+say "4. Building"
 cat > "$WORK/Makefile" <<MK
 obj-m := hp-wmi.o
 KDIR  ?= /lib/modules/\$(shell uname -r)/build
@@ -95,40 +95,40 @@ clean:
 MK
 
 if make -C "$BUILD" M="$WORK" "${LLVM_ARGS[@]}" modules 2>&1 | tail -25; then
-  [ -f "$WORK/hp-wmi.ko" ] || die "derleme bitti ama hp-wmi.ko olusmadi."
+  [ -f "$WORK/hp-wmi.ko" ] || die "the build finished but hp-wmi.ko was not produced."
 else
-  die "derleme basarisiz. Ciktiyi yukarida gor."
+  die "build failed. See the output above."
 fi
 echo "  -> $WORK/hp-wmi.ko"
 
-say "5. Sirada ne var"
+say "5. What next"
 cat <<EOF
-  Test (gecici, reboot'ta kaybolur):
+  Try it out (temporary, gone after a reboot):
 
     sudo modprobe -r hp_wmi 2>/dev/null
-    sudo modprobe sparse-keymap rfkill wmi      # insmod bagimlilik cozmez
+    sudo modprobe -a sparse-keymap rfkill wmi   # insmod does not resolve deps
     sudo insmod $WORK/hp-wmi.ko
     sudo bash $HERE/verify.sh
 
-  NOT: 'insmod: Unknown symbol in module' alirsan atlanan satir yukaridaki
-  modprobe'dur. insmod, modul.dep'e bakmaz; bagimliliklari elle yuklemek
-  gerekir (sparse_keymap, rfkill, wmi).
+  NOTE: if you get 'insmod: Unknown symbol in module', the line you skipped is
+  the modprobe above. insmod does not look at modules.dep; the dependencies
+  (sparse_keymap, rfkill, wmi) have to be loaded by hand.
 
-  Beklenen: adim 3'te platform_profile, adim 4'te hp hwmon + pwm dosyalari.
+  Expected: a platform_profile in step 3, an hp hwmon with pwm files in step 4.
 
-  Geri alma:
+  To undo:
 
     sudo rmmod hp-wmi && sudo modprobe hp_wmi
 
-  Calisirsa kalici hale getir:
+  If it works, make it permanent:
 
     bash $0 --install
 EOF
 
 [ "${1:-}" = "--install" ] || exit 0
 
-say "6. DKMS kaydi"
-command -v dkms >/dev/null || die "dkms yok. 'sudo pacman -S dkms' ile kur."
+say "6. DKMS registration"
+command -v dkms >/dev/null || die "dkms is missing. Install it: 'sudo pacman -S dkms'."
 PKG=hp-wmi-8d24
 VER=$BASE
 DEST=/usr/src/$PKG-$VER
@@ -139,6 +139,9 @@ sudo tee "$DEST/dkms.conf" >/dev/null <<EOF
 PACKAGE_NAME="$PKG"
 PACKAGE_VERSION="$VER"
 BUILT_MODULE_NAME[0]="hp-wmi"
+# dkms.conf is sourced as shell, so let it decide about LLVM=1 against the
+# kernel actually being built for - if a gcc-built kernel shows up later,
+# AUTOINSTALL still uses the right flag.
 _llvm=\$(grep -q '^CONFIG_CC_IS_CLANG=y' "\${kernel_source_dir}/.config" 2>/dev/null && echo LLVM=1)
 MAKE[0]="make -C \${kernel_source_dir} M=\${dkms_tree}/$PKG/$VER/build \${_llvm} modules"
 DEST_MODULE_LOCATION[0]="/updates"
@@ -148,7 +151,7 @@ sudo dkms add    -m "$PKG" -v "$VER"
 sudo dkms build  -m "$PKG" -v "$VER"
 sudo dkms install -m "$PKG" -v "$VER" --force
 echo
-echo "  Kayitli. Kaldirmak icin: sudo dkms remove -m $PKG -v $VER --all"
-echo "  NOT: DKMS modulu /updates'e koyar, in-tree surumun onune gecer."
-echo "  Cekirdek ANA surumu degisirse (or. 7.2 -> 7.3) bu paketi yeniden"
-echo "  olustur; indirilen kaynak eski etikete ait kalir."
+echo "  Registered. To remove: sudo dkms remove -m $PKG -v $VER --all"
+echo "  NOTE: DKMS puts the module in /updates, ahead of the in-tree version."
+echo "  If the kernel's MAJOR version changes (7.2 -> 7.3), rebuild this"
+echo "  package; the downloaded source still belongs to the old tag."

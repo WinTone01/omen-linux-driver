@@ -1,37 +1,38 @@
-# omend yapilandirmasi - /etc/omen/omend.toml
+# omend configuration - /etc/omen/omend.toml
 #
-# Bu dosya YOKSA gomulu varsayilanlar kullanilir; kurulum sarti degil.
-# Ama VARSA ve bozuksa daemon baslamaz: fan egrisinde "herhalde bunu
-# demek istedi" diye tahmin yurutmek dogru degil.
+# If this file is ABSENT the built-in defaults are used; it is not required.
+# But if it is PRESENT and broken, the daemon refuses to start: guessing what
+# the user "probably meant" is not the right thing to do with a fan curve.
 
 [fan]
-# false yapilirsa daemon yalnizca izler, hicbir sey yazmaz.
+# Set to false to have the daemon only observe, writing nothing.
 enabled = true
 
-# Olcum araligi (saniye).
+# Sampling interval, in seconds.
 interval_secs = 2
 
-# Setpoint'i DUSURMEK icin sicakligin bu kadar dusmesi gerekir.
-# Yukari cikmak her zaman aninda - sogutmayi artirmak guvenli taraf.
+# How far the temperature must fall before the setpoint is LOWERED.
+# Raising is always immediate - more cooling is the safe direction.
 hysteresis_c = 5.0
 
-# Iki setpoint degisikligi arasi asgari sure (saniye).
+# Minimum time between two setpoint changes, in seconds.
 min_dwell_secs = 20
 
-# Faz 1 §6.3: OGH'nin kendi sinirlari 1800-4800 RPM.
+# Phase 1 §6.3: OGH's own bounds are 1800-4800 RPM.
 min_rpm = 1800
 max_rpm = 4800
 
-# Setpoint bu adima yuvarlanir. EC'nin fan hedefi yuz RPM biriminde
-# (Faz 1 §3.2), yani 100'den ince yazmak ayni EC degerine dusen bos
-# WMI cagrilari uretir. Buyutmek yazma sayisini daha da azaltir.
+# Setpoints are rounded to this step. The EC's fan target is in hundreds of
+# RPM (Phase 1 §3.2), so writing finer than 100 only produces WMI calls that
+# land on the same EC value. Raising it reduces writes further.
 step_rpm = 100
 
-# Fan egrisi. rpm = 0 -> o sicaklikta kontrolu EC'ye birak.
+# The fan curve. rpm = 0 -> hand control to the EC at that temperature.
 #
-# Alt bolgenin otomatik olmasi bilincli: EC rolantide fanlari tamamen
-# durduruyor (Faz 2'de olculdu, 45C'de 0 RPM). Orada manuel moda gecip
-# 1800 RPM dayatsaydik makine fabrika ayarindan daha gurultulu olurdu.
+# Leaving the lower region automatic is deliberate: the EC stops the fans
+# completely at idle (measured in Phase 2: 0 RPM at 45 C). Taking manual
+# control there and forcing 1800 RPM would make the machine louder than it is
+# from the factory.
 curve = [
   { temp_c = 60.0, rpm = 0    },
   { temp_c = 70.0, rpm = 1800 },
@@ -41,10 +42,10 @@ curve = [
 ]
 
 [safety]
-# Bu sicakligin ustunde egri birakilir, kontrol EC'ye doner.
-# Egrinin ust ucundan (95C) BUYUK olmali - aksi halde egrinin en
-# agresif bolgesi hic kullanilamaz. omend bunu baslangicta denetler.
+# Above this temperature the curve is abandoned and control returns to the EC.
+# It must be ABOVE the top of the curve (95 C), otherwise the curve's most
+# aggressive region can never be used. omend checks this at startup.
 critical_c = 97.0
 
-# Sigortadan cikis: 97 - 10 = 87C'ye dusunce egri yeniden devreye girer.
+# Leaving the cutout: the curve re-engages at 97 - 10 = 87 C.
 recover_delta_c = 10.0

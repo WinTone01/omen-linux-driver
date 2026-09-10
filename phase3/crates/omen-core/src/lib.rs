@@ -1,14 +1,14 @@
-//! HP OMEN 16-ap0xxx (board 8D24) icin fan, termal ve RGB kontrol katmani.
+//! Fan, thermal and RGB control layer for the HP OMEN 16-ap0xxx (board 8D24).
 //!
-//! Tasarim ilkesi: kendi sysfs agacimizi icat etmiyoruz. Fan `hwmon`,
-//! profil `platform_profile`, RGB (Faz 3 M2) `leds-multicolor` uzerinden
-//! yonetiliyor - hepsi cekirdegin var olan sinif arayuzleri. Boylece
-//! `sensors`, KDE guc ayarlari, `upower` gibi mevcut araclar bu projeden
-//! habersiz calismaya devam eder.
+//! Design principle: we do not invent our own sysfs tree. Fans go through
+//! `hwmon`, profiles through `platform_profile`, and RGB (Phase 3 M2) through
+//! `leds-multicolor` - all existing kernel class interfaces. That way
+//! `sensors`, desktop power settings and `upower` keep working without
+//! knowing this project exists.
 //!
-//! Fan tarafinin calismasi icin `hp-wmi`de 8D24 DMI kaydi gerekiyor
-//! (bkz. `phase2/`). Kayit yoksa `pwm1` acilmaz ve [`fan::Fan::discover`]
-//! bunu soyleyen bir hata dondurur.
+//! The fan side needs the 8D24 DMI entry in `hp-wmi` (see `phase2/`). Without
+//! it `pwm1` never appears and [`fan::Fan::discover`] returns an error that
+//! says so.
 
 pub mod config;
 pub mod curve;

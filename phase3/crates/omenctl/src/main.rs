@@ -1,13 +1,12 @@
-//! `omenctl` — durum araci ve daemon istemcisi.
+//! `omenctl` - status tool and daemon client.
 //!
-//! Fan'a DOGRUDAN yazmaz. Kontrol komutlari unix socket uzerinden omend'e
-//! gider (phase3-plan §4, guvenlik kurali 5): setpoint'i tek bir yerden
-//! surmek, iki surecin birbirinin uzerine yazmasindan iyidir. Boylece
-//! kelepceleme, kritik sigorta ve cikista otomatige donme her yol icin
-//! tek bir yerde garanti altinda.
+//! It never writes to the fan directly. Control commands go to omend over a
+//! unix socket (phase3-plan §4, safety rule 5): driving the setpoint from one
+//! place beats two processes overwriting each other. That keeps clamping, the
+//! critical cutout and restore-on-exit guaranteed in a single place.
 //!
-//! `status` daemon calismiyorken de ise yarasin diye sysfs'ten dogrudan
-//! okumaya duser - tanilama araci olarak degeri buradan geliyor.
+//! `status` falls back to reading sysfs directly so it stays useful while the
+//! daemon is not running - that is where its value as a diagnostic lies.
 
 mod client;
 
@@ -22,22 +21,22 @@ use omen_core::sysfs;
 use omen_core::thermal::Thermal;
 
 const USAGE: &str = "\
-omenctl - OMEN 16-ap0xxx fan ve termal kontrol araci
+omenctl - fan and thermal control tool for the OMEN 16-ap0xxx
 
-KULLANIM:
-    omenctl status                 Mevcut durum (daemon yoksa sysfs'ten okur)
-    omenctl curve [-c YOL]         Etkin fan egrisini goster
+USAGE:
+    omenctl status                 Current state (reads sysfs if no daemon)
+    omenctl curve [-c PATH]        Show the active fan curve
 
-    omenctl set curve              Fani egri sursun (varsayilan)
-    omenctl set auto               Kontrolu EC'ye birak
-    omenctl set manual <RPM>       Sabit hedef
-    omenctl set max                Fan tam guc
+    omenctl set curve              Let the curve drive the fan (default)
+    omenctl set auto               Hand control back to the EC
+    omenctl set manual <RPM>       Fixed target
+    omenctl set max                Fans at full power
 
-    omenctl profile <AD>           balanced / performance / low-power
-    omenctl reload                 Yapilandirmayi yeniden okut
+    omenctl profile <NAME>         balanced / performance / low-power
+    omenctl reload                 Make the daemon re-read its configuration
 
-Kontrol komutlari omend'e socket uzerinden gider; fan'a yazan tek sey
-daemon'dir. Izin hatasi alirsan sudo ile calistir.
+Control commands go to omend over a socket; the daemon is the only thing that
+writes to the fan. Run with sudo if you get a permission error.
 ";
 
 fn main() -> ExitCode {
@@ -56,7 +55,7 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         other => {
-            eprintln!("bilinmeyen komut: {other}\n\n{USAGE}");
+            eprintln!("unknown command: {other}\n\n{USAGE}");
             return ExitCode::from(2);
         }
     };
@@ -64,26 +63,22 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("hata: {e:#}");
+            eprintln!("error: {e:#}");
             ExitCode::FAILURE
         }
     }
 }
 
-/// Rust SIGPIPE'i baslangicta yok sayiyor; bu yuzden `omenctl status | head`
-/// gibi bir boruda okuyan taraf kapaninca yazma hata veriyor ve panic
-/// ciktisi bastiriyor. Bir CLI icin dogru davranis, her filtre programinin
-/// yaptigi gibi sessizce sonlanmak.
+/// Rust ignores SIGPIPE at startup, so in a pipeline like
+/// `omenctl status | head` the write fails once the reader closes and a panic
+/// message is printed. The right behaviour for a CLI is to die quietly, the
+/// way every filter program does.
 fn restore_sigpipe() {
-    // SAFETY: tek is parcacikliyiz ve yalnizca varsayilan davranisi
-    // geri koyuyoruz.
+    // SAFETY: single-threaded here, and we are only restoring the default
+    // disposition.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
-}
-
-fn field(name: &str, value: impl std::fmt::Display) {
-    println!("  {name:<16} {value}");
 }
 
 fn set_mode(args: &[String]) -> Result<()> {
@@ -94,13 +89,13 @@ fn set_mode(args: &[String]) -> Result<()> {
         Some("manual") => {
             let rpm: u32 = args
                 .get(2)
-                .ok_or_else(|| anyhow::anyhow!("manual bir RPM degeri bekliyor"))?
+                .ok_or_else(|| anyhow::anyhow!("manual expects an RPM value"))?
                 .parse()
-                .map_err(|_| anyhow::anyhow!("RPM sayi olmali"))?;
+                .map_err(|_| anyhow::anyhow!("the RPM value must be a number"))?;
             ControlMode::Manual { rpm }
         }
-        Some(other) => bail!("bilinmeyen mod: {other} (curve / auto / manual <RPM> / max)"),
-        None => bail!("mod bekleniyor: curve / auto / manual <RPM> / max"),
+        Some(other) => bail!("unknown mode: {other} (curve / auto / manual <RPM> / max)"),
+        None => bail!("a mode is required: curve / auto / manual <RPM> / max"),
     };
     client::report(client::send(&Request::SetMode(mode))?)
 }
@@ -108,68 +103,73 @@ fn set_mode(args: &[String]) -> Result<()> {
 fn set_profile(args: &[String]) -> Result<()> {
     let profile = args
         .get(1)
-        .ok_or_else(|| anyhow::anyhow!("profil adi bekleniyor"))?
+        .ok_or_else(|| anyhow::anyhow!("a profile name is required"))?
         .clone();
     client::report(client::send(&Request::SetProfile { profile })?)
 }
 
+fn field(name: &str, value: impl std::fmt::Display) {
+    println!("  {name:<16} {value}");
+}
+
 fn status() -> Result<()> {
-    // Daemon calisiyorsa onun gorunumu daha zengin: surus modu, kritik
-    // sigortanin durumu, hedef setpoint. Yoksa sysfs'ten okumaya duseriz.
+    // When the daemon is running its view is richer: drive mode, whether the
+    // critical cutout has tripped, the target setpoint. Otherwise we fall
+    // back to reading sysfs.
     if let Ok(Response::Ok(snap)) = client::send(&Request::Status) {
         println!("omend");
-        field("mod", snap.mode.map(|m| m.to_string()).unwrap_or_default());
+        field("mode", snap.mode.map(|m| m.to_string()).unwrap_or_default());
         if snap.safety_fallback {
-            println!("  ! kritik sigorta atti - kontrol EC'de");
+            println!("  ! the critical cutout has tripped - control is with the EC");
         }
         if let (Some(l), Some(c)) = (&snap.driver_label, snap.driver_temp_c) {
-            field("egriyi suren", format!("{l} {c:.1} C"));
+            field("driving sensor", format!("{l} {c:.1} C"));
         }
-        // target_rpm yalnizca sabit bir setpoint varken dolu. Bos olmasi
-        // "otomatik" demek DEGIL - max modunda da bos, ve orada fan tam
-        // guctedir. Modu birlikte okumak gerekiyor.
+        // target_rpm is only set when there is a fixed setpoint. It being
+        // empty does NOT mean "automatic" - it is empty in max mode too, and
+        // there the fans are at full power. The mode has to be read with it.
         match (snap.mode, snap.target_rpm) {
-            (_, Some(rpm)) => field("hedef", format!("{rpm} RPM")),
-            (Some(ControlMode::Max), None) => field("hedef", "tam guc"),
-            (_, None) => field("hedef", "otomatik (kontrol EC'de)"),
+            (_, Some(rpm)) => field("target", format!("{rpm} RPM")),
+            (Some(ControlMode::Max), None) => field("target", "full power"),
+            (_, None) => field("target", "automatic (control with the EC)"),
         }
-        field("calisma suresi", format!("{} s", snap.uptime_secs));
+        field("uptime", format!("{} s", snap.uptime_secs));
         println!();
     }
 
-    println!("donanim");
+    println!("hardware");
     let board = sysfs::read_string(std::path::Path::new("/sys/class/dmi/id/board_name"))
         .unwrap_or_else(|_| "?".into());
     field(
-        "kart",
+        "board",
         format!(
             "{board}{}",
             if board == "8D24" {
                 ""
             } else {
-                "  (beklenen: 8D24)"
+                "  (expected: 8D24)"
             }
         ),
     );
     field(
-        "cekirdek",
+        "kernel",
         sysfs::read_string(std::path::Path::new("/proc/sys/kernel/osrelease"))
             .unwrap_or_else(|_| "?".into()),
     );
 
-    println!("\nplatform profil");
+    println!("\nplatform profile");
     match PlatformProfile::discover() {
         Some(pp) => {
-            field("aktif", pp.get().unwrap_or_else(|_| "?".into()));
-            field("secenekler", pp.choices().join(" "));
+            field("active", pp.get().unwrap_or_else(|_| "?".into()));
+            field("choices", pp.choices().join(" "));
             for h in PlatformProfile::handlers() {
-                field("isleyici", format!("{} -> {}", h.name, h.profile));
+                field("handler", format!("{} -> {}", h.name, h.profile));
             }
             if !PlatformProfile::hp_wmi_active() {
-                println!("  ! hp-wmi isleyici olarak yok - 8D24 yamasi eksik olabilir");
+                println!("  ! hp-wmi is not a handler - the 8D24 patch may be missing");
             }
         }
-        None => println!("  platform_profile yok"),
+        None => println!("  no platform_profile"),
     }
 
     println!("\nfan");
@@ -180,7 +180,7 @@ fn status() -> Result<()> {
         Ok(fan) => {
             field("hwmon", fan.hwmon_path().display());
             field(
-                "mod",
+                "mode",
                 fan.mode()
                     .map(|m| m.to_string())
                     .unwrap_or_else(|e| format!("? ({e})")),
@@ -190,7 +190,7 @@ fn status() -> Result<()> {
                     field(
                         &format!("fan{i}"),
                         if rpm == 0 {
-                            "0 RPM  (durmus)".to_string()
+                            "0 RPM  (stopped)".to_string()
                         } else {
                             format!("{rpm} RPM")
                         },
@@ -204,17 +204,17 @@ fn status() -> Result<()> {
         Err(e) => println!("  {e}"),
     }
 
-    println!("\nsicakliklar");
+    println!("\ntemperatures");
     match Thermal::discover() {
         Ok(t) => {
             for (label, value) in t.read_all() {
                 match value {
                     Ok(c) => field(&label, format!("{c:.1} C")),
-                    Err(e) => field(&label, format!("okunamadi ({e})")),
+                    Err(e) => field(&label, format!("unreadable ({e})")),
                 }
             }
             if let Ok((label, c)) = t.hottest() {
-                println!("  -> egriyi suren: {label} {c:.1} C");
+                println!("  -> driving the curve: {label} {c:.1} C");
             }
         }
         Err(e) => println!("  {e}"),
@@ -228,7 +228,7 @@ fn curve(args: &[String]) -> Result<()> {
         Some(i) => args
             .get(i + 1)
             .map(std::path::PathBuf::from)
-            .ok_or_else(|| anyhow::anyhow!("--config bir yol bekliyor"))?,
+            .ok_or_else(|| anyhow::anyhow!("--config expects a path"))?,
         None => Config::default_path(),
     };
 
@@ -236,25 +236,28 @@ fn curve(args: &[String]) -> Result<()> {
     let curve = cfg.curve()?;
 
     if path.exists() {
-        println!("kaynak: {}", path.display());
+        println!("source: {}", path.display());
     } else {
-        println!("kaynak: gomulu varsayilan ({} yok)", path.display());
+        println!(
+            "source: built-in default ({} does not exist)",
+            path.display()
+        );
     }
-    println!("\n  {:>8}  hedef", "sicaklik");
+    println!("\n  {:>11}  target", "temperature");
     for p in curve.points() {
         let target = if p.rpm == 0 {
-            "otomatik (kontrol EC'de)".to_string()
+            "automatic (control with the EC)".to_string()
         } else {
             format!("{} RPM", p.rpm)
         };
-        println!("  {:>6.0} C  {target}", p.temp_c);
+        println!("  {:>9.0} C  {target}", p.temp_c);
     }
     println!(
-        "\n  histerezis {:.1} C, asgari bekleme {} s, olcum {} s",
+        "\n  hysteresis {:.1} C, minimum dwell {} s, sampling every {} s",
         cfg.fan.hysteresis_c, cfg.fan.min_dwell_secs, cfg.fan.interval_secs
     );
     println!(
-        "  kritik sigorta {:.0} C, {:.0} C'ye dusunce egri geri devreye girer",
+        "  critical cutout {:.0} C, the curve re-engages below {:.0} C",
         cfg.safety.critical_c,
         cfg.safety.critical_c - cfg.safety.recover_delta_c
     );

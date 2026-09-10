@@ -1,23 +1,25 @@
-# Faz 3 — `omend` / `omenctl`
+# Phase 3 — `omend` / `omenctl` / `omen-kbd-rgb`
 
-OMEN 16-ap0xxx (board **8D24**) icin fan egrisi servisi ve durum araci.
+Fan curve service, control tool and 4-zone RGB keyboard driver for the
+HP OMEN 16-ap0xxx (board **8D24**).
 
-**Onkosul:** Faz 2'nin `8D24` yamasi uygulanmis olmali. Yama olmadan
-`hp-wmi` `pwm1`i acmaz ve `omend` baslamaz — hata mesaji bunu soyler.
-Kontrol: `sudo bash ../phase2/scripts/verify.sh`
+**Prerequisite:** the Phase 2 `8D24` patch must be applied. Without it `hp-wmi`
+does not expose `pwm1` and `omend` refuses to start — the error message says
+so. Check with `sudo bash ../phase2/scripts/verify.sh`.
 
-## Neden bir daemon gerekiyor
+## Why a daemon is needed at all
 
-Faz 1 §6.4'te saptandi: HP'nin "Auto" fan egrisi EC'de degil, **Windows
-uygulamasinda** kosuyor — OGH periyodik olarak WMI `0x2E` setpoint'i yaziyor.
-Yani `hp-wmi` tek basina "otomatik fan" vermiyor.
+Phase 1 §6.4 established that HP's "Auto" fan curve does not live in the EC —
+it runs **in the Windows application**, which periodically writes the WMI
+`0x2E` setpoint. So `hp-wmi` alone does not give you automatic fan control.
 
-Ama EC'nin kendi bir otomatigi de **var** ve fena degil (Faz 2: 45C'de
-fan-stop, 58C'de 2400 RPM). O yuzden `omend` egrinin alt bolgesinde kontrolu
-EC'ye birakiyor; yalnizca ondan **fazlasini** istedigi zaman devraliyor.
-Rolantideki sessizlik boylece kayboluyor degil.
+But the EC *does* have an automatic mode of its own, and it is not bad
+(measured in Phase 2: fan-stop at 45 °C, 2400 RPM at 58 °C). So `omend` leaves
+the lower part of the curve to the EC and only takes over when it wants
+**more** than the EC is providing. Idle silence is preserved rather than
+traded away.
 
-## Kurulum
+## Install
 
 ```bash
 cargo build --release
@@ -30,123 +32,128 @@ sudo systemd-sysusers
 sudo systemctl enable --now omend
 ```
 
-Yapilandirma dosyasi zorunlu degil — yoksa gomulu varsayilanlar kullanilir.
+The config file is optional — without it the built-in defaults are used.
 
-Kontrol komutlarini sudo'suz kullanmak icin `omen` grubuna katil:
+To use the control commands without `sudo`, join the `omen` group:
 
 ```bash
-sudo usermod -aG omen $USER      # sonra yeniden oturum ac
+sudo usermod -aG omen $USER      # then log out and back in
 ```
 
-## Kullanim
+## Usage
 
 ```bash
-omenctl status                # daemon + donanim durumu
-omenctl curve                 # etkin egri ve guvenlik esikleri
+omenctl status                # daemon + hardware state
+omenctl curve                 # active curve and safety thresholds
 
-omenctl set curve             # egri sursun (varsayilan)
-omenctl set manual 2400       # sabit hedef
-omenctl set auto              # kontrolu EC'ye birak
-omenctl set max               # tam guc
+omenctl set curve             # let the curve drive (default)
+omenctl set manual 2400       # fixed target
+omenctl set auto              # hand control back to the EC
+omenctl set max               # full speed
 omenctl profile performance   # balanced / performance / low-power
-omenctl reload                # yapilandirmayi yeniden okut
+omenctl reload                # re-read the config
 
-omend --dry-run --once        # hicbir sey yazmadan ne yapacagini goster
-journalctl -u omend -f        # canli
+omend --dry-run --once        # show what it would do, writing nothing
+journalctl -u omend -f        # follow
 ```
 
-`omenctl` fana **dogrudan yazmaz**; kontrol komutlari unix socket uzerinden
-daemon'a gider. `status` daemon calismiyorken sysfs'ten okumaya duser, yani
-tanilama araci olarak her durumda ise yarar.
+`omenctl` never writes to the fan **directly**; control commands go to the
+daemon over a unix socket. `status` falls back to reading sysfs when the daemon
+is not running, so it stays useful as a diagnostic tool either way.
 
-Ikinci bir ornek calistirmak veya root olmadan denemek icin socket yolu
-`OMEND_SOCKET` ile degistirilebilir.
+Set `OMEND_SOCKET` to run a second instance, or to try things without root.
 
-## Guvenlik
+## Safety
 
-Yanlis EC yazimi fani tamamen durdurabilir ve termal koruma her zaman
-devreye girmez. `omend` bes kurala uyar:
+A wrong EC write can stop the fans entirely, and thermal protection does not
+always step in. `omend` follows five rules:
 
-1. **Cikista mutlaka otomatige don.** Uc kapi: normal cikis ve panic icin
-   `Drop`, SIGKILL icin systemd `ExecStopPost=omend --restore-auto`.
-2. **Kritik sigorta.** `critical_c` (varsayilan 97C) asilirsa egri birakilir,
-   kontrol EC'ye doner. `recover_delta_c` kadar dusunce geri devreye girer.
-   Sigorta egrinin ust ucundan buyuk olmali; degilse daemon baslamaz.
-3. **Watchdog.** Sicaklik okunamazsa veya setpoint yazilamazsa otomatige
-   dusulur. Bilinmeyen durumda son setpoint'te kalmak en tehlikeli davranis.
-4. **Iki katmanli kelepceleme.** Setpoint once `omend`de `min_rpm..max_rpm`
-   araligina, sonra cekirdekte fan tablosunun sinirlarina kelepcelenir.
-5. **Yazma yetkisi yalnizca daemon'da.** `omenctl` fana dogrudan yazmaz;
-   istegini socket uzerinden iletir. Boylece kelepceleme, kritik sigorta ve
-   cikista otomatige donme tek bir yerde garanti altinda — manuel modda bile.
-   Kritik sigorta kullanici istegini de gecersiz kilar.
+1. **Always hand control back on exit.** Three gates: `Drop` for normal exit
+   and for panics, and systemd `ExecStopPost=omend --restore-auto` for SIGKILL.
+2. **Critical cutout.** Above `critical_c` (97 °C by default) the curve is
+   abandoned and control returns to the EC; it re-engages once the temperature
+   drops by `recover_delta_c`. The cutout must be *above* the top of the curve,
+   otherwise the daemon refuses to start — see below.
+3. **Watchdog.** If a temperature cannot be read, or a setpoint cannot be
+   written, fall back to automatic. Staying at the last setpoint in an unknown
+   state is the most dangerous behaviour available.
+4. **Two layers of clamping.** The setpoint is clamped to `min_rpm..max_rpm` in
+   `omend`, and again to the fan table's limits in the kernel.
+5. **Only the daemon writes.** `omenctl` sends a request over the socket
+   instead of touching the fan. That way clamping, the critical cutout and
+   restore-on-exit are guaranteed in one place — including in manual mode. The
+   cutout overrides the user's request too.
 
-Egriyi denemeden once ikinci bir terminalde `watch -n1 sensors` acik olsun.
+Rule 2 is not a formality: the first version defaulted the cutout to 90 °C
+while the curve ran to 4800 RPM at 95 °C, which made the most aggressive part
+of the curve dead code — the cutout fired before the temperature ever got
+there. The config check now rejects that combination.
 
-### Dogrulama (2026-09-11, 7.2.4-1-cachyos)
+Keep `watch -n1 sensors` open in a second terminal the first time you try a
+curve.
 
-Kural 1'in uc kapisi da makinede denendi:
+### Verification (2026-09-11, kernel 7.2.4-1-cachyos)
 
-| Cikis yolu | Mekanizma | Sonuc |
+All three gates of rule 1 were exercised on the machine:
+
+| Exit path | Mechanism | Result |
 |---|---|---|
-| Ctrl+C (SIGINT) | `Drop` | `pwm1_enable` 2'ye dondu |
-| `omend --restore-auto` | dogrudan | 2'ye dondu |
-| `pkill -9` (SIGKILL) | systemd `ExecStopPost` | 2'ye dondu |
+| Ctrl+C (SIGINT) | `Drop` | `pwm1_enable` returned to 2 |
+| `omend --restore-auto` | direct | returned to 2 |
+| `pkill -9` (SIGKILL) | systemd `ExecStopPost` | returned to 2 |
 
-Sonuncusu onemli: SIGKILL'de `Drop` CALISMAZ, fani yalnizca systemd
-kurtarabilir. Test daemon manuel moddayken (`pwm1_enable = 1`) yapildi,
-yoksa bir sey kanitlamazdi.
+The last one matters most: on SIGKILL `Drop` does **not** run, and only systemd
+can recover the fan. The test was done while the daemon was in manual mode
+(`pwm1_enable = 1`), otherwise it would have proven nothing.
 
-## Yapi
+## Layout
 
 ```
-crates/omen-core/    sysfs, fan, sicaklik, egri, yapilandirma, IPC  (19 test)
-crates/omend/        daemon: egri motoru + guvenlik durum makinesi + socket
-crates/omenctl/      durum araci ve daemon istemcisi
-kernel/omen-kbd-rgb/ 4 bolge RGB klavye modulu (leds-multicolor)
-packaging/           systemd unit, ornek yapilandirma, sysusers
-docs/                faz plani, RGB protokolu
+crates/omen-core/    sysfs, fan, thermal, curve, config, IPC   (19 tests)
+crates/omend/        daemon: curve engine + safety state machine + socket
+crates/omenctl/      status tool and daemon client
+kernel/omen-kbd-rgb/ 4-zone RGB keyboard module (leds-multicolor)
+packaging/           systemd unit, example config, sysusers
+docs/                phase plan, RGB protocol
 ```
 
-### RGB modulu
+## RGB module
 
 ```bash
 cd kernel/omen-kbd-rgb && make
-sudo modprobe -a led-class-multicolor wmi  # insmod bagimlilik cozmez
+sudo modprobe -a led-class-multicolor wmi  # insmod does not resolve deps
 sudo insmod omen-kbd-rgb.ko
 
-# 4 bolge + genel parlaklik
+# 4 zones + global brightness
 ls /sys/class/leds/ | grep omen
 echo 255       | sudo tee /sys/class/leds/omen:rgb:kbd_backlight_zone0/brightness
 echo "255 0 0" | sudo tee /sys/class/leds/omen:rgb:kbd_backlight_zone0/multi_intensity
 echo 60        | sudo tee /sys/class/leds/omen::kbd_backlight/brightness
 ```
 
-Bolgeler soldan saga numarali: `zone0` en sol, `zone1` WASD, `zone2`
-orta-sag, `zone3` numpad. (Donanim yuvalari bu sirada DEGIL; modul
-ceviriyor — bkz. protokol belgesi.)
+Zones are numbered left to right: `zone0` leftmost, `zone1` WASD, `zone2`
+centre-right, `zone3` numpad. The hardware slots are **not** in that order; the
+module translates — see the protocol document.
 
-> **Acma/kapama surucude degil.** `LRGB`/`LBRT` yazmak aydinlatmayi
-> ACMIYOR; renkler register'a isler ve geri okuma dogru deger verir ama
-> klavye karanliksa oyle kalir. Master anahtar EC'nin ic durumu ve
-> **`Fn+F4`** ile yonetiliyor. Renk yazip bir sey gormuyorsan once ona bas.
+> **Turning the backlight on is not the driver's job.** Writing `LRGB`/`LBRT`
+> does **not** switch the lighting on. The colours land in the registers and
+> read back correctly, but if the keyboard is dark it stays dark. The master
+> switch is internal EC state, driven by **`Fn+F4`**. If you write a colour and
+> see nothing, press that first.
 
-Yalnizca aydinlatma komut grubunu (`0x020009`) kullanir, `hp-wmi` ile yan
-yana calisir — `blacklist hp_wmi` gerekmez. Protokol:
+The module uses only the lighting command group (`0x020009`), so it runs
+alongside `hp-wmi` — no `blacklist hp_wmi` needed. Protocol:
 [`docs/rgb-protocol.md`](docs/rgb-protocol.md)
 
-Genel parlaklik LED'inin adi bilerek `omen::kbd_backlight`: masaustu
-ortamlari ve `upower` klavye isigini `*::kbd_backlight` kalibiyla ariyor.
+The global brightness LED is deliberately named `omen::kbd_backlight`: desktop
+environments and `upower` look for keyboard backlights matching
+`*::kbd_backlight`, so the brightness keys work.
 
-Kendi sysfs agacimizi icat etmiyoruz: fan `hwmon`, profil `platform_profile`.
-Boylece `sensors`, KDE guc ayarlari gibi mevcut araclar bu projeden habersiz
-calismaya devam eder.
-
-## Durum
+## Status
 
 | | |
 |---|---|
-| M1 fan egrisi + durum araci | **calisiyor**, servis olarak dogrulandi |
-| M1b `omenctl` kontrol komutlari (unix socket) | **calisiyor** |
-| M2 `omen-kbd-rgb` cekirdek modulu | **calisiyor**, makinede dogrulandi |
-| M3 Tauri arayuzu | planlandi |
+| M1 fan curve + status tool | **working**, verified as a systemd service |
+| M1b `omenctl` control commands (unix socket) | **working** |
+| M2 `omen-kbd-rgb` kernel module | **working**, verified on the machine |
+| M3 Tauri UI | planned |

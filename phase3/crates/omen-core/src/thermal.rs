@@ -1,25 +1,26 @@
-//! Sicaklik kaynaklari.
+//! Temperature sources.
 //!
-//! Tek bir sensore guvenmiyoruz: CPU ve dGPU ayri isinabiliyor, egri hangisi
-//! sicaksa ona gore surulmeli. Kaynak bulunamazsa bu bir hata - cagiran taraf
-//! guvenli tarafa (otomatik moda) dusmeli.
+//! We do not trust a single sensor: the CPU and the dGPU heat up
+//! independently, and the curve should follow whichever is hotter. If no
+//! source can be found that is an error - the caller must fall back to the
+//! safe side (automatic mode).
 
 use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 use crate::sysfs::{self, Hwmon};
 
-/// Sensorun egriyi surmeye uygun olup olmadigi.
+/// Whether a sensor is suitable for driving the curve.
 ///
-/// `acpitz` kart genelinde bir sicaklik verir: CPU'dan yavas tepki verir ve
-/// rolantide ondan YUKSEK okuyabilir. En sicak sensoru korlemesine secersek
-/// egriyi acpitz surer ve fan gercek yuke degil kartin genel isisina tepki
-/// verir. O yuzden yalnizca gercek yuk kaynaklari birincil.
+/// `acpitz` reports a board-wide temperature: it lags the CPU and can read
+/// HIGHER than it at idle. Blindly picking the hottest sensor lets acpitz
+/// drive the curve, so the fan reacts to the chassis rather than to actual
+/// load. Only real load sources are primary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
-    /// CPU / GPU - egriyi bunlar surer.
+    /// CPU / GPU - these drive the curve.
     Primary,
-    /// Yalnizca birincil sensor yoksa kullanilir.
+    /// Used only when no primary sensor is available.
     Fallback,
 }
 
@@ -31,7 +32,7 @@ pub struct TempSensor {
 }
 
 impl TempSensor {
-    /// hwmon sicakliklari milidereceden gelir.
+    /// hwmon temperatures are in millidegrees.
     pub fn celsius(&self) -> Result<f32> {
         Ok(sysfs::read_i64(&self.path)? as f32 / 1000.0)
     }
@@ -43,10 +44,10 @@ pub struct Thermal {
 }
 
 impl Thermal {
-    /// Bu makinede (Strix Point + RTX 5060) ilgili olanlar:
+    /// Relevant on this machine (Strix Point + RTX 5060):
     ///   k10temp  Tctl  - CPU
-    ///   amdgpu   edge  - iGPU / APU kalibi
-    ///   acpitz         - kart genel, digerleri yoksa yedek
+    ///   amdgpu   edge  - iGPU / APU die
+    ///   acpitz         - board-wide, a fallback when the others are missing
     pub fn discover() -> Result<Self> {
         let mut sensors = Vec::new();
 
@@ -62,7 +63,8 @@ impl Thermal {
                 if !input.exists() {
                     continue;
                 }
-                // Etiket varsa kullan (Tctl, edge, ...), yoksa indisi yaz.
+                // Use the label when there is one (Tctl, edge, ...), else the
+                // index.
                 let label = sysfs::read_string(&hwmon.attr(&format!("temp{idx}_label")))
                     .unwrap_or_else(|_| format!("temp{idx}"));
                 sensors.push(TempSensor {
@@ -86,11 +88,11 @@ impl Thermal {
             .collect()
     }
 
-    /// Egriyi suren deger: birincil sensorlerin en sicagi.
+    /// The value that drives the curve: the hottest primary sensor.
     ///
-    /// Birincillerin hicbiri okunamazsa yedeklere duseriz - fani korlemesine
-    /// birakmaktansa acpitz ile surmek iyidir. Hicbiri okunamazsa hata doner
-    /// ve cagiran taraf otomatige dusmeli.
+    /// If no primary sensor can be read we drop to the fallbacks - driving
+    /// from acpitz beats flying blind. If none of them can be read either,
+    /// this errors and the caller must fall back to automatic.
     pub fn hottest(&self) -> Result<(String, f32)> {
         self.hottest_of(Role::Primary)
             .or_else(|| self.hottest_of(Role::Fallback))
@@ -101,7 +103,7 @@ impl Thermal {
         let mut best: Option<(String, f32)> = None;
         for sensor in self.sensors.iter().filter(|s| s.role == role) {
             let Ok(c) = sensor.celsius() else { continue };
-            // Sacma degerleri (kopuk sensor, -273 gibi) ele.
+            // Discard nonsense (a disconnected sensor reading -273, say).
             if !(0.0..=150.0).contains(&c) {
                 continue;
             }

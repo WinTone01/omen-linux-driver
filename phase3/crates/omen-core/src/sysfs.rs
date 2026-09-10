@@ -1,7 +1,7 @@
-//! sysfs okuma/yazma ve hwmon kesfi.
+//! sysfs reads and writes, plus hwmon discovery.
 //!
-//! Bilerek ince tutuldu: her yazma tek bir `write` cagrisi, her okuma tek bir
-//! `read_to_string`. sysfs dosyalari kucuk ve atomik, tampon/kilit gerekmiyor.
+//! Deliberately thin: one `write` per write, one `read_to_string` per read.
+//! sysfs files are small and atomic, so buffering and locking buy nothing.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,7 +32,7 @@ pub fn write_i64(path: &Path, value: i64) -> Result<()> {
     })
 }
 
-/// Bir hwmon dizini (`/sys/class/hwmon/hwmonN`).
+/// One hwmon directory (`/sys/class/hwmon/hwmonN`).
 #[derive(Debug, Clone)]
 pub struct Hwmon {
     pub path: PathBuf,
@@ -52,14 +52,15 @@ impl Hwmon {
                 Some(Hwmon { path, name })
             })
             .collect();
-        // hwmonN numaralari acilis sirasina gore degisir; kararli sira icin
-        // isme gore sirala - ayni isimden birden fazla varsa (spd5118 gibi)
-        // yol adi ikincil anahtar olur.
+        // hwmonN numbers depend on probe order and shift between boots, so
+        // sort by name for a stable order; the path breaks ties when several
+        // devices share a name (spd5118, for example).
         found.sort_by(|a, b| (&a.name, &a.path).cmp(&(&b.name, &b.path)));
         found
     }
 
-    /// Verilen isimlerden ILKINE uyan hwmon'u dondurur; sira oncelik demektir.
+    /// Returns the hwmon matching the FIRST name that is present; the order of
+    /// `names` is the order of preference.
     pub fn find_any(names: &[&str]) -> Option<Hwmon> {
         let all = Self::all();
         names

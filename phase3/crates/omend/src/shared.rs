@@ -1,18 +1,17 @@
-//! Daemon dongusu ile socket dinleyicisi arasindaki ortak durum.
+//! State shared between the daemon loop and the socket listener.
 //!
-//! Kasitli olarak kucuk: dinleyici NE istendigini yazar, dongu okur ve
-//! uygular. Fan'a yazan tek yer ana dongu - iki thread'in birbirinin
-//! setpoint'i uzerine yazmasi diye bir durum yok.
+//! Deliberately small: the listener records what was requested, the loop reads
+//! it and applies it. The loop is the only place that writes to the fan, so
+//! two threads can never overwrite each other's setpoint.
 //!
-//! Condvar'in sebebi: istek sadece bir bayrak olsaydi dongu onu ancak bir
-//! sonraki olcum turunda (varsayilan 2 sn) gorurdu. Simdi istek donguyi
-//! uyandiriyor.
+//! Why a condvar: if the request were only a flag, the loop would not see it
+//! until the next sample (2 s by default). Now the request wakes the loop.
 //!
-//! Ama tek basina uyandirmak yetmiyor: `omenctl set` istegi kuyruga
-//! birakip hemen donerse, ardindan gelen `status` hala eski turun
-//! goruntusunu okuyabiliyor. O yuzden `request_mode` SENKRON - dongu
-//! turunu bitirene kadar bekliyor ve gercekten uygulanan modu donduruyor.
-//! Boylece cevap metni de dogru oluyor: "istendi" degil, "ayarlandi".
+//! But waking is not enough on its own: if `omenctl set` dropped the request
+//! in a queue and returned immediately, a following `status` could still read
+//! the previous tick's view. So `request_mode` is SYNCHRONOUS - it waits for
+//! the loop to finish a tick and returns the mode that was actually applied.
+//! That also makes the reply text honest: "mode: manual", not "requested".
 
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -21,14 +20,14 @@ use omen_core::ipc::{ControlMode, Snapshot};
 
 #[derive(Debug, Default)]
 pub struct Inner {
-    /// Istemcinin istedigi mod. `None` -> bekleyen istek yok.
+    /// The mode the client asked for. `None` -> nothing pending.
     pub requested: Option<ControlMode>,
-    /// Yapilandirmayi yeniden oku.
+    /// Re-read the configuration.
     pub reload: bool,
-    /// Son turun gorunumu; `status` bunu dondurur.
+    /// The last tick's view; this is what `status` returns.
     pub snapshot: Snapshot,
-    /// Her tamamlanan dongu turunda artar. Senkron isteklerin "turum
-    /// islendi mi" sorusunu cevaplamasi icin.
+    /// Incremented on every completed loop iteration, so synchronous requests
+    /// can answer "has my turn been processed yet".
     pub tick_seq: u64,
 }
 
@@ -46,17 +45,17 @@ impl Shared {
         Self::default()
     }
 
-    /// Kilit zehirlenmesini yutuyoruz: bir thread panic ettiyse veri
-    /// tutarsiz olabilir ama fan kontrolunu durdurmak daha kotu.
+    /// We swallow lock poisoning: if a thread panicked the data may be
+    /// inconsistent, but stopping fan control is worse.
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.0 .0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Modu ister ve dongu turu bitene kadar bekler.
+    /// Requests a mode and waits for a loop iteration to complete.
     ///
-    /// Donen deger dongunun GERCEKTEN uyguladigi mod. Kritik sigorta
-    /// atmissa istegimiz kabul edilmis ama surus otomatige dusmus
-    /// olabilir - cagiran taraf bunu gorebilsin.
+    /// The returned value is the mode the loop ACTUALLY applied. If the
+    /// critical cutout has tripped, the request may be accepted while the
+    /// drive stays in automatic - the caller should be able to see that.
     pub fn request_mode(&self, mode: ControlMode, timeout: Duration) -> Option<ControlMode> {
         let mut guard = self.lock();
         guard.requested = Some(mode);
@@ -67,8 +66,9 @@ impl Shared {
         while guard.tick_seq == seq {
             let now = Instant::now();
             if now >= deadline {
-                // Dongu takildiysa istegi kuyrukta birakiyoruz; bir
-                // sonraki turda islenir. Cagirana "bilmiyorum" diyoruz.
+                // If the loop is wedged we leave the request queued; it will
+                // be handled next time round. We tell the caller we do not
+                // know.
                 return None;
             }
             let (next, _) = self
@@ -86,13 +86,13 @@ impl Shared {
         self.0 .1.notify_all();
     }
 
-    /// Dongu turunu tamamlandi olarak isaretler ve bekleyenleri uyandirir.
+    /// Marks a loop iteration complete and wakes anyone waiting.
     pub fn finish_tick(&self) {
         self.lock().tick_seq += 1;
         self.0 .1.notify_all();
     }
 
-    /// Bekleyen istegi alir ve temizler.
+    /// Takes the pending request and clears it.
     pub fn take_request(&self) -> Option<ControlMode> {
         self.lock().requested.take()
     }
@@ -113,10 +113,10 @@ impl Shared {
         self.lock().snapshot = snapshot;
     }
 
-    /// `deadline`e kadar bekler; istek gelirse erken doner.
+    /// Waits until `deadline`; returns early if a request arrives.
     ///
-    /// `slice` sinyal bayragina ne siklikta bakilacagini belirler -
-    /// SIGTERM'e condvar uzerinden haber veremiyoruz.
+    /// `slice` controls how often the signal flag is checked - we cannot get
+    /// SIGTERM delivered through the condvar.
     pub fn wait_until(&self, deadline: Instant, slice: Duration) {
         let mut guard = self.lock();
         while !guard.pending() {

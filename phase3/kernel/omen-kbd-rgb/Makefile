@@ -1,8 +1,8 @@
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-# Cekirdek clang ile derlenmisse (CachyOS) modul de clang ile derlenmeli;
-# yoksa kbuild clang'a ozgu bayraklari gcc'ye gecirip patliyor.
-# Ayni tespit phase2/scripts/build-module.sh'ta da var.
+# If the kernel was built with clang (CachyOS does), the module must be too;
+# otherwise kbuild passes clang-only flags to gcc and the build dies on the
+# first file. The same detection lives in phase2/scripts/build-module.sh.
 LLVM_FLAG := $(shell grep -q '^CONFIG_CC_IS_CLANG=y' $(KDIR)/.config 2>/dev/null && echo LLVM=1)
 
 all:

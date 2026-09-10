@@ -1,34 +1,35 @@
-//! hp-wmi'nin hwmon arayuzu uzerinden fan kontrolu.
+//! Fan control through hp-wmi's hwmon interface.
 //!
-//! Faz 2'de dogrulandi: `pwm1` yalnizca 8D24 DMI eslesmesi varken aciliyor.
-//! Cekirdek tarafindaki sozlesme (drivers/platform/x86/hp/hp-wmi.c):
+//! Verified in Phase 2: `pwm1` only appears when the 8D24 DMI entry matches.
+//! The kernel-side contract (drivers/platform/x86/hp/hp-wmi.c):
 //!
 //!   * `pwm1_enable`  0 = MAX, 1 = MANUAL, 2 = AUTO
-//!   * `pwm1`         0..255, 0..max_rpm araligina LINEER esleniyor
-//!   * `pwm1`e yazma yalnizca MANUAL modda kabul ediliyor (aksi halde -EINVAL)
-//!   * cekirdek setpoint'i ayrica min_rpm..max_rpm'e kelepceliyor
+//!   * `pwm1`         0..255, mapped LINEARLY onto 0..max_rpm
+//!   * writes to `pwm1` are only accepted in MANUAL mode (else -EINVAL)
+//!   * the kernel additionally clamps the setpoint to min_rpm..max_rpm
 //!
-//! Yani kelepceleme iki katmanli: once burada, sonra cekirdekte.
+//! So clamping happens twice: here first, then in the kernel.
 
 use crate::error::{Error, Result};
 use crate::sysfs::Hwmon;
 
-/// hp-wmi hwmon'unun `name` dosyasinda gorunebilecek degerler.
-/// 7.2'de "hp"; ileride degisirse ikincisi yakalar.
+/// Names hp-wmi's hwmon may use in its `name` file. "hp" on 7.2; the second
+/// catches a future rename.
 const HWMON_NAMES: &[&str] = &["hp", "hp_wmi"];
 
-/// Faz 1 §6.3: OGH'nin `profiles.json` sinirlari 18-48, yani 1800-4800 RPM.
+/// Phase 1 §6.3: OGH's own `profiles.json` bounds are 18-48, i.e. 1800-4800 RPM.
 pub const DEFAULT_MIN_RPM: u32 = 1800;
 pub const DEFAULT_MAX_RPM: u32 = 4800;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PwmMode {
-    /// Fan tam guc. hp-wmi bunu WMI 0x27 (FFFS=1) ile yapiyor.
+    /// Fans at full power. hp-wmi does this with WMI 0x27 (FFFS=1).
     Max,
-    /// Setpoint'i biz suruyoruz.
+    /// We drive the setpoint.
     Manual,
-    /// Kontrol EC'de. Faz 2'de dogrulandi: bu modda EC 0x34/0x35 = 0 yaziliyor,
-    /// bu "fan kapali" degil "otomatige don" demek (HP_FAN_SPEED_AUTOMATIC).
+    /// Control belongs to the EC. Verified in Phase 2: in this mode EC
+    /// 0x34/0x35 are written as 0, which means "revert to automatic"
+    /// (HP_FAN_SPEED_AUTOMATIC), not "fans off".
     Auto,
 }
 
@@ -69,10 +70,10 @@ pub struct Fan {
 }
 
 impl Fan {
-    /// hp-wmi hwmon'unu bulur ve `pwm1`in acik oldugunu dogrular.
+    /// Finds hp-wmi's hwmon and checks that `pwm1` is exposed.
     ///
-    /// `pwm1`in yoklugu neredeyse her zaman 8D24 yamasinin uygulanmadigi
-    /// anlamina gelir - hata mesaji bunu soyluyor.
+    /// A missing `pwm1` almost always means the 8D24 patch was not applied -
+    /// the error message says as much.
     pub fn discover(min_rpm: u32, max_rpm: u32) -> Result<Self> {
         let hwmon = Hwmon::find_any(HWMON_NAMES).ok_or(Error::HwmonNotFound)?;
         if !hwmon.has("pwm1") {
@@ -80,7 +81,7 @@ impl Fan {
         }
         if max_rpm == 0 || min_rpm >= max_rpm {
             return Err(Error::Curve(format!(
-                "gecersiz RPM araligi: {min_rpm}-{max_rpm}"
+                "invalid RPM range: {min_rpm}-{max_rpm}"
             )));
         }
         Ok(Self {
@@ -102,7 +103,7 @@ impl Fan {
         self.max_rpm
     }
 
-    /// Takometre. `index` 1 veya 2 (CPU / GPU fani).
+    /// Tachometer. `index` is 1 or 2 (CPU / GPU fan).
     pub fn rpm(&self, index: u8) -> Result<u32> {
         Ok(self.hwmon.read(&format!("fan{index}_input"))?.max(0) as u32)
     }
@@ -126,11 +127,10 @@ impl Fan {
         Ok(self.hwmon.read("pwm1")?.clamp(0, 255) as u8)
     }
 
-    /// Hedef hizi RPM olarak yazar.
+    /// Writes the target speed in RPM.
     ///
-    /// Cekirdek MANUAL disindaki modlarda yazmayi reddettigi icin once mod
-    /// ayarlanir. Deger min/max araligina kelepcelenir - yapilandirma dosyasi
-    /// ne derse desin.
+    /// The mode is set first because the kernel rejects writes outside MANUAL.
+    /// The value is clamped to the min/max range whatever the config says.
     pub fn set_target_rpm(&self, rpm: u32) -> Result<u32> {
         let clamped = rpm.clamp(self.min_rpm, self.max_rpm);
         self.set_mode(PwmMode::Manual)?;
@@ -138,13 +138,13 @@ impl Fan {
         Ok(clamped)
     }
 
-    /// Kontrolu EC'ye geri verir. Guvenlik kurali 1: her cikis yolundan cagrilir.
+    /// Hands control back to the EC. Safety rule 1: called on every exit path.
     pub fn restore_auto(&self) -> Result<()> {
         self.set_mode(PwmMode::Auto)
     }
 
-    /// RPM -> PWM. Yukari yuvarlar: yuvarlama hatasi her zaman DAHA COK
-    /// sogutma yonunde olsun, daha az degil.
+    /// RPM -> PWM. Rounds UP, so rounding error always lands on the side of
+    /// MORE cooling, never less.
     pub fn rpm_to_pwm(&self, rpm: u32) -> u8 {
         let rpm = rpm.min(self.max_rpm);
         let scaled = (rpm as u64 * 255).div_ceil(self.max_rpm as u64);
@@ -172,30 +172,30 @@ mod tests {
     }
 
     #[test]
-    fn pwm_uclari_dogru() {
+    fn pwm_endpoints_are_right() {
         let f = fan(1800, 4800);
         assert_eq!(f.rpm_to_pwm(0), 0);
         assert_eq!(f.rpm_to_pwm(4800), 255);
-        // ust siniri asan istek 255'te kalir, tasmaz
+        // A request above the ceiling saturates at 255 rather than wrapping.
         assert_eq!(f.rpm_to_pwm(9999), 255);
     }
 
     #[test]
-    fn yuvarlama_asagi_dusmez() {
-        // Her RPM icin: geri cevirdigimizde istenenin altina inmemeliyiz.
+    fn rounding_never_undershoots() {
+        // For every RPM: converting back must not land below what was asked.
         let f = fan(1800, 4800);
         for rpm in (0..=4800).step_by(100) {
             let back = f.pwm_to_rpm(f.rpm_to_pwm(rpm));
             assert!(
                 back + 100 >= rpm,
-                "rpm={rpm} -> pwm={} -> {back}, fazla dustu",
+                "rpm={rpm} -> pwm={} -> {back}, dropped too far",
                 f.rpm_to_pwm(rpm)
             );
         }
     }
 
     #[test]
-    fn mod_donusumu_simetrik() {
+    fn mode_conversion_is_symmetric() {
         for m in [PwmMode::Max, PwmMode::Manual, PwmMode::Auto] {
             assert_eq!(PwmMode::from_raw(m.as_raw()), Some(m));
         }

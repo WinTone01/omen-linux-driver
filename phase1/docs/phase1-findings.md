@@ -1,349 +1,360 @@
-# Faz 1 — Protokol Çıkarımı (HP OMEN 16-ap0xxx)
+# Phase 1 — Protocol Extraction (HP OMEN 16-ap0xxx)
 
-Tüm bulgular canlı sistemden alınan ACPI tablolarının `iasl` ile çözülmesinden gelir.
-Kaynak: `phase1/acpi/DSDT.aml` → `DSDT.dsl` (118.949 bayt AML / 829.887 bayt ASL).
-Her satırda `DSDT.dsl` satır numarası verilmiştir — hepsi doğrulanabilir.
+Every finding here comes from decompiling ACPI tables taken from the live
+system with `iasl`. Source: `phase1/acpi/DSDT.aml` → `DSDT.dsl` (118,949 bytes
+of AML / 829,887 bytes of ASL). Each line cites a `DSDT.dsl` line number, so
+all of it is verifiable.
 
-## 0. Donanım kimliği
+## 0. Hardware identity
 
-| Alan | Değer |
+| Field | Value |
 |---|---|
 | Model | HP OMEN Gaming Laptop 16-ap0xxx |
 | SKU | C12CPEA#AB8 |
-| Anakart | HP 8D24, rev 43.40 |
+| Board | HP 8D24, rev 43.40 |
 | BIOS | AMI F.11 (HPQOEM-1072009), 2025-12-16 |
 | CPU | AMD Ryzen AI 9 365 (Strix Point, Radeon 880M) |
 | DSDT OEM ID | HPQOEM / 8D24 |
 
-AMD işlemci → Faz 2'de `amd_pstate` kullanılabilir.
+AMD CPU → `amd_pstate` is available in Phase 2.
 
-## 1. WMI arayüzü (`_WDG`)
+## 1. WMI interface (`_WDG`)
 
-DSDT'de üç ayrı `_WDG` bloğu var. Fan/termal için önemli olan orta bloktur (AML ofset 0xA9C8, 14 kayıt):
+The DSDT contains three separate `_WDG` blocks. The one that matters for
+fan/thermal is the middle block (AML offset 0xA9C8, 14 entries):
 
-| GUID | Nesne | Tür | Not |
+| GUID | Object | Type | Note |
 |---|---|---|---|
-| `5FB7F034-2C63-45E9-BE91-3D44E2C707E4` | **WMAA** | Method | **Ana HP BIOS komut arayüzü.** Linux `hp-wmi` bunu `HPWMI_BIOS_GUID` olarak kullanır |
-| `95F24279-4D7B-4334-9387-ACCDC67EF61C` | `_WED` (0x80) | Event | Hotkey olayları; `hp-wmi`'deki `HPWMI_EVENT_GUID` |
-| `2B814318-4BE8-4707-9D84-A190A859B5D0` | `_WED` (0xA0) | Event | İkinci olay kanalı |
-| `1F4C91EB-DC5C-460B-951D-C7CB9B4B8D5E` | WMBA | Method | HP BIOS yapılandırma (BCU) |
-| `7391A661-223A-47DB-A77A-7BE84C60822D` | WMAC | Method | `_HID = "HPIC0004"` cihazına ait |
-| `2D114B49-…` / `988D08E3-…` / `14EA9746-…` | WQBC/BD/BE | Data | BIOS ayar numaralandırması (93/30/2 örnek) |
+| `5FB7F034-2C63-45E9-BE91-3D44E2C707E4` | **WMAA** | Method | **The main HP BIOS command interface.** Linux `hp-wmi` uses it as `HPWMI_BIOS_GUID` |
+| `95F24279-4D7B-4334-9387-ACCDC67EF61C` | `_WED` (0x80) | Event | Hotkey events; `HPWMI_EVENT_GUID` in `hp-wmi` |
+| `2B814318-4BE8-4707-9D84-A190A859B5D0` | `_WED` (0xA0) | Event | Second event channel |
+| `1F4C91EB-DC5C-460B-951D-C7CB9B4B8D5E` | WMBA | Method | HP BIOS configuration (BCU) |
+| `7391A661-223A-47DB-A77A-7BE84C60822D` | WMAC | Method | Belongs to the `_HID = "HPIC0004"` device |
+| `2D114B49-…` / `988D08E3-…` / `14EA9746-…` | WQBC/BD/BE | Data | BIOS setting enumeration (93/30/2 instances) |
 
-Diğer iki blok: `B2526ED4-CB45-49FA-9230-8D2FE8AFB8EC` (WMMK) ve
+The other two blocks: `B2526ED4-CB45-49FA-9230-8D2FE8AFB8EC` (WMMK) and
 `928B5A30-AD7C-4C36-946A-1300A80CE7E1` (WMCA).
 
-**`HPIC0004` DSDT'de zaten tanımlı** (satır 19610) — Faz 2'de DSDT yamasına
-muhtemelen gerek yok.
+**`HPIC0004` is already defined in the DSDT** (line 19610) — so a DSDT patch is
+probably unnecessary in Phase 2.
 
-## 2. WMAA çağrı protokolü
+## 2. The WMAA calling protocol
 
-`WMAA` (satır 10202) sadece kilit alıp `HWMC(Arg1, Arg2)` çağırır.
-Asıl dağıtıcı `HWMC` (satır 8645–9733).
+`WMAA` (line 10202) merely takes a lock and calls `HWMC(Arg1, Arg2)`. The real
+dispatcher is `HWMC` (lines 8645–9733).
 
-Giriş tamponu düzeni (`HWMC` başı, satır 8647–8650):
+Input buffer layout (top of `HWMC`, lines 8647–8650):
 
-| Ofset | Alan | Anlam |
+| Offset | Field | Meaning |
 |---|---|---|
-| 0x00 | `SGIN` | İmza, **`0x55434553`** (`"SECU"`) olmalı |
-| 0x04 | `COMD` | Komut grubu |
-| 0x08 | `CMDT` | Komut tipi (alt komut) |
-| 0x0C | `DSZI` | Giriş verisi boyutu (bayt) |
-| 0x10 | veri | `DSZI` kadar veri |
+| 0x00 | `SGIN` | Signature, must be **`0x55434553`** (`"SECU"`) |
+| 0x04 | `COMD` | Command group |
+| 0x08 | `CMDT` | Command type (sub-command) |
+| 0x0C | `DSZI` | Input data size in bytes |
+| 0x10 | data | `DSZI` bytes |
 
-`Arg0` çıkış tampon boyutunu seçer: 1→0, 2→4, 3→128, 4→1024, 5→4096 bayt.
-Dönüş: `SIOU` (0x4C494146 = `"FAIL"` başlangıç değeri) + `RETC` durum kodu.
-`RETC = 0` başarı; 2/3/4/5 çeşitli hata durumları.
+`Arg0` selects the output buffer size: 1→0, 2→4, 3→128, 4→1024, 5→4096 bytes.
+Return: `SIOU` (initialised to 0x4C494146 = `"FAIL"`) plus a `RETC` status
+code. `RETC = 0` is success; 2/3/4/5 are various errors.
 
-### Komut grupları (`COMD`)
+### Command groups (`COMD`)
 
-| COMD | Kapsam | Alt komut sayısı |
+| COMD | Scope | Sub-commands |
 |---|---|---|
-| `0x01` | BIOS okuma (genel HP) | 36 |
-| `0x02` | BIOS yazma (genel HP) | 26 |
+| `0x01` | BIOS read (generic HP) | 36 |
+| `0x02` | BIOS write (generic HP) | 26 |
 | `0x00020002` | CSTA/CACT/CDAC/CAIP | 4 |
-| **`0x00020008`** | **Gaming / OMEN — fan, termal, güç profili** | **55 (GM01–GM37)** |
-| `0x00020009` | Aydınlatma / RGB (LM01–LM0B) | 11 |
+| **`0x00020008`** | **Gaming / OMEN — fan, thermal, power profile** | **55 (GM01–GM37)** |
+| `0x00020009` | Lighting / RGB (LM01–LM0B) | 11 |
 | `0x0002000B` | ACPD | 1 |
 | `0x00020000` | GASC | 2 |
 
-`0x00020008` grubu, Linux `hp-wmi` sürücüsündeki `HPWMI_GM_COMMAND` ile aynıdır.
+Group `0x00020008` is the same as `HPWMI_GM_COMMAND` in the Linux `hp-wmi`
+driver.
 
-## 3. Fan ve termal komutları (COMD `0x00020008`)
+## 3. Fan and thermal commands (COMD `0x00020008`)
 
-GM metotlarının 55'inden 19'u gerçek EC erişimi yapar; kalanı boş saplama.
-Fan/termal ile ilgili olanlar:
+Of the 55 GM methods, 19 actually touch the EC; the rest are empty stubs. The
+fan/thermal ones:
 
-| CMDT | Metot | Dokunduğu EC register | İşlev |
+| CMDT | Method | EC registers touched | Function |
 |---|---|---|---|
-| **0x2D** | GM2D | `RB00`–`RB30` (EC 0xB0–0xB3) | **Fan hızı oku (takometre)** |
-| **0x2E** | GM2E | `SRP1`, `SRP2` (EC 0x34, 0x35) | **Fan hızı yaz (manuel kontrol)** |
-| **0x26** | GM26 | `REC2` (EC 0xEC bit 2) | **Maks. fan durumu oku** |
-| **0x27** | GM27 | `FFFS` (EC 0xEC bit 2) | **Maks. fan aç/kapat** |
-| **0x1A** | GM1A | `HPCM` (EC 0x95), `FAMC` (EC 0x51 bit 0) | **Güç profili + fan manuel modu aç** |
-| 0x11 | GM11 | `FMR1/2`, `FSUS`, `FS1H/L`, `FS2H/L` | Fan bilgisi oku (fan seçimi: giriş baytı 0/1) |
-| 0x10 | GM10 | `OMCC` (EC 0x62 bit 0) | OMEN modu etkinleştir (sabit 0x02 döner) |
-| 0x2A | GM2A | EC 0x37, 0x38, 0x39, 0x58 | Termal eşik/politika |
-| 0x29 | GM29 | `OSPT`, `OSPL` (EC 0x38, 0x37) | Termal politika |
+| **0x2D** | GM2D | `RB00`–`RB30` (EC 0xB0–0xB3) | **Read fan speed (tachometer)** |
+| **0x2E** | GM2E | `SRP1`, `SRP2` (EC 0x34, 0x35) | **Write fan speed (manual control)** |
+| **0x26** | GM26 | `REC2` (EC 0xEC bit 2) | **Read max-fan state** |
+| **0x27** | GM27 | `FFFS` (EC 0xEC bit 2) | **Toggle max fan** |
+| **0x1A** | GM1A | `HPCM` (EC 0x95), `FAMC` (EC 0x51 bit 0) | **Power profile + enable manual fan mode** |
+| 0x11 | GM11 | `FMR1/2`, `FSUS`, `FS1H/L`, `FS2H/L` | Read fan info (fan select: input byte 0/1) |
+| 0x10 | GM10 | `OMCC` (EC 0x62 bit 0) | Enable OMEN mode (returns a constant 0x02) |
+| 0x2A | GM2A | EC 0x37, 0x38, 0x39, 0x58 | Thermal thresholds / policy |
+| 0x29 | GM29 | `OSPT`, `OSPL` (EC 0x38, 0x37) | Thermal policy |
 | 0x2B | GM2B | EC 0xE2 | — |
-| 0x22 | GM22 | `NVDO` (EC 0x90) | dGPU ile ilgili |
+| 0x22 | GM22 | `NVDO` (EC 0x90) | dGPU related |
 | 0x23 | GM23 | EC 0x48 | — |
 | 0x28 | GM28 | EC 0xEA, 0x53 bit 1 | — |
 | 0x33 | GM33 | `R455` (EC 0x45 bit 5) | — |
 | 0x34 | GM34 | `ETEG` (EC 0x45 bit 6) | — |
 
-Aydınlatma (COMD `0x00020009`): LM02/LM03 → `LRGB`/`BRGB` (klavye RGB bölgeleri),
-LM04/LM05 → `LBRT` (parlaklık), LM03/LM05 → `LCMC`.
+Lighting (COMD `0x00020009`): LM02/LM03 → `LRGB`/`BRGB` (keyboard RGB zones),
+LM04/LM05 → `LBRT` (brightness), LM03/LM05 → `LCMC`.
 
-### 3.1 Fan hızı okuma — GM2D (satır ~13760, `extract/GM-LM-methods.asl`)
-
-```
-fan1_ham = (EC[0xB1] << 8) | EC[0xB0]
-fan2_ham = (EC[0xB3] << 8) | EC[0xB2]
-cikti[0] = round(fan1_ham / 100)     // 100'e böl, kalan >= 50 ise yukarı yuvarla
-cikti[1] = round(fan2_ham / 100)
-```
-
-Çıkış tamponu 128 bayt; ilk iki bayt anlamlı.
-**Birim: yüz RPM.** Yani `cikti[0] = 42` → ~4200 RPM.
-
-### 3.2 Fan hızı yazma — GM2E
+### 3.1 Reading fan speed — GM2D (line ~13760, `extract/GM-LM-methods.asl`)
 
 ```
-EC[0x34] (SRP1) = giris[0]     // fan 1 hedefi
-EC[0x35] (SRP2) = giris[1]     // fan 2 hedefi
+fan1_raw = (EC[0xB1] << 8) | EC[0xB0]
+fan2_raw = (EC[0xB3] << 8) | EC[0xB2]
+out[0] = round(fan1_raw / 100)     // divide by 100, round up when remainder >= 50
+out[1] = round(fan2_raw / 100)
 ```
 
-Giriş tamponu 128 bayt (`DSZI = 0x80`). GM2D ile simetrik olduğundan
-**birim yine yüz RPM.** Metot önce `WSMI(0x00020008, 0x2E, 0x80, 0, 0)`
-ile BIOS'a SMI atar, sonra EC'ye doğrudan yazar.
+The output buffer is 128 bytes; only the first two are meaningful.
+**Unit: hundreds of RPM.** So `out[0] = 42` → ~4200 RPM.
 
-`ECON == 1` (EC hazır) değilse yazma sessizce atlanır.
-
-### 3.3 Güç profili ve manuel mod — GM1A
+### 3.2 Writing fan speed — GM2E
 
 ```
-EC[0x95] (HPCM) = giris[1]     // performans/termal profil
-CMSW(0xE6, giris[1])           // BIOS'a SMI
-EC[0x51] bit0 (FAMC) = giris[2]  // fan manuel kontrol
+EC[0x34] (SRP1) = in[0]     // fan 1 target
+EC[0x35] (SRP2) = in[1]     // fan 2 target
+```
+
+The input buffer is 128 bytes (`DSZI = 0x80`). Being symmetric with GM2D, the
+**unit is again hundreds of RPM.** The method first raises an SMI to the BIOS
+with `WSMI(0x00020008, 0x2E, 0x80, 0, 0)`, then writes the EC directly.
+
+If `ECON != 1` (EC not ready) the write is silently skipped.
+
+### 3.3 Power profile and manual mode — GM1A
+
+```
+EC[0x95] (HPCM) = in[1]        // performance/thermal profile
+CMSW(0xE6, in[1])              // SMI to the BIOS
+EC[0x51] bit0 (FAMC) = in[2]   // fan manual control
 ```
 
 `FAMC` = **Fan Manual Control**.
 
-`HPCM`'in geçerli değerleri DSDT'de sabit olarak görünmüyor — bunlar canlı
-yakalamayla tespit edildi: **48 / 49 / 4**, bkz. bölüm 6.1.
+`HPCM`'s valid values do not appear as constants in the DSDT — they were found
+by live capture: **48 / 49 / 4**, see §6.1.
 
-Yakalama ayrıca beklenen bir varsayımı **çürüttü**: OGH manuel fan modunda bile
-`FAMC`'yi hiç 1 yapmıyor (`giriş[2]` hep 0). Manuel kontrol yalnızca `0x2E`
-setpoint'ini sürekli yazarak sağlanıyor. Bkz. bölüm 6.1 ve 6.4.
+The capture also **disproved** an expected assumption: OGH never sets `FAMC` to
+1, not even in manual fan mode (`in[2]` is always 0). Manual control is achieved
+purely by writing the `0x2E` setpoint repeatedly. See §6.1 and §6.4.
 
-## 4. EC register haritası
+## 4. EC register map
 
-DSDT'de tek bir `EmbeddedControl` bölgesi var (satır 21578):
+The DSDT has a single `EmbeddedControl` region (line 21578):
 
 ```
 OperationRegion (ERAM, EmbeddedControl, Zero, 0xFF)
 ```
 
-Yani standart ACPI EC penceresi **0x00–0xFE**. Tam alan listesi:
+So the standard ACPI EC window is **0x00–0xFE**. Full field list:
 `phase1/extract/ec-eram-field.asl`
 
-Fan/termal açısından önemli olanlar:
+The ones that matter for fan/thermal:
 
-| Adres | Ad | Genişlik | Anlam |
+| Address | Name | Width | Meaning |
 |---|---|---|---|
-| 0x34 | `SRP1` | 8 | **Fan 1 hedef hızı (yüz RPM)** |
-| 0x35 | `SRP2` | 8 | **Fan 2 hedef hızı (yüz RPM)** |
-| 0x37 | `OSPL` | 8 | Termal politika |
-| 0x38 | `OSPT` | 8 | Termal politika |
-| 0x39 | `OFPT` | 8 | Termal politika |
-| 0x51 bit 0 | `FAMC` | 1 | **Fan manuel kontrol etkin** |
-| 0x57 | `RTTP` | 8 | Sıcaklık |
-| 0x58 | `RTMP` | 8 | Sıcaklık |
-| 0x59 | `TRTM` | 8 | Sıcaklık |
-| 0x62 bit 0 | `OMCC` | 1 | OMEN modu |
-| 0x95 | `HPCM` | 8 | **Güç/termal profil** |
-| 0xAF | `GPUT` | 8 | GPU sıcaklığı |
-| 0xB0–0xB1 | `RPM1`,`RPM2` | 8+8 | **Fan 1 takometre (LE 16-bit)** |
-| 0xB2–0xB3 | `RPM3`,`RPM4` | 8+8 | **Fan 2 takometre (LE 16-bit)** |
-| 0xB7 | `GTMP` | 8 | GPU sıcaklığı 2 |
-| 0xC9 | `GTM2` | 8 | GPU sıcaklığı 3 |
-| 0xEC bit 1 | `FFFF` | 1 | Fan tam güç (bayrak) |
-| 0xEC bit 2 | `FFFS` | 1 | **Maks. fan aç/kapat** |
+| 0x34 | `SRP1` | 8 | **Fan 1 target speed (hundreds of RPM)** |
+| 0x35 | `SRP2` | 8 | **Fan 2 target speed (hundreds of RPM)** |
+| 0x37 | `OSPL` | 8 | Thermal policy |
+| 0x38 | `OSPT` | 8 | Thermal policy |
+| 0x39 | `OFPT` | 8 | Thermal policy |
+| 0x51 bit 0 | `FAMC` | 1 | **Fan manual control enable** |
+| 0x57 | `RTTP` | 8 | Temperature |
+| 0x58 | `RTMP` | 8 | Temperature |
+| 0x59 | `TRTM` | 8 | Temperature |
+| 0x62 bit 0 | `OMCC` | 1 | OMEN mode |
+| 0x95 | `HPCM` | 8 | **Power/thermal profile** |
+| 0xAF | `GPUT` | 8 | GPU temperature |
+| 0xB0–0xB1 | `RPM1`,`RPM2` | 8+8 | **Fan 1 tachometer (LE 16-bit)** |
+| 0xB2–0xB3 | `RPM3`,`RPM4` | 8+8 | **Fan 2 tachometer (LE 16-bit)** |
+| 0xB7 | `GTMP` | 8 | GPU temperature 2 |
+| 0xC9 | `GTM2` | 8 | GPU temperature 3 |
+| 0xEC bit 1 | `FFFF` | 1 | Fan full power (flag) |
+| 0xEC bit 2 | `FFFS` | 1 | **Max fan toggle** |
 
-### 4.1 Genişletilmiş EC RAM — belleğe eşlenmiş pencere
+### 4.1 Extended EC RAM — the memory-mapped window
 
-Bu makinede EC RAM'in tamamı ayrıca **fiziksel `0xFE700000` adresinde 4 KB'lık
-bir pencereye** eşlenmiş (satır 21215):
+On this machine the whole EC RAM is *also* mapped into a 4 KB window at
+physical address **`0xFE700000`** (line 21215):
 
 ```
 OperationRegion (H2RA, SystemMemory, 0xFE700000, 0x1000)
 ```
 
-Eşleme kuralı — alan adlarından doğrulandı (`R290` @0x329, `R400` @0x340,
-`RF70` @0x3F7 hepsi tutarlı):
+The mapping rule, confirmed from the field names (`R290` @0x329, `R400` @0x340,
+`RF70` @0x3F7 are all consistent):
 
 ```
-EC register N  ==  fiziksel 0xFE700000 + 0x300 + N
+EC register N  ==  physical 0xFE700000 + 0x300 + N
 ```
 
-Bu, standart EC penceresinin (0x00–0xFE) **ötesindeki** register'lara erişimin
-tek yolu. Fan eğrisi tabloları orada:
+This is the only way to reach registers **beyond** the standard EC window
+(0x00–0xFE). The fan curve tables live there:
 
-| H2RA ofseti | EC adresi | Ad | Anlam |
+| H2RA offset | EC address | Name | Meaning |
 |---|---|---|---|
-| 0x1B7 | — (0x300 altı) | `FSUS` | Fan durumu |
-| 0x527 | 0x227 | `FMR1` | Fan 1 maks. RPM |
-| 0x52F | 0x22F | `FMR2` | Fan 2 maks. RPM |
-| 0x530 | 0x230 | `FS1H` | Fan 1 hız, yüksek bayt |
-| 0x531 | 0x231 | `FS1L` | Fan 1 hız, düşük bayt |
-| 0x532 | 0x232 | `FS2H` | Fan 2 hız, yüksek bayt |
-| 0x533 | 0x233 | `FS2L` | Fan 2 hız, düşük bayt |
+| 0x1B7 | — (below 0x300) | `FSUS` | Fan status |
+| 0x527 | 0x227 | `FMR1` | Fan 1 max RPM |
+| 0x52F | 0x22F | `FMR2` | Fan 2 max RPM |
+| 0x530 | 0x230 | `FS1H` | Fan 1 speed, high byte |
+| 0x531 | 0x231 | `FS1L` | Fan 1 speed, low byte |
+| 0x532 | 0x232 | `FS2H` | Fan 2 speed, high byte |
+| 0x533 | 0x233 | `FS2L` | Fan 2 speed, low byte |
 | 0x534 | 0x234 | `FAS1` | Fan 1 — |
 | 0x535 | 0x235 | `FAS2` | Fan 2 — |
 
-Ayrıca `LRGB` (@0xEE3), `BRGB` (@0xEF0), `LBRT` — klavye RGB, aynı pencerede.
+Also `LRGB` (@0xEE3), `BRGB` (@0xEF0) and `LBRT` — keyboard RGB, in the same
+window.
 
-Tam liste: `phase1/extract/ec-h2ra-field.asl`
+Full list: `phase1/extract/ec-h2ra-field.asl`
 
-## 5. Faz 2 için en önemli sonuç
+## 5. The most important conclusion for Phase 2
 
-Bu makinenin fan protokolü, **upstream Linux `hp-wmi` sürücüsündeki Victus S
-manuel fan desteğiyle bire bir aynı**:
+This machine's fan protocol is **identical to the Victus S manual fan support
+already in the upstream Linux `hp-wmi` driver**:
 
-- `hp-wmi`'nin `HPWMI_FAN_SPEED_MAX_GET_QUERY = 0x26` / `SET = 0x27` → GM26/GM27 ✓
-- Victus S manuel fan yazma sorgusu `0x2E` → GM2E ✓ (aynı `SRP1`/`SRP2` hedefi)
-- Fan hızı okuma `0x2D` → GM2D ✓
-- Komut grubu `0x20008` ✓, imza `"SECU"` ✓
+- `hp-wmi`'s `HPWMI_FAN_SPEED_MAX_GET_QUERY = 0x26` / `SET = 0x27` → GM26/GM27 ✓
+- Victus S manual fan write query `0x2E` → GM2E ✓ (same `SRP1`/`SRP2` target)
+- Fan speed read `0x2D` → GM2D ✓
+- Command group `0x20008` ✓, signature `"SECU"` ✓
 
-Dolayısıyla Faz 2'de büyük olasılıkla **yeni sürücü yazmaya gerek yok** —
-`hp-wmi`'nin bu modeli tanıması (DMI eşleşmesi / model listesi) yeterli olabilir.
-İlk iş bunu Linux'ta doğrulamak.
+So Phase 2 most likely needs **no new driver** — it may be enough for `hp-wmi`
+to recognise this model (DMI match / board list). Confirming that on Linux is
+the first job.
 
-## 6. Canlı yakalama — OMEN Gaming Hub log'undan
+## 6. Live capture — from the OMEN Gaming Hub log
 
-Kaynak: OGH kendi log'una giden WMI giriş baytlarını yazıyor.
+Source: OGH writes the outgoing WMI input bytes into its own log, under
 `%LOCALAPPDATA%\Packages\AD2F1837.OMENCommandCenter_v10z8vjag6ke6\LocalCache\Local\HPOMEN\`
-altında `HPOMEN_*.log` (ön yüz) ve `HPOMENBG_*.log` (arka plan servisi):
+as `HPOMEN_*.log` (front end) and `HPOMENBG_*.log` (background service):
 
 ```
 SetFanModeAsync(), mode = L7
 [ExecuteBiosWmiCommandThruDriver] inputData=255,49,0,0,
 ```
 
-> Not: `Microsoft-Windows-WMI-Activity/Trace` ETW kanalı bu iş için **yetersiz** —
-> yalnızca hangi sınıf/metodun çağrıldığını kaydeder, argüman baytlarını kaydetmez,
-> üstelik açmak için yönetici gerekir. OGH log'u doğrudan baytları verdiği için
-> ETW trace'ine gerek kalmadı.
+> Note: the `Microsoft-Windows-WMI-Activity/Trace` ETW channel is **not enough**
+> for this job — it records which class/method was called but not the argument
+> bytes, and it needs administrator rights to enable. The OGH log gives the
+> bytes directly, so no ETW trace was needed.
 
-### 6.1 `HPCM` profil değerleri (doğrulandı)
+### 6.1 `HPCM` profile values (confirmed)
 
-OGH'de dört profil tek tek seçilip log'dan yakalandı (2026-09-10 18:48):
+Each of the four OGH profiles was selected in turn and captured from the log
+(2026-09-10 18:48):
 
-| OGH düğmesi | İç ad | GM1A payload | **HPCM (EC 0x95)** |
+| OGH button | Internal name | GM1A payload | **HPCM (EC 0x95)** |
 |---|---|---|---|
 | ECO | `Eco` | `255,48,0,0` | **48** (0x30) |
 | Balanced | `L2` | `255,48,0,0` | **48** (0x30) |
 | Performance | `L7` | `255,49,0,0` | **49** (0x31) |
 | Unleashed | `L8` | `255,4,0,0` | **4** (0x04) |
 
-Payload düzeni GM1A ile birebir uyuyor: `[0]` kullanılmıyor (0xFF),
-`[1]` → `HPCM`, `[2]` → `FAMC`.
+The payload layout matches GM1A exactly: `[0]` unused (0xFF), `[1]` → `HPCM`,
+`[2]` → `FAMC`.
 
-Üç önemli sonuç:
+Three conclusions:
 
-1. **ECO ayrı bir firmware profili değil.** Log'da `RegKeyMode has value=Eco`
-   yazdıktan hemen sonra `SetFanModeAsync(), mode = L2` çağrılıyor ve aynı
-   `HPCM = 48` gönderiliyor. ECO, Windows güç planı / PL1 seviyesinde
-   uygulanıyor. Yani firmware tarafında **yalnızca üç termal profil var: 48, 49, 4.**
-2. **`FAMC` hiçbir zaman 1 yapılmıyor.** Manuel fan modunda bile `[2] = 0`.
-   OGH manuel kontrolü `FAMC` ile değil, `0x2E` setpoint'ini sürekli yazarak
-   yapıyor.
-3. Değerler ardışık değil (48/49/4) — sırayla numaralandırılmış bir enum değil.
+1. **ECO is not a separate firmware profile.** Right after logging
+   `RegKeyMode has value=Eco` the log calls `SetFanModeAsync(), mode = L2` and
+   sends the same `HPCM = 48`. ECO is implemented at the Windows power plan /
+   PL1 level. So the firmware side has **only three thermal profiles: 48, 49,
+   4.**
+2. **`FAMC` is never set to 1.** Even in manual fan mode `[2] = 0`. OGH does
+   manual control by writing the `0x2E` setpoint continuously, not via `FAMC`.
+3. The values are not sequential (48/49/4) — this is not a numbered enum.
 
-### 6.2 Max Fan (0x27) — doğrulandı
+### 6.2 Max Fan (0x27) — confirmed
 
-Arayüzdeki termal anahtar MAX'a alınıp Auto'ya döndürüldü (2026-09-10 18:53–18:54):
+The thermal switch in the UI was set to MAX and back to Auto (2026-09-10
+18:53–18:54):
 
 ```
 OnThermalModeClick - mode=Max
-  SetFanModeAsync(), mode = L2   -> inputData=255,48,0,0     (HPCM degismiyor, tekrar gonderiliyor)
+  SetFanModeAsync(), mode = L2   -> inputData=255,48,0,0     (HPCM unchanged, resent)
   SetMaxFan(), mode = On         -> inputData=1,             <- GM27
 OnThermalModeClick - mode=Auto
   SetFanModeAsync(), mode = L2   -> inputData=255,48,0,0
   SetMaxFan(), mode = Off        -> inputData=0,
 ```
 
-- `FFFS = giriş[0]`; **1 = açık, 0 = kapalı**.
-- Payload **tek bayt** (`DSZI = 1`) — GM27 yalnızca `WBUF[0]`'ı okuyor, uyumlu.
-- MAX modu da `FAMC`'ye dokunmuyor.
-- **Max Fan açıkken OGH periyodik `0x2E` yazımlarını tamamen durduruyor.**
-  18:53:52 ile 18:54:10 arasında tek bir setpoint yazımı yok; ilki Auto'ya
-  dönüldükten sonra 18:54:11'de geliyor. Yani `FFFS=1` iken kontrolü EC
-  devralıyor ve yazılım eğrisi devre dışı kalıyor.
+- `FFFS = in[0]`; **1 = on, 0 = off**.
+- The payload is a **single byte** (`DSZI = 1`) — GM27 only reads `WBUF[0]`, so
+  this is consistent.
+- MAX mode does not touch `FAMC` either.
+- **While Max Fan is on, OGH stops the periodic `0x2E` writes entirely.**
+  Between 18:53:52 and 18:54:10 there is not a single setpoint write; the first
+  one comes at 18:54:11, after returning to Auto. So with `FFFS=1` the EC takes
+  over and the software curve is disabled.
 
-### 6.3 Fan birimi — deneysel doğrulama
+### 6.3 Fan unit — experimental confirmation
 
-Manuel modda kaydırıcı 3800 RPM'e getirildiğinde (arayüzde "System fan (3800 RPM)"),
-log'a düşen 0x2E payload'u:
+With the manual slider set to 3800 RPM (the UI showing "System fan (3800 RPM)"),
+the `0x2E` payload in the log was:
 
 ```
-inputData=38,41,0,0,0,0,...   (128 bayt)
+inputData=38,41,0,0,0,0,...   (128 bytes)
 ```
 
-`38` → 3800 RPM. Kaydırıcı yükseltilince `44,46` (4400/4600 RPM) yazıldı.
-**Birim = yüz RPM, kesin.** İkinci fan birinciden birkaç birim farklı sürülüyor.
+`38` → 3800 RPM. Raising the slider wrote `44,46` (4400/4600 RPM).
+**Unit = hundreds of RPM, definitively.** The second fan is driven a few units
+away from the first.
 
-Aynı sonuç `profiles.json`'daki fan eğrisi tablosundan da geliyor:
-hız listeleri 18/24/30/33, sınırlar `Lower=18` / `Upper=48` → 1800–4800 RPM.
+The same conclusion follows from the fan curve table in `profiles.json`: the
+speed lists are 18/24/30/33 and the bounds are `Lower=18` / `Upper=48` →
+1800–4800 RPM.
 
-### 6.4 Fan eğrisi yazılımda işletiliyor
+### 6.4 The fan curve runs in software
 
-"Auto" termal modda bile OGH arka plan servisi periyodik olarak `0x2E` yazıyor
-(`inputData=21,19,…` / `24,21,…`). Yani HP'nin otomatik fan eğrisi **tamamen
-EC'de değil, Windows uygulamasında** koşuyor.
+Even in "Auto" thermal mode, the OGH background service writes `0x2E`
+periodically (`inputData=21,19,…` / `24,21,…`). So HP's automatic fan curve
+runs **entirely in the Windows application, not in the EC**.
 
-→ Faz 2'de yalnızca sürücü yetmez; sıcaklığa göre setpoint yazan bir
-kullanıcı-alanı daemon'ı da gerekecek. (`alou-S/omen-fan` ve
-`arfelious/omen-fan-control` tam olarak bunu yapıyor.)
+→ In Phase 2 the driver alone will not be enough; a userspace daemon that
+writes setpoints by temperature is also needed. (`alou-S/omen-fan` and
+`arfelious/omen-fan-control` do exactly this.)
 
-### 6.5 Güç limiti / dGPU (kısmi)
+### 6.5 Power limit / dGPU (partial)
 
-Profil değişimlerinde 4 baytlık şu payload'lar da gidiyor:
+Profile changes also send these 4-byte payloads:
 
-| Payload | Profil | Yorum |
+| Payload | Profile | Interpretation |
 |---|---|---|
-| `255,255,255,45` | L2 (Balanced) | GM29 semantiğiyle uyumlu: `[0..2]=0xFF` → atla, `[3]=45` → `DATP = 45*8` |
+| `255,255,255,45` | L2 (Balanced) | Consistent with GM29 semantics: `[0..2]=0xFF` → skip, `[3]=45` → `DATP = 45*8` |
 | `255,255,255,65` | L8 (Unleashed) | `[3]=65` → `DATP = 65*8` |
 
-GM29 bu değeri `NPCF.DATP`'ye yazıp `CMSW(0x2A, …)` + `Notify(NPCF, 0xC0)`
-yapıyor — NPCF = NVIDIA platform denetleyicisi, yani bu büyük olasılıkla
-**dGPU dinamik boost / TGP limiti** (Balanced 45 → Unleashed 65).
-Kesin birim doğrulanmadı.
+GM29 writes that value to `NPCF.DATP`, then does `CMSW(0x2A, …)` and
+`Notify(NPCF, 0xC0)` — NPCF being the NVIDIA platform controller, so this is
+most likely the **dGPU dynamic boost / TGP limit** (Balanced 45 → Unleashed
+65). The exact unit was not confirmed.
 
-`0,1,1,87` ve `0,0,1,87` gibi başka 4 baytlık payload'lar da var; 4 baytlık
-şekli birden çok komut paylaştığı için bunlar komut ID'sine bağlanamadı
-(log komut ID'sini yazmıyor).
+Other 4-byte payloads such as `0,1,1,87` and `0,0,1,87` also appear; since
+several commands share the 4-byte shape and the log does not print the command
+ID, they could not be attributed.
 
-## 7. Açık kalanlar
+## 7. Open items
 
-1. **SSDT'ler eksik.** Windows'un `GetSystemFirmwareTable` API'si aynı imzalı
-   28 SSDT'nin yalnızca ilkini veriyor; kalan 27'si alınamadı. Linux'ta
-   `/sys/firmware/acpi/tables/` hepsini verir. Fan mantığı DSDT'de olduğu için
-   bu şu an engel değil.
-2. **`FAS1`/`FAS2` ve `FMR1`/`FMR2` birimleri** doğrulanmadı (RPM mi, yüz RPM mi).
-3. **EC diff, OGH decompile ve WMI ETW trace adımları yapılmadı** — DSDT fan
-   protokolünün tamamını, OGH log'u da profil bayt değerlerini verdiği için
-   hiçbirine gerek kalmadı. Devir notundaki bu üç adım kapatılabilir.
+1. **The SSDTs are missing.** Windows' `GetSystemFirmwareTable` API returns
+   only the first of 28 SSDTs with the same signature; the other 27 could not be
+   retrieved. On Linux `/sys/firmware/acpi/tables/` provides all of them. Not a
+   blocker right now, since the fan logic lives in the DSDT.
+2. **The units of `FAS1`/`FAS2` and `FMR1`/`FMR2`** were not confirmed (RPM or
+   hundreds of RPM).
+3. **EC diffing, decompiling OGH and a WMI ETW trace were not done** — the DSDT
+   gave the whole fan protocol and the OGH log gave the profile byte values, so
+   none of them were needed. Those three steps from the handover note can be
+   closed.
 
-## Dosyalar
+## Files
 
-| Yol | İçerik |
+| Path | Contents |
 |---|---|
-| `phase1/acpi/*.aml` | Canlı sistemden alınan 17 ACPI tablosu |
-| `phase1/acpi/DSDT.dsl` | Çözülmüş DSDT (830 KB) |
-| `phase1/extract/ec-eram-field.asl` | EC 0x00–0xFE alan haritası |
-| `phase1/extract/ec-h2ra-field.asl` | Belleğe eşlenmiş genişletilmiş EC RAM haritası |
-| `phase1/extract/HWMC.asl` | WMI komut dağıtıcısı (1089 satır) |
-| `phase1/extract/GM-LM-methods.asl` | 55 gaming + 11 aydınlatma metodu |
+| `phase1/acpi/*.aml` | 17 ACPI tables from the live system |
+| `phase1/acpi/DSDT.dsl` | Decompiled DSDT (830 KB) |
+| `phase1/extract/ec-eram-field.asl` | EC 0x00–0xFE field map |
+| `phase1/extract/ec-h2ra-field.asl` | Memory-mapped extended EC RAM map |
+| `phase1/extract/HWMC.asl` | WMI command dispatcher (1089 lines) |
+| `phase1/extract/GM-LM-methods.asl` | 55 gaming + 11 lighting methods |
 | `tools/iasl.exe` | ACPICA 20260408 |

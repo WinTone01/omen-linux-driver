@@ -1,29 +1,29 @@
 [Unit]
-Description=OMEN 16-ap0xxx fan egrisi servisi
+Description=OMEN 16-ap0xxx fan curve service
 Documentation=https://github.com/WinTone01/omen-linux-driver
-# hp-wmi'nin hwmon'u hazir olmadan baslarsak pwm1 bulunamaz.
+# Starting before hp-wmi's hwmon is ready means pwm1 will not be found.
 After=systemd-modules-load.service
 ConditionPathExists=/sys/class/dmi/id/board_name
 
 [Service]
 Type=simple
-# Surec root olarak kosuyor (sysfs'e yazmak icin gerekli) ama EK GRUBU
-# 'omen'. Boylece actigi socket dogrudan root:omen oluyor ve daemon'in
-# chown yapmasi gerekmiyor - CapabilityBoundingSet bos oldugu icin
-# CAP_CHOWN zaten yok. Grup yoksa systemd servisi baslatmaz, o yuzden
-# sysusers dosyasi kurulmali.
+# The process runs as root (needed to write sysfs) but with the supplementary
+# group 'omen'. That way the socket it creates is already root:omen and the
+# daemon does not have to chown it - CapabilityBoundingSet is empty, so
+# CAP_CHOWN is gone anyway. systemd refuses to start the unit if the group is
+# missing, so the sysusers file must be installed.
 Group=omen
 ExecStart=/usr/bin/omend --config /etc/omen/omend.toml
 Restart=on-failure
 RestartSec=5
 
-# Guvenlik kurali 1, ucuncu kapi: daemon SIGKILL ile olduyse Drop
-# calismaz ve fan son setpoint'te kalir. Bu satir her cikis yolunda
-# fani EC'ye geri verir. '-' oneki: bu adim basarisiz olsa bile
-# servisin kapanmasini engellemesin.
+# Safety rule 1, third door: if the daemon was killed with SIGKILL, Drop does
+# not run and the fan stays at its last setpoint. This line returns it to the
+# EC on every exit path. The '-' prefix means a failure here must not block
+# the service from stopping.
 ExecStopPost=-/usr/bin/omend --restore-auto
 
-# Yalnizca sysfs'e yaziyoruz; geri kalan her sey kapali olabilir.
+# We only write to sysfs; everything else can be shut off.
 NoNewPrivileges=yes
 ProtectHome=yes
 ProtectKernelModules=yes
@@ -38,13 +38,13 @@ LockPersonality=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 CapabilityBoundingSet=
-# /sys varsayilan olarak salt okunur baglanir; yazacagimiz iki yolu aciyoruz.
+# /sys is mounted read-only by default; open the two paths we write to.
 ProtectSystem=strict
 ReadWritePaths=/sys/class/hwmon /sys/devices
 
-# Socket buraya acilir; systemd dizini olusturur ve kapanista siler.
-# /run'in tamamini yazilabilir yapmaktan iyi. Dizin 0755, erisimi
-# socket'in kendi izinleri (0660, grup omen) belirliyor.
+# The socket goes here; systemd creates the directory and removes it on stop.
+# Better than making all of /run writable. The directory is 0755 and access is
+# governed by the socket's own permissions (0660, group omen).
 RuntimeDirectory=omend
 RuntimeDirectoryMode=0755
 PrivateNetwork=yes

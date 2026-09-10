@@ -1,4 +1,4 @@
-//! omend socket istemcisi.
+//! omend socket client.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -11,9 +11,9 @@ pub fn send(req: &Request) -> Result<Response> {
     check_socket_path(&path).map_err(anyhow::Error::msg)?;
     let stream = UnixStream::connect(&path).with_context(|| {
         format!(
-            "omend'e baglanilamadi ({}).\n  \
-             Servis calisiyor mu?  systemctl status omend\n  \
-             Izin hatasiysa: sudo omenctl ... (ya da 'omen' grubuna katil)",
+            "could not connect to omend ({}).\n  \
+             Is the service running?  systemctl status omend\n  \
+             If this is a permission error: sudo omenctl ... (or join the 'omen' group)",
             path.display()
         )
     })?;
@@ -27,12 +27,12 @@ pub fn send(req: &Request) -> Result<Response> {
     let mut reader = BufReader::new(stream);
     let mut buf = String::new();
     if reader.read_line(&mut buf)? == 0 {
-        bail!("omend cevap vermeden baglantiyi kapatti");
+        bail!("omend closed the connection without replying");
     }
     Ok(serde_json::from_str(&buf)?)
 }
 
-/// Cevabi yazdirir; hata cevabi surecin cikis kodunu da belirler.
+/// Prints the reply; an error reply also determines the process exit code.
 pub fn report(resp: Response) -> Result<()> {
     match resp {
         Response::Done { message } => {

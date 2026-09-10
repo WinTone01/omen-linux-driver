@@ -1,62 +1,62 @@
-# Faz 2 — Linux Tarafı Planı
+# Phase 2 — The Linux Side
 
-Faz 1 çıktısı: [`phase1/docs/phase1-findings.md`](../../phase1/docs/phase1-findings.md)
+Phase 1 output: [`phase1/docs/phase1-findings.md`](../../phase1/docs/phase1-findings.md)
 
-## 0. Özet karar
+## 0. The decision, in short
 
-**Yeni sürücü yazılmayacak.** Bu makinenin fan/termal protokolü upstream
-`hp-wmi` sürücüsünün desteklediğiyle birebir aynı; eksik olan tek şey
-**kartın DMI tablosunda kayıtlı olmaması**.
+**No new driver will be written.** This machine's fan/thermal protocol is
+identical to what the upstream `hp-wmi` driver already supports; the only thing
+missing is **the board's entry in the DMI table**.
 
-Gereken iş üç parçaya iniyor:
+That reduces the work to three pieces:
 
-1. `hp-wmi`'ye tek satırlık DMI eklemesi (board `8D24`)
-2. Fan eğrisini işletecek bir kullanıcı-alanı daemon'ı
-3. dGPU runtime PM'in ayrı ele alınması (bu projenin kapsamı dışında ama
-   pil ömrünün asıl sebebi orası)
+1. A one-line DMI addition to `hp-wmi` (board `8D24`)
+2. A userspace daemon to run the fan curve
+3. dGPU runtime PM, handled separately (out of scope here, but it is the real
+   reason for the battery life gap)
 
-## 1. Upstream durumu (2026-09-10 itibarıyla, `torvalds/linux` master)
+## 1. Upstream state (as of 2026-09-10, `torvalds/linux` master)
 
-`drivers/platform/x86/hp/hp-wmi.c` içindeki `hp_wmi_feature_boards[]` tablosu
-26 kart içeriyor: 8902, 8A3D, 8A44, 8A4D, 8BAA, 8BA9, 8BAB, 8B2F, 8BB3, 8BBE,
-8BC2, 8BCA, 8BCD, 8BD4, 8BD5, 8C76, 8C77, 8C78, 8C99, 8C9C, 8D26, 8D41, 8D87,
-8D88, 8DD6, 8E35.
+The `hp_wmi_feature_boards[]` table in
+`drivers/platform/x86/hp/hp-wmi.c` holds 26 boards: 8902, 8A3D, 8A44, 8A4D,
+8BAA, 8BA9, 8BAB, 8B2F, 8BB3, 8BBE, 8BC2, 8BCA, 8BCD, 8BD4, 8BD5, 8C76, 8C77,
+8C78, 8C99, 8C9C, 8D26, 8D41, 8D87, 8D88, 8DD6, 8E35.
 
-**`8D24` dosyanın hiçbir yerinde geçmiyor.**
+**`8D24` does not appear anywhere in the file.**
 
-Ama şu iki commit dikkat çekici (her ikisi de 2026-06-09):
+But two commits stand out, both from 2026-06-09:
 
 - *"Add support for Omen 16-ap0xxx (**8D26**)"*
 - *"Add support for Omen 16-ap0xxx (**8E35**)"*
 
-Yani **bizim model ailesi (16-ap0xxx) zaten destekleniyor**; HP bu aile altında
-birden çok kart revizyonu sevk etmiş ve bizimki (8D24) henüz gönderilmemiş.
-Bu, işi "protokol çıkarımı"ndan "tabloya bir satır ekleme"ye indiriyor.
+So **our model family (16-ap0xxx) is already supported**; HP shipped several
+board revisions under it and ours (8D24) has not been submitted yet. That turns
+the job from "protocol extraction" into "add one line to a table".
 
-### Çekirdek sürümü — hangisi yeter?
+### Which kernel version is enough?
 
-Bugünkü durum: mainline **7.3-rc2**, kararlı **7.2.4** (7.2 → 2026-08-16).
+At the time: mainline **7.3-rc2**, stable **7.2.4** (7.2 released 2026-08-16).
 
-`v7.2` etiketindeki dosya doğrudan kontrol edildi:
+The file at tag `v7.2` was checked directly:
 
 | | 7.2 | 7.3 (master) |
 |---|---|---|
-| `HPWMI_VICTUS_S_FAN_SPEED_SET_QUERY = 0x2E` | ✓ var | ✓ var |
-| hwmon PWM fan kontrolü | ✓ var | ✓ var |
-| `8D26` kaydı (kardeş kart) | ✓ var | ✓ var |
-| DMI dizisinin adı | `victus_s_thermal_profile_boards[]` | `hp_wmi_feature_boards[]` |
+| `HPWMI_VICTUS_S_FAN_SPEED_SET_QUERY = 0x2E` | present | present |
+| hwmon PWM fan control | present | present |
+| `8D26` (sibling board) | present | present |
+| Name of the DMI array | `victus_s_thermal_profile_boards[]` | `hp_wmi_feature_boards[]` |
 | `driver_data` | `&omen_v1_legacy_thermal_params` | `&omen_v1_legacy_board_params` |
-| `8D24` | ✗ yok | ✗ yok |
+| `8D24` | absent | absent |
 
-**Sonuç: 7.2 zaten yeterli.** 2026-07-09'daki değişiklik fan desteğini
-*eklemedi*, mevcut kodu board-parametresi yapısına taşıdı (dizi adı ve
-`driver_data` tipi değişti). Yani kararlı 7.2 ile çalışılabilir; yamanın
-biçimi sadece sürüme göre farklı yazılır.
+**So 7.2 is already enough.** The 2026-07-09 change did not *add* fan support;
+it moved existing code into a board-parameter structure (the array name and the
+`driver_data` type changed). Stable 7.2 works; only the shape of the patch
+differs by version.
 
-### Binary üzerinde doğrulandı (2026-09-10)
+### Verified against the binary (2026-09-10)
 
-Hedef dağıtım **CachyOS, kernel 7.2.3-1-cachyos**. `verify.sh` bu çekirdeğin
-`hp-wmi.ko.zst` dosyasındaki DMI string'lerini çıkardı — 76 kart:
+Target distribution: **CachyOS, kernel 7.2.3-1-cachyos**. `verify.sh` extracted
+the DMI strings from that kernel's `hp-wmi.ko.zst` — 76 boards:
 
 ```
 84DA 84DB 84DC 8572 8573 8574 8575 8600..8607 860A 8746..874A 8786..8788
@@ -66,39 +66,39 @@ Hedef dağıtım **CachyOS, kernel 7.2.3-1-cachyos**. `verify.sh` bu çekirdeği
 8C9C 8D26 8D41 8D87 8E35 8E41
 ```
 
-- **`8D24` yok** → yama gerekiyor (beklenen)
-- **`8D26` var** → çekirdek 16-ap0xxx ailesini tanıyor (beklenen)
-- 7.3'te bulunan `8BAA`, `8BA9`, `8BB3`, `8DD6`, `8D88` burada yok — bunlar
-  2026-07/08'de eklendi, 7.2'de olmamaları tutarlı
+- **`8D24` absent** → the patch is needed (as expected)
+- **`8D26` present** → the kernel does know the 16-ap0xxx family (as expected)
+- `8BAA`, `8BA9`, `8BB3`, `8DD6`, `8D88` from 7.3 are missing here — they were
+  added in 2026-07/08, so their absence in 7.2 is consistent
 
-Yani analiz artık yalnızca upstream kaynağa değil, **çalıştırılacak binary'ye**
-dayanıyor. Uygulanacak biçim: **7.2 formu**.
+The analysis therefore rests on **the binary that will actually run**, not just
+on upstream source. Patch shape to apply: **the 7.2 form**.
 
-> Kısıt: `strings` yöntemi modüldeki tüm DMI dizilerini birleştirir; bir kartın
-> hangi dizide olduğunu ayırt etmez. 8D24/8D26 sorusu için yeterli, dizi bilgisi
-> kaynaktan biliniyor.
+> Caveat: the `strings` method merges every DMI array in the module and cannot
+> tell which array a board belongs to. Sufficient for the 8D24/8D26 question;
+> the array membership is known from the source.
 
-## 2. Hangi parametre seti — gerekçelendirilmiş
+## 2. Which parameter set, and why
 
-Upstream'de dört seçenek var. Faz 1'de yakaladığımız değerlerle karşılaştırma:
+Upstream offers four. Compared against what Phase 1 captured:
 
-| | Faz 1 ölçümümüz | `omen_v1_legacy` | `omen_v1` | `omen_v1_no_ec` | `victus_s` |
+| | Phase 1 measurement | `omen_v1_legacy` | `omen_v1` | `omen_v1_no_ec` | `victus_s` |
 |---|---|---|---|---|---|
 | Balanced | **0x30** (48) | 0x30 ✓ | 0x30 ✓ | 0x30 ✓ | 0x00 ✗ |
 | Performance | **0x31** (49) | 0x31 ✓ | 0x31 ✓ | 0x31 ✓ | 0x01 ✗ |
-| EC profil register | **0x95** | **0x95 ✓** | 0x59 ✗ | yok ✗ | yok ✗ |
+| EC profile register | **0x95** | **0x95 ✓** | 0x59 ✗ | none ✗ | none ✗ |
 
 `omen_v1_legacy_thermal_params.ec_tp_offset = HP_OMEN_EC_THERMAL_PROFILE_OFFSET
-= 0x95` — DSDT'de `HPCM`'in adresi de tam olarak 0x95. Diğer üçü tutmuyor:
-`omen_v1` 0x59'u kullanıyor, bizde 0x59 = `TRTM` (bir sıcaklık register'ı),
-profil değil.
+= 0x95` — and `HPCM`'s address in the DSDT is exactly 0x95. The other three do
+not match: `omen_v1` uses 0x59, which on this board is `TRTM`, a temperature
+register, not a profile.
 
-→ **`omen_v1_legacy_board_params`**. Kardeş kart **8D26 de aynısını kullanıyor**,
-bu da seçimi ayrıca destekliyor.
+→ **`omen_v1_legacy_board_params`**. The sibling board **8D26 uses the same
+one**, which supports the choice independently.
 
-### Yama
+### The patch
 
-Kernel 7.2 — `victus_s_thermal_profile_boards[]` dizisine:
+Kernel 7.2 — into `victus_s_thermal_profile_boards[]`:
 
 ```c
 	{
@@ -107,7 +107,7 @@ Kernel 7.2 — `victus_s_thermal_profile_boards[]` dizisine:
 	},
 ```
 
-Kernel 7.3+ — `hp_wmi_feature_boards[]` dizisine:
+Kernel 7.3+ — into `hp_wmi_feature_boards[]`:
 
 ```c
 	{
@@ -116,63 +116,65 @@ Kernel 7.3+ — `hp_wmi_feature_boards[]` dizisine:
 	},
 ```
 
-İkisini de otomatik tespit edip uygulayan script:
+A script that detects and applies either form:
 [`phase2/scripts/add-8d24.sh`](../scripts/add-8d24.sh)
 
-Fan hwmon arayüzü bu eşleşmeye bağlı. 7.2'de kapı şu:
+The fan hwmon interface hangs off this match. In 7.2 the gate is:
 
 ```c
 if (attr == hwmon_pwm_input && !is_victus_s_thermal_profile())
 	return 0;
 ```
 
-Yani eşleşme olmadan `pwm*` dosyaları görünmüyor; fan kontrolü sessizce
-çalışmıyor. Tek satırlık ekleme hem platform profilini hem PWM'i açıyor.
+Without the match the `pwm*` files never appear, so fan control silently does
+not work. The one-line addition opens both the platform profile and the PWM.
 
-## 3. Bilinen boşluk: "Unleashed"
+## 3. A known gap: "Unleashed"
 
-OGH'de dört profil var ama firmware tarafında üç değer: 48 / 49 / 4.
-Upstream `platform_profile` yalnızca performance / balanced / low-power'ı
-eşliyor — yani **Unleashed (HPCM = 4) upstream modelde temsil edilmiyor.**
+OGH offers four profiles but the firmware side has three values: 48 / 49 / 4.
+Upstream `platform_profile` only maps performance / balanced / low-power — so
+**Unleashed (HPCM = 4) is not represented in the upstream model.**
 
-Ayrıca bir tutarsızlık var: upstream'de `HP_OMEN_EC_FLAGS_TURBO = 0x04` sabiti
-*flags* register'ı olan **0x62** ile ilişkili, oysa OGH `4` değerini
-**0x95**'e (HPCM) yazıyor. İkisi aynı şey olmayabilir.
+There is also an inconsistency: upstream's `HP_OMEN_EC_FLAGS_TURBO = 0x04` is
+associated with the *flags* register at **0x62**, whereas OGH writes the value
+`4` to **0x95** (HPCM). They may not be the same thing.
 
-Bu bir engel değil (Unleashed'siz de fan + üç profil çalışır) ama makinede
-`4` yazıp davranışı gözlemleyerek netleştirilmeli. Kapsamı: opsiyonel iyileştirme.
+This is not a blocker (fans plus three profiles work without Unleashed), but it
+should be settled by writing `4` on the machine and observing. Scope: optional
+improvement.
 
-## 4. Doğrulama sırası (Linux'ta, yamadan önce)
+## 4. Verification order (on Linux, before patching)
 
-Sıra önemli — önce yamasız hâli ölçüyoruz ki yamanın ne değiştirdiği belli olsun.
+Order matters — measure the unpatched state first so the patch's effect is
+visible.
 
 ```bash
-# 1. Kart kimliği beklediğimiz gibi mi
-sudo dmidecode -s baseboard-product-name        # 8D24 bekleniyor
+# 1. Is the board what we think it is
+sudo dmidecode -s baseboard-product-name        # expect 8D24
 uname -r
 
-# 2. hp-wmi yüklü mü, ne sunuyor
+# 2. Is hp-wmi loaded, what does it offer
 lsmod | grep hp_wmi
 ls /sys/devices/platform/hp-wmi/
 dmesg | grep -i 'hp-wmi\|hp_wmi'
 
-# 3. Platform profil desteği var mı
+# 3. Platform profile support
 cat /sys/firmware/acpi/platform_profile_choices 2>/dev/null
 cat /sys/firmware/acpi/platform_profile 2>/dev/null
 
-# 4. Fan hwmon geldi mi
+# 4. Did a fan hwmon appear
 for d in /sys/class/hwmon/hwmon*; do echo "$d -> $(cat $d/name)"; done
 sensors
 
-# 5. Çekirdek kaynağında 8D24 ve refactor var mı
+# 5. Does the kernel source have 8D24 and the refactor
 grep -c '8D24' /usr/src/linux*/drivers/platform/x86/hp/hp-wmi.c 2>/dev/null
 grep -c 'hp_wmi_feature_boards' /usr/src/linux*/drivers/platform/x86/hp/hp-wmi.c 2>/dev/null
 ```
 
-Beklenti: platform_profile muhtemelen gelir (legacy yol), **fan hwmon gelmez**
-(board eşleşmesi yok).
+Expectation: platform_profile probably appears (legacy path), **fan hwmon does
+not** (no board match).
 
-### EC'yi doğrudan okuma (çapraz kontrol)
+### Reading the EC directly (cross-check)
 
 ```bash
 sudo modprobe ec_sys write_support=0
@@ -180,145 +182,155 @@ sudo xxd -s 0x95 -l 1 /sys/kernel/debug/ec/ec0/io     # HPCM
 sudo xxd -s 0xB0 -l 4 /sys/kernel/debug/ec/ec0/io     # RPM1..RPM4
 ```
 
-`0x95` değeri OGH'deki profile göre 0x30/0x31/0x04 olmalı — Faz 1 bulgusunu
-Linux tarafında bağımsız olarak doğrular. `0xB0-0xB3` iki fanın takometresi
-(little-endian 16-bit, ham RPM).
+`0x95` should be 0x30/0x31/0x04 according to the profile set in OGH — an
+independent confirmation of the Phase 1 finding from the Linux side.
+`0xB0-0xB3` are the two fan tachometers (little-endian 16-bit, raw RPM).
 
-## 5. Dağıtım seçimi ve yamayı uygulama
+## 5. Distribution choice and applying the patch
 
-### Dağıtım
+### Distribution
 
-Ryzen AI 9 365 (Strix Point) zaten güncel çekirdek istiyor; `hp-wmi` tarafı için
-de en az **7.2** gerekiyor. Bu ikisi aynı yöne işaret ediyor:
+Ryzen AI 9 365 (Strix Point) wants a recent kernel anyway, and the `hp-wmi`
+side needs at least **7.2**. Both point the same way:
 
-- **Fedora** — 7.2 taşıyor, `kernel-devel` paketiyle modül derlemek kolay, DKMS
-  düzgün çalışıyor. Bu iş için en az sürtünmeli seçenek.
-- **Arch / CachyOS** — en yeni çekirdek, 7.3'e de hızlı geçer.
-- **Ubuntu LTS'ten kaçın** — çekirdeği eski, HWE ile bile 7.2'yi bir süre görmez.
+- **Fedora** — ships 7.2, building modules with `kernel-devel` is easy, DKMS
+  works properly. Lowest friction for this job.
+- **Arch / CachyOS** — newest kernel, moves to 7.3 quickly.
+- **Avoid Ubuntu LTS** — its kernel is old; even with HWE it will not see 7.2
+  for a while.
 
-Kurulum sırasında `linux-headers` / `kernel-devel` paketini de kur; yamalı
-modülü derlemek için gerekiyor.
+Install `linux-headers` / `kernel-devel` as well; it is needed to build the
+patched module.
 
-### Uygulama
+### Applying
 
-1. Kurulumdan sonra **önce yamasız** `verify.sh` çalıştır — böylece yamanın ne
-   değiştirdiği ölçülebilir olur.
-2. `add-8d24.sh` ile kaydı ekle, `hp_wmi` modülünü tek başına derle
-   (`make -C /lib/modules/$(uname -r)/build M=$PWD modules`), `insmod` ile dene.
-3. Çalışıyorsa **DKMS**'e al — çekirdek güncellemelerinde hayatta kalır.
-4. `verify.sh`'yi tekrar çalıştır, çıktıları karşılaştır.
+1. Run `verify.sh` **before** patching, so the patch's effect is measurable.
+2. Add the entry with `add-8d24.sh`, build `hp_wmi` on its own
+   (`make -C /lib/modules/$(uname -r)/build M=$PWD modules`), try it with
+   `insmod`.
+3. If it works, move it into **DKMS** so it survives kernel updates.
+4. Run `verify.sh` again and compare.
 
-Çalıştığı doğrulandıktan sonra **upstream'e gönderilmeli** — 8D26 ve 8E35
-kayıtları tam olarak bu şekilde girmiş (ikisi de 2026-06-09), kabul edilme
-olasılığı yüksek. Gönderirken Faz 1'deki ölçümler (EC 0x95, 0x30/0x31)
-gerekçe olarak kullanılabilir.
+Once verified it **should be submitted upstream** — the 8D26 and 8E35 entries
+went in exactly this way (both on 2026-06-09), so acceptance is likely. The
+Phase 1 measurements (EC 0x95, 0x30/0x31) serve as the justification.
 
-## 6. Fan eğrisi daemon'ı
+## 6. The fan curve daemon
 
-Faz 1'de saptandı: HP'nin "Auto" fan eğrisi EC'de değil, **Windows uygulamasında**
-koşuyor (OGH periyodik olarak `0x2E` setpoint yazıyor). Dolayısıyla sürücü tek
-başına "otomatik fan" vermez.
+Established in Phase 1: HP's "Auto" fan curve does not live in the EC, it runs
+**in the Windows application** (OGH periodically writes the `0x2E` setpoint).
+So the driver alone does not give you automatic fan control.
 
-Seçenekler:
-- **`alou-S/omen-fan`** — sıcaklığa göre setpoint yazan servis
-- **`arfelious/omen-fan-control`** — fan eğrisi + watchdog + CLI/GUI, en olgunu
+Options:
+- **`alou-S/omen-fan`** — a service that writes setpoints by temperature
+- **`arfelious/omen-fan-control`** — fan curve, watchdog, CLI/GUI; the most
+  mature of the two
 
-İkisi de EC'ye doğrudan yazıyor; bizim EC harita bilgimizle (`SRP1`=0x34,
-`SRP2`=0x35, tako `0xB0-0xB3`, birim **yüz RPM**, aralık 18–48) yapılandırılabilir.
-Referans eğri olarak OGH'nin kendi tablosu kullanılabilir
-(`profiles.json`'dan alındı, Faz 1 §6.3):
+Both write to the EC directly and can be configured with our EC map (`SRP1` =
+0x34, `SRP2` = 0x35, tach at `0xB0-0xB3`, unit **hundreds of RPM**, range
+18–48). OGH's own table can serve as a reference curve (from `profiles.json`,
+Phase 1 §6.3):
 
 | CPU °C | 50 | 55 | 60 | 65 | 70 | 75 | 80 | 85 | 90 |
 |---|---|---|---|---|---|---|---|---|---|
-| Fan (yüz RPM) | 18 | 18 | 18 | 18 | 24 | 24 | 24 | 24 | 33 |
+| Fan (hundreds of RPM) | 18 | 18 | 18 | 18 | 24 | 24 | 24 | 24 | 33 |
 
-Sınırlar: alt 18 (1800 RPM), üst 48 (4800 RPM).
+Bounds: 18 (1800 RPM) low, 48 (4800 RPM) high.
 
-## 7. Güvenlik ve kurtarma
+> In the end we wrote our own daemon instead — see [Phase 3](../../phase3/README.md).
 
-- Yanlış EC baytı fanı **tamamen durdurabilir**; termal koruma her zaman
-  devreye girmez. Test sırasında ikinci bir terminalde sıcaklık izlensin:
+## 7. Safety and recovery
+
+- A wrong EC byte can **stop the fans entirely**; thermal protection does not
+  always step in. Watch temperatures in a second terminal while testing:
   `watch -n1 sensors`
-- EC durumu **soft reboot'ta kalıcı olabilir**. Kurtarma için tam güç kesme
-  gerekebilir (şarj çıkar + pil devre dışı / uzun güç tuşu).
-- `ec_sys` yazma desteği yalnızca gerektiğinde açılsın
-  (`write_support=1`), iş bitince kaldırılsın.
-- DSDT yaması **gerekmiyor** (Faz 1: `HPIC0004` DSDT'de zaten tanımlı), yani
-  bozuk DSDT ile boot edememe riski yok.
+- EC state **can survive a soft reboot**. Recovery may need a full power cycle
+  (unplug the charger, disable the battery, or hold the power button).
+- Only enable `ec_sys` write support when it is actually needed
+  (`write_support=1`), and remove it afterwards.
+- A DSDT patch is **not required** (Phase 1: `HPIC0004` is already defined in
+  the DSDT), so there is no risk of an unbootable machine from a broken DSDT.
 
-## 8. Kapsam dışı ama pil ömrünün asıl sebebi
+## 8. Out of scope, but the real cause of the battery gap
 
-Devir notundaki tespit doğru: pil farkının büyük kısmı NVIDIA dGPU'nun runtime
-power management'a girmemesinden geliyor (5–10 W). Bu makinede RTX 5060 var.
-Bu proje fan/termal tarafını çözüyor; dGPU tarafı ayrı bir iş
-(`nvidia.NVreg_DynamicPowerManagement`, `udev` kuralları, PCIe runtime PM).
-Karıştırılmamalı.
+The handover note was right: most of the battery difference comes from the
+NVIDIA dGPU never entering runtime power management (5–10 W). This machine has
+an RTX 5060. This project solves the fan/thermal side; the dGPU side is
+separate work (`nvidia.NVreg_DynamicPowerManagement`, `udev` rules, PCIe
+runtime PM). The two should not be conflated.
 
 ---
 
-## 9. Sonuç — makinede doğrulandı (2026-09-11)
+## 9. Result — verified on the machine (2026-09-11)
 
-Ortam: CachyOS, kernel **7.2.4-1-cachyos**, board 8D24, BIOS F.11.
+Environment: CachyOS, kernel **7.2.4-1-cachyos**, board 8D24, BIOS F.11.
 
-Yama uygulandı (`victus_s_thermal_profile_boards[]` + `omen_v1_legacy_thermal_params`),
-modül out-of-tree derlenip DKMS'e alındı. Yamasız/yamalı karşılaştırma:
+The patch was applied (`victus_s_thermal_profile_boards[]` +
+`omen_v1_legacy_thermal_params`), the module built out-of-tree and installed
+via DKMS. Unpatched vs patched:
 
-| Ölçüm | Yamasız | Yamalı |
+| Measurement | Unpatched | Patched |
 |---|---|---|
-| `hwmon/pwm1` | **yok** | **var** |
-| `pwm1_enable` | var (2 = auto) | var (2 = auto) |
-| `fan1_input`, `fan2_input` | var | var |
-| profil işleyicileri | `amd-pmf` | `amd-pmf` + **`hp-wmi`** |
-| EC `0x95` (HPCM) | 0 (hiç yazılmamış) | **48** = Balanced |
-| EC `0x34`/`0x35` (SRP) | 255 (dokunulmamış) | 0 = otomatik |
+| `hwmon/pwm1` | **absent** | **present** |
+| `pwm1_enable` | present (2 = auto) | present (2 = auto) |
+| `fan1_input`, `fan2_input` | present | present |
+| profile handlers | `amd-pmf` | `amd-pmf` + **`hp-wmi`** |
+| EC `0x95` (HPCM) | 0 (never written) | **48** = Balanced |
+| EC `0x34`/`0x35` (SRP) | 255 (untouched) | 0 = automatic |
 
 `dmesg`: `hp_wmi: Registered as platform profile handler`
 
-Fan davranışı (otomatik mod): 45.4°C → 0/0 RPM (fan-stop), 58.6°C → 2400/2100 RPM.
-Yani `SRP = 0` fanı kapatmıyor, kontrolü EC'ye devrediyor.
+Fan behaviour in automatic mode: 45.4 °C → 0/0 RPM (fan-stop), 58.6 °C →
+2400/2100 RPM. So `SRP = 0` does not switch the fans off; it hands control back
+to the EC.
 
-**`HPCM = 48` bu fazın en önemli çıktısı.** Faz 1'de Windows'ta OGH log'undan
-yakalanan değer, Linux'ta bambaşka bir yoldan (platform_profile → WMI 0x1A → EC)
-aynı çıktı. Protokol çıkarımı bağımsız olarak doğrulanmış oldu.
+**`HPCM = 48` is this phase's most important result.** The value captured from
+the OGH log on Windows in Phase 1 came out identical on Linux through a
+completely different path (platform_profile → WMI 0x1A → EC). The protocol
+extraction is now independently confirmed.
 
-### Yol boyunca çıkan, planda olmayan üç şey
+### Three things that came up along the way, none of them in the plan
 
-1. **`platform_profile`'ı yamasız hâlde `amd-pmf` sağlıyordu**, `hp-wmi` değil.
-   Strix Point'in AMD PMF sürücüsü kendi işleyicisini kaydediyor. §4'teki
-   "platform_profile muhtemelen gelir (legacy yol)" beklentisi bu yüzden
-   yanıltıcıydı — profil vardı ama `hp-wmi` sürmüyordu, `HPCM` de bu yüzden 0'dı.
-   6.14+ çok-işleyici API'si sayesinde ikisi çakışmadan yan yana çalışıyor.
+1. **Unpatched, `platform_profile` was provided by `amd-pmf`**, not `hp-wmi`.
+   Strix Point's AMD PMF driver registers its own handler. The §4 expectation
+   ("platform_profile probably appears via the legacy path") was therefore
+   misleading — the profile existed but `hp-wmi` was not driving it, which is
+   also why `HPCM` read 0. Thanks to the multi-handler API in 6.14+, the two
+   coexist without conflict.
 
-2. **CachyOS çekirdeği clang+LLD ile derlenmiş.** Out-of-tree modül `LLVM=1`
-   olmadan derlenmiyor; kbuild clang'a özgü bayrakları gcc'ye geçirip patlıyor.
-   `build-module.sh` artık `.config`'e bakıp kendisi karar veriyor.
+2. **The CachyOS kernel is built with clang+LLD.** An out-of-tree module will
+   not build without `LLVM=1`; kbuild passes clang-specific flags to gcc and it
+   fails on the first file. `build-module.sh` now checks `.config` and decides
+   for itself.
 
-3. **`SRP = 0` "fan kapalı" değil, "otomatiğe dön" demek** — upstream'de
-   `HP_FAN_SPEED_AUTOMATIC 0x00`. Yamasız hâldeki `0xFF` ise "hiç yazılmamış".
+3. **`SRP = 0` does not mean "fans off", it means "revert to automatic"** —
+   upstream's `HP_FAN_SPEED_AUTOMATIC 0x00`. The `0xFF` seen unpatched means
+   "never written".
 
-### `hp-wmi` GUID'i sahiplenmiyor
+### `hp-wmi` does not own the GUID
 
-`wmi_evaluate_method(HPWMI_BIOS_GUID, ...)` ile çağrı yapıyor; WMI cihazına
-`wmi_driver` olarak bağlanmıyor, kendisi bir `platform_driver`. Yani aynı GUID'i
-başka bir modül de kullanabilir. Faz 3'te RGB modülünün `hp-wmi` ile yan yana
-çalışabilmesinin sebebi bu — `blacklist hp_wmi` gerekmiyor.
+It calls through `wmi_evaluate_method(HPWMI_BIOS_GUID, ...)` rather than
+binding to the WMI device as a `wmi_driver`; it is itself a `platform_driver`.
+So another module may use the same GUID. This is why the Phase 3 RGB module can
+run alongside `hp-wmi` — no `blacklist hp_wmi` needed.
 
-### DKMS ve çekirdek yükseltmesi
+### DKMS and kernel upgrades
 
-DKMS paketi `v7.2` etiketinden indirilmiş kaynağı taşıyor. Çekirdek 7.3'e
-geçtiğinde AUTOINSTALL bu kaynağı yeni çekirdeğe karşı derlemeye çalışır ve
-`victus_s_thermal_profile_boards[]` / `omen_v1_legacy_thermal_params` isimleri
-7.3'te değiştiği için **tutmaz**. O gün:
+The DKMS package carries source downloaded from the `v7.2` tag. When the kernel
+moves to 7.3, AUTOINSTALL will try to build that source against the new kernel
+and **fail**, because `victus_s_thermal_profile_boards[]` /
+`omen_v1_legacy_thermal_params` were renamed in 7.3. When that day comes:
 
 ```bash
 sudo dkms remove -m hp-wmi-8d24 -v 7.2 --all
 bash phase2/scripts/build-module.sh --install
 ```
 
-Script etiketi çalışan çekirdekten türetip 7.3 biçimini kendi seçer.
+The script derives the tag from the running kernel and picks the 7.3 form
+itself.
 
-### Kalan iş
+### Remaining work
 
-Yama upstream'e gönderilmeli (`platform-driver-x86` + `linux-hwmon`). Gerekçe
-olarak hem Faz 1 ölçümleri hem buradaki Linux doğrulaması kullanılabilir;
-8D26 ve 8E35 kayıtları daha az dayanakla kabul edilmişti.
+The patch should be submitted upstream (`platform-driver-x86` +
+`linux-hwmon`). Both the Phase 1 measurements and the Linux verification here
+can serve as justification; the 8D26 and 8E35 entries were accepted with less.

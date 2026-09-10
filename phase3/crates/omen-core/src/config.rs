@@ -1,9 +1,9 @@
-//! Yapilandirma. TOML, `/etc/omen/omend.toml`.
+//! Configuration. TOML, `/etc/omen/omend.toml`.
 //!
-//! Dosya yoksa gomulu varsayilanlar kullanilir - kurulum adimi olmadan
-//! calisir. Gecersiz bir dosya ise SESSIZCE varsayilana dusmez: hata dondurur.
-//! Fan egrisi soz konusu oldugunda "kullanicinin ne istedigini sandigimiz"
-//! degil, "kullanicinin ne yazdigi" onemli.
+//! If the file is absent the built-in defaults are used, so the daemon runs
+//! without an install step. If it is present but invalid we do NOT silently
+//! fall back to defaults - we error. Where a fan curve is concerned, what
+//! matters is what the user wrote, not what we guess they meant.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -16,9 +16,8 @@ use crate::fan::{DEFAULT_MAX_RPM, DEFAULT_MIN_RPM};
 
 pub const DEFAULT_PATH: &str = "/etc/omen/omend.toml";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-#[derive(Default)]
 pub struct Config {
     #[serde(default)]
     pub fan: FanConfig,
@@ -29,19 +28,19 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FanConfig {
-    /// Egriyi isletmeyi tamamen kapatir; daemon yalnizca izler.
+    /// Disables running the curve entirely; the daemon only observes.
     #[serde(default = "yes")]
     pub enabled: bool,
 
-    /// Olcum araligi (saniye).
+    /// Sampling interval, in seconds.
     #[serde(default = "default_interval")]
     pub interval_secs: u64,
 
-    /// Setpoint'i dusurmek icin sicakligin ne kadar dusmesi gerektigi.
+    /// How far the temperature must fall before the setpoint is lowered.
     #[serde(default = "default_down_delta")]
     pub hysteresis_c: f32,
 
-    /// Iki setpoint degisikligi arasi asgari sure (saniye).
+    /// Minimum time between two setpoint changes, in seconds.
     #[serde(default = "default_dwell")]
     pub min_dwell_secs: u64,
 
@@ -51,13 +50,13 @@ pub struct FanConfig {
     #[serde(default = "default_max_rpm")]
     pub max_rpm: u32,
 
-    /// Setpoint bu adima yuvarlanir. Varsayilan 100, cunku EC'nin fan
-    /// hedefi yuz RPM biriminde (Faz 1 §3.2) - daha ince yazmak ayni
-    /// EC degerine dusen bos WMI cagrilari uretir.
+    /// Setpoints are rounded to this step. 100 by default, because the EC's
+    /// fan target is in hundreds of RPM (Phase 1 §3.2) - writing finer just
+    /// produces WMI calls that land on the same EC value.
     #[serde(default = "default_step_rpm")]
     pub step_rpm: u32,
 
-    /// `rpm = 0` -> o sicaklikta kontrolu EC'ye birak.
+    /// `rpm = 0` -> hand control to the EC at that temperature.
     #[serde(default)]
     pub curve: Vec<Point>,
 }
@@ -65,12 +64,13 @@ pub struct FanConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SafetyConfig {
-    /// Bu sicakligin ustunde egri birakilir, otomatige dusulur.
-    /// Yazilim hatasi fani dusuk tutuyorsa donanim kendi egrisine donsun.
+    /// Above this temperature the curve is abandoned and control returns to
+    /// the EC. If a software bug is holding the fans low, let the hardware
+    /// take its own curve back.
     #[serde(default = "default_critical")]
     pub critical_c: f32,
 
-    /// Guvenlik modundan cikmak icin sicakligin inmesi gereken fark.
+    /// How far the temperature must fall to leave the safety fallback.
     #[serde(default = "default_recover")]
     pub recover_delta_c: f32,
 }
@@ -97,9 +97,9 @@ fn default_step_rpm() -> u32 {
     crate::curve::EC_STEP_RPM
 }
 fn default_critical() -> f32 {
-    // Strix Point'in Tjmax'i ~100C. Sigorta egrinin en ust noktasinin
-    // (95C) USTUNDE olmali - aksi halde egrinin en agresif bolgesi hic
-    // kullanilamaz, sigorta oncesinde devreye girer. Bkz. validate().
+    // Strix Point's Tjmax is around 100 C. The cutout must sit ABOVE the top
+    // of the curve (95 C), otherwise the curve's most aggressive region can
+    // never be used - the cutout fires first. See validate().
     97.0
 }
 fn default_recover() -> f32 {
@@ -131,7 +131,8 @@ impl Default for SafetyConfig {
 }
 
 impl Config {
-    /// Dosya yoksa varsayilan; varsa ayristirilir, bozuksa HATA doner.
+    /// Defaults when the file is absent; parsed when present; an ERROR when
+    /// it is present and broken.
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
@@ -148,10 +149,10 @@ impl Config {
 
     fn validate(&self) -> Result<()> {
         if self.fan.interval_secs == 0 {
-            return Err(Error::Curve("interval_secs 0 olamaz".into()));
+            return Err(Error::Curve("interval_secs cannot be 0".into()));
         }
         if self.fan.step_rpm == 0 {
-            return Err(Error::Curve("step_rpm 0 olamaz".into()));
+            return Err(Error::Curve("step_rpm cannot be 0".into()));
         }
         if self.fan.min_rpm >= self.fan.max_rpm {
             return Err(Error::Curve(format!(
@@ -160,27 +161,28 @@ impl Config {
             )));
         }
         if self.safety.recover_delta_c <= 0.0 {
-            return Err(Error::Curve("recover_delta_c pozitif olmali".into()));
+            return Err(Error::Curve("recover_delta_c must be positive".into()));
         }
 
-        // Egri gecerliligi Curve::new'de denetleniyor.
+        // Curve validity is checked in Curve::new.
         let curve = self.curve()?;
 
-        // Sigorta egrinin ust ucundan ONCE devreye girerse egrinin en
-        // agresif bolgesi olu koda doner: sicaklik oraya varmadan kontrol
-        // EC'ye gecer. Sessizce kabul etmek yerine soyluyoruz.
+        // If the cutout fires before the top of the curve is reached, the
+        // curve's most aggressive region becomes dead code: control moves to
+        // the EC before the temperature ever gets there. Say so rather than
+        // accepting it silently.
         let top = curve.points().last().map(|p| p.temp_c).unwrap_or_default();
         if self.safety.critical_c <= top {
             return Err(Error::Curve(format!(
-                "critical_c ({:.0}C) egrinin ust ucundan ({top:.0}C) buyuk olmali - \
-                 aksi halde egrinin ustu hic kullanilmaz",
+                "critical_c ({:.0} C) must be above the top of the curve ({top:.0} C), \
+                 otherwise the top of the curve is never used",
                 self.safety.critical_c
             )));
         }
         Ok(())
     }
 
-    /// Yapilandirilmis egri, yoksa gomulu varsayilan.
+    /// The configured curve, or the built-in default when none is given.
     pub fn curve(&self) -> Result<Curve> {
         if self.fan.curve.is_empty() {
             Ok(curve::default_curve())
@@ -203,7 +205,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bos_yapilandirma_varsayilana_duser() {
+    fn empty_config_falls_back_to_defaults() {
         let cfg: Config = toml::from_str("").unwrap();
         assert!(cfg.fan.enabled);
         assert_eq!(cfg.safety.critical_c, 97.0);
@@ -212,15 +214,15 @@ mod tests {
     }
 
     #[test]
-    fn bilinmeyen_anahtar_reddedilir() {
-        // Yazim hatasi sessizce yutulursa kullanici ayarinin uygulandigini
-        // saniyor ama uygulanmiyor - fan egrisinde bu tehlikeli.
+    fn unknown_keys_are_rejected() {
+        // A silently swallowed typo means the user thinks their setting is in
+        // effect when it is not - dangerous for a fan curve.
         let r: std::result::Result<Config, _> = toml::from_str("[fan]\nenabld = true\n");
         assert!(r.is_err());
     }
 
     #[test]
-    fn bozuk_egri_yapilandirmayi_dusurur() {
+    fn a_broken_curve_fails_the_config() {
         let cfg: Config = toml::from_str(
             r#"
             [fan]
@@ -235,16 +237,16 @@ mod tests {
     }
 
     #[test]
-    fn sigorta_egrinin_ustunde_olmali() {
-        // Egri 95C'ye kadar cikiyor ama sigorta 90C'de - egrinin ustu
-        // hic kullanilamaz. Bu bir yapilandirma celiskisi, hata vermeli.
+    fn the_cutout_must_be_above_the_curve() {
+        // The curve runs to 95 C but the cutout is at 90 C, so the top of the
+        // curve can never be used. That is a contradiction, not a preference.
         let cfg: Config = toml::from_str("[safety]\ncritical_c = 90.0\n").unwrap();
         let err = cfg.validate().unwrap_err().to_string();
         assert!(err.contains("critical_c"), "{err}");
     }
 
     #[test]
-    fn ozel_egri_okunur() {
+    fn a_custom_curve_is_read() {
         let cfg: Config = toml::from_str(
             r#"
             [fan]
