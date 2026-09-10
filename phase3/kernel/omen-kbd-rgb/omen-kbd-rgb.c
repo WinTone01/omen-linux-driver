@@ -297,6 +297,15 @@ static int omen_rgb_probe(struct platform_device *pdev)
 		rgb->zone[i].led_cdev.name = rgb->zone_name[i];
 		rgb->zone[i].led_cdev.max_brightness = 255;
 		rgb->zone[i].led_cdev.brightness_set_blocking = omen_zone_set;
+		/*
+		 * LED sinifi kayit silinirken LED'i kapatiyor
+		 * (led_classdev_unregister -> led_set_brightness(LED_OFF)).
+		 * Klavye aydinlatmasi icin yanlis: 'rmmod' ya da kapanis
+		 * klavyeyi karartmamali, kullanicinin ayarladigi renk
+		 * kalmali. Makinede yasandi (2026-09-11): rmmod sonrasi
+		 * LBRT 0 oldu ve klavye tamamen sondu.
+		 */
+		rgb->zone[i].led_cdev.flags |= LED_RETAIN_AT_SHUTDOWN;
 	}
 
 	ret = omen_zone_read_initial(rgb);
@@ -322,7 +331,20 @@ static int omen_rgb_probe(struct platform_device *pdev)
 	rgb->kbd_bl.max_brightness = BRIGHTNESS_MAX;
 	rgb->kbd_bl.brightness_get = omen_bl_get;
 	rgb->kbd_bl.brightness_set_blocking = omen_bl_set;
+	rgb->kbd_bl.flags |= LED_RETAIN_AT_SHUTDOWN;
 	rgb->kbd_bl.brightness = omen_bl_get(&rgb->kbd_bl);
+
+	/*
+	 * Modul yuklendiginde klavye kapaliysa (onceki bir surumun
+	 * rmmod'da sondurmesi, ya da kullanicinin kendi tercihi) renk
+	 * yazmak hicbir sey gostermez ve "calismiyor" gibi gorunur.
+	 * Bunu sessizce duzeltmiyoruz - kullanicinin tercihi olabilir -
+	 * ama gorunur kiliyoruz.
+	 */
+	if (rgb->kbd_bl.brightness == 0)
+		dev_info(&pdev->dev,
+			 "klavye aydinlatmasi kapali; acmak icin: echo %d > /sys/class/leds/%s/brightness\n",
+			 BRIGHTNESS_MAX, rgb->kbd_bl.name);
 
 	ret = devm_led_classdev_register(&pdev->dev, &rgb->kbd_bl);
 	if (ret)
