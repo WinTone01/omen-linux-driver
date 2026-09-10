@@ -131,6 +131,16 @@ else
     info "/sys/kernel/debug/ec icerigi: $(ls /sys/kernel/debug/ec 2>/dev/null | tr '\n' ' ')"
   else
     no "/sys/kernel/debug/ec dizini hic olusmamis"
+    # ec_sys girdileri yalnizca ACPI EC surucusu gercekten baglanmissa olusur.
+    ECMSG=$(dmesg 2>/dev/null | grep -i 'ACPI: EC' | tail -4)
+    if [ -n "$ECMSG" ]; then
+      info "dmesg ACPI EC satirlari:"
+      printf '%s\n' "$ECMSG" | sed 's/^/         /'
+    else
+      info "dmesg'de 'ACPI: EC' satiri yok -> EC surucusu hic baslamamis."
+      info "Masaustlerinde normal (PNP0C09 ad alaninda durur ama islevsel EC yoktur)."
+      info "Bir laptopta bu cikarsa asil sorun oradadir."
+    fi
   fi
   EC=/sys/kernel/debug/ec/ec0/io
   if [ -r "$EC" ]; then
