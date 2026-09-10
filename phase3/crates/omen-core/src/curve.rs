@@ -8,7 +8,14 @@
 //!    dayatsaydik makineyi fabrika ayarindan DAHA GURULTULU yapardik.
 //!    O yuzden alt bolgede kontrolu geri veriyoruz.
 //!
-//! 2. **Yukari cikmak serbest, asagi inmek gecikmeli.** Sogutmayi artirmak
+//! 2. **Setpoint donanimin cozunurlugune yuvarlanir.** Faz 1 §3.2: EC'nin
+//!    fan hedefi (`SRP1`/`SRP2`) **yuz RPM** biriminde, yani gercek adim
+//!    100 RPM. `pwm1` 0-255 oldugu icin ondan daha ince gorunuyor ama
+//!    cekirdek `pwm_to_rpm` ile yuz RPM'e indiriyor: pwm 99 ve 100 ayni
+//!    EC degerine (18) dusuyor. Yuvarlamazsak 0.1C'lik degisimler icin
+//!    hicbir seyi degistirmeyen WMI cagrilari yapariz.
+//!
+//! 3. **Yukari cikmak serbest, asagi inmek gecikmeli.** Sogutmayi artirmak
 //!    her zaman guvenli taraftir, aninda uygulanir. Azaltmak icin hem
 //!    sicakligin histerezis kadar dusmesi hem asgari bekleme suresinin
 //!    dolmasi gerekir - yoksa fan esik civarinda surekli inip cikar.
@@ -34,6 +41,9 @@ pub type Target = Option<u32>;
 fn cooling_rank(t: Target) -> u32 {
     t.unwrap_or(0)
 }
+
+/// EC'nin fan hedefi yuz RPM biriminde (Faz 1 §3.2), yani gercek adim bu.
+pub const EC_STEP_RPM: u32 = 100;
 
 #[derive(Debug, Clone)]
 pub struct Curve {
@@ -120,17 +130,25 @@ pub struct Governor {
     curve: Curve,
     down_delta_c: f32,
     min_dwell: Duration,
+    step_rpm: u32,
     applied: Option<Applied>,
 }
 
 impl Governor {
-    pub fn new(curve: Curve, down_delta_c: f32, min_dwell: Duration) -> Self {
+    pub fn new(curve: Curve, down_delta_c: f32, min_dwell: Duration, step_rpm: u32) -> Self {
         Self {
             curve,
             down_delta_c: down_delta_c.max(0.0),
             min_dwell,
+            step_rpm: step_rpm.max(1),
             applied: None,
         }
+    }
+
+    /// Hedefi donanim adimina yuvarlar. YUKARI yuvarlar - yuvarlama hatasi
+    /// her zaman daha cok sogutma yonunde olsun.
+    fn quantize(&self, target: Target) -> Target {
+        target.map(|rpm| rpm.div_ceil(self.step_rpm) * self.step_rpm)
     }
 
     pub fn curve(&self) -> &Curve {
@@ -146,7 +164,7 @@ impl Governor {
     /// `None` -> degisiklik yok (mevcut setpoint korunur).
     /// `Some(target)` -> uygula.
     pub fn decide(&mut self, temp_c: f32, now: Instant) -> Option<Target> {
-        let want = self.curve.target(temp_c);
+        let want = self.quantize(self.curve.target(temp_c));
 
         let Some(applied) = self.applied else {
             return Some(self.commit(temp_c, want, now));
@@ -278,7 +296,7 @@ mod tests {
 
     #[test]
     fn isinma_aninda_uygulanir() {
-        let mut g = Governor::new(c(), 5.0, Duration::from_secs(30));
+        let mut g = Governor::new(c(), 5.0, Duration::from_secs(30), EC_STEP_RPM);
         let t0 = Instant::now();
         assert_eq!(g.decide(50.0, t0), Some(None));
         // Hemen isindi: beklemeden yukari cik.
@@ -287,7 +305,7 @@ mod tests {
 
     #[test]
     fn sogumada_histerezis_ve_bekleme_aranir() {
-        let mut g = Governor::new(c(), 5.0, Duration::from_secs(30));
+        let mut g = Governor::new(c(), 5.0, Duration::from_secs(30), EC_STEP_RPM);
         let t0 = Instant::now();
         g.decide(80.0, t0);
 
@@ -296,17 +314,46 @@ mod tests {
         // 6C dustu ama sure dolmadi -> yine yok.
         assert_eq!(g.decide(74.0, t0 + Duration::from_secs(5)), None);
         // Ikisi de saglandi -> in.
+        // 74C ham hedefi 2040; 100'e yukari yuvarlanip 2100 oluyor.
         assert_eq!(
             g.decide(74.0, t0 + Duration::from_secs(60)),
-            Some(Some(2040))
+            Some(Some(2100))
         );
+    }
+
+    #[test]
+    fn kucuk_isinma_yazma_uretmez() {
+        // Yavas isinmada her 0.1C icin yeni setpoint yazilmamali: EC'nin
+        // adimi 100 RPM, arasindaki degerler ayni yere dusuyor.
+        let mut g = Governor::new(c(), 5.0, Duration::from_secs(30), EC_STEP_RPM);
+        let t0 = Instant::now();
+        g.decide(70.0, t0);
+
+        let mut writes = 0;
+        // 70.0 -> 74.9 arasi 50 olcum; ham hedef 1800 -> 2094.
+        for i in 0..50 {
+            let temp = 70.0 + i as f32 * 0.1;
+            if g.decide(temp, t0 + Duration::from_secs(i * 2)).is_some() {
+                writes += 1;
+            }
+        }
+        // 1800 -> 1900 -> 2000 -> 2100: en fazla 3 gercek degisiklik.
+        assert!(writes <= 3, "{writes} yazma uretti, beklenen <= 3");
+    }
+
+    #[test]
+    fn yuvarlama_yukari() {
+        let g = Governor::new(c(), 5.0, Duration::from_secs(30), EC_STEP_RPM);
+        assert_eq!(g.quantize(Some(1801)), Some(1900));
+        assert_eq!(g.quantize(Some(1800)), Some(1800));
+        assert_eq!(g.quantize(None), None);
     }
 
     #[test]
     fn yalpalama_yok() {
         // Esik civarinda gidip gelen sicaklik setpoint'i her turda
         // degistirmemeli.
-        let mut g = Governor::new(c(), 5.0, Duration::from_secs(30));
+        let mut g = Governor::new(c(), 5.0, Duration::from_secs(30), EC_STEP_RPM);
         let t0 = Instant::now();
         g.decide(70.0, t0);
 

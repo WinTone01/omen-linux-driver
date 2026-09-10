@@ -51,6 +51,12 @@ pub struct FanConfig {
     #[serde(default = "default_max_rpm")]
     pub max_rpm: u32,
 
+    /// Setpoint bu adima yuvarlanir. Varsayilan 100, cunku EC'nin fan
+    /// hedefi yuz RPM biriminde (Faz 1 §3.2) - daha ince yazmak ayni
+    /// EC degerine dusen bos WMI cagrilari uretir.
+    #[serde(default = "default_step_rpm")]
+    pub step_rpm: u32,
+
     /// `rpm = 0` -> o sicaklikta kontrolu EC'ye birak.
     #[serde(default)]
     pub curve: Vec<Point>,
@@ -87,6 +93,9 @@ fn default_min_rpm() -> u32 {
 fn default_max_rpm() -> u32 {
     DEFAULT_MAX_RPM
 }
+fn default_step_rpm() -> u32 {
+    crate::curve::EC_STEP_RPM
+}
 fn default_critical() -> f32 {
     // Strix Point'in Tjmax'i ~100C. Sigorta egrinin en ust noktasinin
     // (95C) USTUNDE olmali - aksi halde egrinin en agresif bolgesi hic
@@ -106,6 +115,7 @@ impl Default for FanConfig {
             min_dwell_secs: default_dwell(),
             min_rpm: default_min_rpm(),
             max_rpm: default_max_rpm(),
+            step_rpm: default_step_rpm(),
             curve: Vec::new(),
         }
     }
@@ -139,6 +149,9 @@ impl Config {
     fn validate(&self) -> Result<()> {
         if self.fan.interval_secs == 0 {
             return Err(Error::Curve("interval_secs 0 olamaz".into()));
+        }
+        if self.fan.step_rpm == 0 {
+            return Err(Error::Curve("step_rpm 0 olamaz".into()));
         }
         if self.fan.min_rpm >= self.fan.max_rpm {
             return Err(Error::Curve(format!(

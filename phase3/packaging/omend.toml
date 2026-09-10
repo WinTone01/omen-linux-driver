@@ -22,6 +22,11 @@ min_dwell_secs = 20
 min_rpm = 1800
 max_rpm = 4800
 
+# Setpoint bu adima yuvarlanir. EC'nin fan hedefi yuz RPM biriminde
+# (Faz 1 §3.2), yani 100'den ince yazmak ayni EC degerine dusen bos
+# WMI cagrilari uretir. Buyutmek yazma sayisini daha da azaltir.
+step_rpm = 100
+
 # Fan egrisi. rpm = 0 -> o sicaklikta kontrolu EC'ye birak.
 #
 # Alt bolgenin otomatik olmasi bilincli: EC rolantide fanlari tamamen

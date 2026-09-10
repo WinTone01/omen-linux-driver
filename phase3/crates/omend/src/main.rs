@@ -168,7 +168,12 @@ fn run(args: Args) -> Result<()> {
         warn!("--dry-run: hicbir sey yazilmayacak");
     }
 
-    let mut governor = Governor::new(curve, cfg.fan.hysteresis_c, cfg.min_dwell());
+    let mut governor = Governor::new(
+        curve,
+        cfg.fan.hysteresis_c,
+        cfg.min_dwell(),
+        cfg.fan.step_rpm,
+    );
 
     let mut keeper = AutoRestore::new(fan.clone());
     if args.dry_run || !cfg.fan.enabled {
