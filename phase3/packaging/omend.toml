@@ -27,18 +27,42 @@ max_rpm = 4800
 # land on the same EC value. Raising it reduces writes further.
 step_rpm = 100
 
-# The fan curve. rpm = 0 -> hand control to the EC at that temperature.
+# How values between two points are worked out.
 #
-# Leaving the lower region automatic is deliberate: the EC stops the fans
-# completely at idle (measured in Phase 2: 0 RPM at 45 C). Taking manual
-# control there and forcing 1800 RPM would make the machine louder than it is
-# from the factory.
+#   step   - hold each point's value until the next one (default)
+#   linear - ramp between the points
+#
+# step, because OMEN Gaming Hub's own curve is a lookup table at 5 C
+# granularity, not a continuous curve (Phase 1 §6.3). At 75 C its table says
+# 2400 RPM; interpolating between the 70 and 80 entries would say 2100 and be
+# quieter than stock.
+interpolation = "step"
+
+# The fan curve. rpm = 0 -> leave the fans alone at that temperature.
+#
+# This is OMEN Gaming Hub's own table, reproduced point for point from the
+# profiles.json it ships (Phase 1 §6.3):
+#
+#   CPU C  | 50 | 55 | 60 | 65 | 70 | 75 | 80 | 85 | 90
+#   x100   | 18 | 18 | 18 | 18 | 24 | 24 | 24 | 24 | 33
+#
+# The duplicate values are deliberate - this is the table as measured, not a
+# simplification of it. Two entries are ours because HP's table does not cover
+# them: below 50 C the fans are left alone (silent at idle, which is what the
+# machine does from the factory), and above 90 C the 3300 RPM entry is held
+# (HP lets the CPU throttle rather than spinning faster; the critical cutout
+# catches a real runaway).
 curve = [
-  { temp_c = 60.0, rpm = 0    },
-  { temp_c = 70.0, rpm = 1800 },
+  { temp_c = 45.0, rpm = 0    },
+  { temp_c = 50.0, rpm = 1800 },
+  { temp_c = 55.0, rpm = 1800 },
+  { temp_c = 60.0, rpm = 1800 },
+  { temp_c = 65.0, rpm = 1800 },
+  { temp_c = 70.0, rpm = 2400 },
+  { temp_c = 75.0, rpm = 2400 },
   { temp_c = 80.0, rpm = 2400 },
+  { temp_c = 85.0, rpm = 2400 },
   { temp_c = 90.0, rpm = 3300 },
-  { temp_c = 95.0, rpm = 4800 },
 ]
 
 [safety]

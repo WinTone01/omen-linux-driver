@@ -19,6 +19,29 @@ the lower part of the curve to the EC and only takes over when it wants
 **more** than the EC is providing. Idle silence is preserved rather than
 traded away.
 
+## The fan curve is HP's own
+
+The default curve is not invented, it is OMEN Gaming Hub's, reproduced point
+for point from the `profiles.json` it ships (Phase 1 §6.3):
+
+| CPU °C | 50 | 55 | 60 | 65 | 70 | 75 | 80 | 85 | 90 |
+|---|---|---|---|---|---|---|---|---|---|
+| hundreds of RPM | 18 | 18 | 18 | 18 | 24 | 24 | 24 | 24 | 33 |
+
+It is a **lookup table at 5 °C granularity, not a continuous curve**, so it is
+read that way: each entry is held until the next one. That detail matters. At
+75 °C the table says 2400 RPM; interpolating between the 70 and 80 entries
+would say 2100 — quieter than stock, which is the opposite of matching it. Set
+`interpolation = "linear"` if you would rather have the ramp.
+
+Two entries are ours, because HP's table does not cover them:
+
+- **Below 50 °C** the fans are left alone. Silent at idle, which is what the
+  machine does from the factory (measured in Phase 2: 0 RPM at 45 °C).
+- **Above 90 °C** the 3300 RPM entry is held. HP lets the CPU throttle rather
+  than spinning faster; the critical cutout at 97 °C is what catches a genuine
+  runaway.
+
 ## Install
 
 ```bash

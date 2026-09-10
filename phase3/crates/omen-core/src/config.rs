@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::curve::{self, Curve, Point};
+use crate::curve::{self, Curve, Interpolation, Point};
 use crate::error::{Error, Result};
 use crate::fan::{DEFAULT_MAX_RPM, DEFAULT_MIN_RPM};
 
@@ -55,6 +55,14 @@ pub struct FanConfig {
     /// produces WMI calls that land on the same EC value.
     #[serde(default = "default_step_rpm")]
     pub step_rpm: u32,
+
+    /// How values between two curve points are worked out.
+    ///
+    /// `step` by default, because OMEN Gaming Hub's curve is a lookup table
+    /// at 5 C granularity rather than a continuous curve (Phase 1 §6.3).
+    /// `linear` ramps between the points instead.
+    #[serde(default)]
+    pub interpolation: Interpolation,
 
     /// `rpm = 0` -> hand control to the EC at that temperature.
     #[serde(default)]
@@ -143,6 +151,7 @@ impl Default for FanConfig {
             min_rpm: default_min_rpm(),
             max_rpm: default_max_rpm(),
             step_rpm: default_step_rpm(),
+            interpolation: Interpolation::default(),
             curve: Vec::new(),
         }
     }
@@ -222,7 +231,7 @@ impl Config {
         if self.fan.curve.is_empty() {
             Ok(curve::default_curve())
         } else {
-            Curve::new(self.fan.curve.clone())
+            Curve::with_interpolation(self.fan.curve.clone(), self.fan.interpolation)
         }
     }
 
@@ -249,7 +258,7 @@ mod tests {
         assert!(cfg.fan.enabled);
         assert_eq!(cfg.safety.critical_c, 97.0);
         cfg.validate().unwrap();
-        assert_eq!(cfg.curve().unwrap().points().len(), 5);
+        assert_eq!(cfg.curve().unwrap().points().len(), 10);
     }
 
     #[test]
