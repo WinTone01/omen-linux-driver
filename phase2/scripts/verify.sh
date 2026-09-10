@@ -113,10 +113,24 @@ else
       && ok "debugfs mount edildi" || no "debugfs mount edilemedi"
   fi
   # (c) ec_sys modulu - CONFIG_ACPI_EC_DEBUGFS kapali olabilir
-  if ! modprobe ec_sys write_support=0 2>/dev/null; then
-    no "ec_sys yuklenemedi (CONFIG_ACPI_EC_DEBUGFS bu cekirdekte kapali olabilir)"
-    info "kontrol: zgrep ACPI_EC_DEBUGFS /proc/config.gz"
-    info "alternatif: hp-wmi calisirsa 0x2D komutu fan hizini zaten verir"
+  MPERR=$(modprobe ec_sys write_support=0 2>&1) && MPOK=1 || MPOK=0
+  if [ "$MPOK" = "1" ]; then
+    lsmod | grep -q '^ec_sys' && ok "ec_sys yuklu" \
+                              || info "modprobe hata vermedi ama ec_sys lsmod'da yok (builtin olabilir)"
+  else
+    no "ec_sys yuklenemedi: $MPERR"
+  fi
+  # CONFIG durumunu dogrudan soyle - tahmine gerek kalmasin
+  if [ -r /proc/config.gz ]; then
+    info "config: $(zgrep -E 'CONFIG_ACPI_EC_DEBUGFS' /proc/config.gz 2>/dev/null || echo 'ACPI_EC_DEBUGFS bulunamadi')"
+  elif [ -r "/boot/config-$(uname -r)" ]; then
+    info "config: $(grep -E 'CONFIG_ACPI_EC_DEBUGFS' /boot/config-$(uname -r) 2>/dev/null || echo 'ACPI_EC_DEBUGFS bulunamadi')"
+  fi
+  # debugfs altinda gercekte ne var
+  if [ -d /sys/kernel/debug/ec ]; then
+    info "/sys/kernel/debug/ec icerigi: $(ls /sys/kernel/debug/ec 2>/dev/null | tr '\n' ' ')"
+  else
+    no "/sys/kernel/debug/ec dizini hic olusmamis"
   fi
   EC=/sys/kernel/debug/ec/ec0/io
   if [ -r "$EC" ]; then
