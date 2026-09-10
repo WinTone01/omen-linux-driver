@@ -15,7 +15,19 @@ info "board_name   : $BOARD    (beklenen: 8D24)"
 info "product_name : $(cat /sys/class/dmi/id/product_name 2>/dev/null || echo '?')"
 info "bios_version : $(cat /sys/class/dmi/id/bios_version 2>/dev/null || echo '?')"
 info "kernel       : $(uname -r)"
-[ "$BOARD" = "8D24" ] && ok "Kart bekledigimiz gibi" || no "Kart 8D24 degil - Faz 1 bulgulari bu makineye ait olmayabilir"
+if [ "$BOARD" = "8D24" ]; then
+  ok "Hedef makinedesin"
+else
+  no "Kart 8D24 degil"
+  cat <<'BANNER'
+
+       ####################################################################
+       #  Bu HEDEF MAKINE DEGIL. Asagidaki adimlarin cogu anlamsiz cikacak;
+       #  bu bir hata degil. Faz 2 yalnizca OMEN 16-ap0xxx (8D24) uzerinde
+       #  test edilebilir. Script'in kendisi yine de bastan sona kosacak.
+       ####################################################################
+BANNER
+fi
 
 say "2. hp-wmi modulu"
 if lsmod | grep -q '^hp_wmi'; then ok "hp_wmi yuklu"; else no "hp_wmi yuklu degil"; fi
@@ -54,28 +66,58 @@ for d in /sys/class/hwmon/hwmon*; do
 done
 [ "$FOUND" = "1" ] || no "hp-wmi hwmon YOK - beklenen durum (8D24 DMI tablosunda kayitli degil)"
 
-say "5. Cekirdek kaynaginda hp-wmi destegi"
-SRC=""
-for c in /usr/src/linux-headers-$(uname -r)/drivers/platform/x86/hp/hp-wmi.c \
-         /usr/src/linux-$(uname -r)/drivers/platform/x86/hp/hp-wmi.c \
-         /lib/modules/$(uname -r)/build/drivers/platform/x86/hp/hp-wmi.c; do
-  [ -f "$c" ] && SRC="$c" && break
-done
-if [ -n "$SRC" ]; then
-  ok "kaynak: $SRC"
-  grep -q 'hp_wmi_feature_boards'        "$SRC" && info "dizi: hp_wmi_feature_boards (7.3+ refactor sonrasi)"
-  grep -q 'victus_s_thermal_profile_boards' "$SRC" && info "dizi: victus_s_thermal_profile_boards (7.2 bicimi)"
-  grep -q '"8D24"' "$SRC" && ok "8D24 zaten kayitli - yama gerekmeyebilir" || no "8D24 kayitli degil - yama gerekiyor"
+say "5. Derlenmis hp_wmi modulunde kart kayitlari"
+# Arch/CachyOS cekirdek KAYNAGINI paketlemez, sadece header verir. O yuzden
+# kaynak yerine derlenmis .ko icindeki DMI string'lerine bakiyoruz - bu her
+# dagitimda calisir ve sorulan seye dogrudan cevap verir.
+KO=$(find /lib/modules/$(uname -r) -name 'hp-wmi.ko*' 2>/dev/null | head -1)
+if [ -z "$KO" ]; then
+  no "hp-wmi.ko bulunamadi - bu cekirdekte hp-wmi derlenmemis olabilir"
 else
-  no "cekirdek kaynagi bulunamadi (linux-headers / kernel-devel kurulu mu?)"
-  info "Bilgi icin: dizi adi 7.2'de victus_s_thermal_profile_boards, 7.3+'ta hp_wmi_feature_boards"
+  ok "modul: $KO"
+  # .ko .zst/.xz/.gz sikistirilmis olabilir; uygun sekilde ac
+  case "$KO" in
+    *.zst) DUMP="zstd -dcq  $KO" ;;
+    *.xz)  DUMP="xz   -dc   $KO" ;;
+    *.gz)  DUMP="gzip -dc   $KO" ;;
+    *)     DUMP="cat        $KO" ;;
+  esac
+  BOARDS=$($DUMP 2>/dev/null | strings | grep -xE '8[0-9A-F]{3}' | sort -u | tr '\n' ' ')
+  if [ -z "$BOARDS" ]; then
+    no "modulden kart listesi cikarilamadi (strings/zstd kurulu mu?)"
+  else
+    info "kayitli kartlar: $BOARDS"
+    echo "$BOARDS" | grep -qw 8D24 && ok "8D24 KAYITLI - yama gerekmiyor" \
+                                   || no "8D24 kayitli degil - yama gerekiyor"
+    echo "$BOARDS" | grep -qw 8D26 && ok "8D26 (kardes kart) kayitli - cekirdek 16-ap0xxx ailesini taniyor" \
+                                   || no "8D26 de yok - cekirdek bekledigimizden eski"
+  fi
 fi
+KV=$(uname -r | cut -d. -f1,2)
+info "cekirdek $KV -> yama bicimi: $(printf '%s' "$KV" | awk -F. '($1>7)||($1==7&&$2>=3){print "hp_wmi_feature_boards[] + omen_v1_legacy_board_params (7.3+)"; next}{print "victus_s_thermal_profile_boards[] + omen_v1_legacy_thermal_params (7.2)"}')"
 
 say "6. EC dogrudan okuma (Faz 1 caprazlamasi)"
 if [ "$(id -u)" != "0" ]; then
   no "root degilsin, EC okumasi atlandi"
 else
-  modprobe ec_sys write_support=0 2>/dev/null
+  # (a) ACPI EC cihazi var mi
+  if ls /sys/bus/acpi/devices/ 2>/dev/null | grep -q '^PNP0C09'; then
+    ok "ACPI EC cihazi var: $(ls /sys/bus/acpi/devices/ | grep '^PNP0C09' | tr '\n' ' ')"
+  else
+    no "ACPI EC cihazi (PNP0C09) yok - masaustu makinelerde normal"
+  fi
+  # (b) debugfs mount edili mi
+  if ! mountpoint -q /sys/kernel/debug 2>/dev/null; then
+    info "debugfs mount edili degil, mount ediliyor"
+    mount -t debugfs none /sys/kernel/debug 2>/dev/null \
+      && ok "debugfs mount edildi" || no "debugfs mount edilemedi"
+  fi
+  # (c) ec_sys modulu - CONFIG_ACPI_EC_DEBUGFS kapali olabilir
+  if ! modprobe ec_sys write_support=0 2>/dev/null; then
+    no "ec_sys yuklenemedi (CONFIG_ACPI_EC_DEBUGFS bu cekirdekte kapali olabilir)"
+    info "kontrol: zgrep ACPI_EC_DEBUGFS /proc/config.gz"
+    info "alternatif: hp-wmi calisirsa 0x2D komutu fan hizini zaten verir"
+  fi
   EC=/sys/kernel/debug/ec/ec0/io
   if [ -r "$EC" ]; then
     ok "EC erisilebilir: $EC"
