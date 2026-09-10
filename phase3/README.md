@@ -112,7 +112,7 @@ docs/                faz plani, RGB protokolu
 
 ```bash
 cd kernel/omen-kbd-rgb && make
-sudo modprobe led-class-multicolor wmi     # insmod bagimlilik cozmez
+sudo modprobe -a led-class-multicolor wmi  # insmod bagimlilik cozmez
 sudo insmod omen-kbd-rgb.ko
 
 # 4 bolge + genel parlaklik
