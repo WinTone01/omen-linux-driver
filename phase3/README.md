@@ -100,11 +100,34 @@ yoksa bir sey kanitlamazdi.
 ## Yapi
 
 ```
-crates/omen-core/    sysfs, fan, sicaklik, egri, yapilandirma  (17 test)
-crates/omend/        daemon: egri motoru + guvenlik durum makinesi
-crates/omenctl/      salt okunur durum araci
-packaging/           systemd unit, ornek yapilandirma
+crates/omen-core/    sysfs, fan, sicaklik, egri, yapilandirma, IPC  (19 test)
+crates/omend/        daemon: egri motoru + guvenlik durum makinesi + socket
+crates/omenctl/      durum araci ve daemon istemcisi
+kernel/omen-kbd-rgb/ 4 bolge RGB klavye modulu (leds-multicolor)
+packaging/           systemd unit, ornek yapilandirma, sysusers
+docs/                faz plani, RGB protokolu
 ```
+
+### RGB modulu
+
+```bash
+cd kernel/omen-kbd-rgb && make
+sudo modprobe led-class-multicolor wmi     # insmod bagimlilik cozmez
+sudo insmod omen-kbd-rgb.ko
+
+# 4 bolge + genel parlaklik
+ls /sys/class/leds/ | grep omen
+echo 255       | sudo tee /sys/class/leds/omen:rgb:kbd_backlight_zone0/brightness
+echo "255 0 0" | sudo tee /sys/class/leds/omen:rgb:kbd_backlight_zone0/multi_intensity
+echo 60        | sudo tee /sys/class/leds/omen::kbd_backlight/brightness
+```
+
+Yalnizca aydinlatma komut grubunu (`0x020009`) kullanir, `hp-wmi` ile yan
+yana calisir — `blacklist hp_wmi` gerekmez. Protokol:
+[`docs/rgb-protocol.md`](docs/rgb-protocol.md)
+
+Genel parlaklik LED'inin adi bilerek `omen::kbd_backlight`: masaustu
+ortamlari ve `upower` klavye isigini `*::kbd_backlight` kalibiyla ariyor.
 
 Kendi sysfs agacimizi icat etmiyoruz: fan `hwmon`, profil `platform_profile`.
 Boylece `sensors`, KDE guc ayarlari gibi mevcut araclar bu projeden habersiz
@@ -116,5 +139,5 @@ calismaya devam eder.
 |---|---|
 | M1 fan egrisi + durum araci | **calisiyor**, servis olarak dogrulandi |
 | M1b `omenctl` kontrol komutlari (unix socket) | **calisiyor** |
-| M2 `omen-kbd-rgb` cekirdek modulu | planlandi |
+| M2 `omen-kbd-rgb` cekirdek modulu | **derlendi**, donanim testi bekliyor |
 | M3 Tauri arayuzu | planlandi |

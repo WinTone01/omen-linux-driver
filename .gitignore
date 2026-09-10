@@ -12,3 +12,12 @@ phase2/build/
 
 # Rust derleme ciktisi
 phase3/target/
+
+# Cekirdek modulu derleme ciktisi
+phase3/kernel/**/*.o
+phase3/kernel/**/*.ko
+phase3/kernel/**/*.mod*
+phase3/kernel/**/.*.cmd
+phase3/kernel/**/Module.symvers
+phase3/kernel/**/modules.order
+phase3/kernel/**/.tmp_versions/
