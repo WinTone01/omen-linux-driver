@@ -1,0 +1,8 @@
+# Ucuncu taraf binary - ACPICA surumlerinden indirilir
+tools/*.exe
+
+# add-8d24.sh yedekleri
+*.orig
+
+# verify.sh ciktilari
+verify-*.txt
