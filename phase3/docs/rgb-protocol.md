@@ -119,7 +119,26 @@ Ayrıca oradan öğrenilen bir davranış: yazma **oku-değiştir-yaz** olmalı.
 değiştirilip `0x03` ile geri yazılıyor. 12 baytın dışındaki alanın ne
 taşıdığı bilinmiyor; korumak doğrusu.
 
-## 5. `hp-wmi` ile çakışma yok
+## 5. Açma/kapama firmware'in — makinede ölçüldü (2026-09-11)
+
+`LRGB`/`LBRT` yazmak aydınlatmayı **açmıyor.** Klavye kapalıyken renkler
+register'lara yazılıyor, geri okuma da doğru değeri veriyor, ama ışık yanmıyor.
+`Fn+F4`'e basılınca ışıklar bizim yazdığımız renklerle geliyor.
+
+Aday register elendi: `KBBL` (EC `0x42` bit 4) ışıklar **açıkken de** sıfır
+okundu (`0x42 = 0x04`), yani aydınlatma durumunu takip etmiyor.
+
+WMI aydınlatma grubunda da açma/kapama yok — `LM06`–`LM0B` boş saplama,
+`Return (Package { Zero, Zero })`. `LCMC`'den önceki 5 bit (`0xEE0` bit 0–4)
+isimsiz; biri olabilir ama DSDT söylemiyor ve orası H2RA'da
+(`0xFE700000 + 0xEE0`), yani kullanıcı alanından okunamıyor.
+
+**Sonuç:** master anahtar EC'nin kendi iç durumu ve `Fn+F4` ile yönetiliyor.
+Sürücü rengi ve parlaklığı kontrol ediyor; açıp kapamayı firmware yapıyor.
+Bu bir eksiklik değil, donanımın sınırı — ama kullanıcıya söylenmeli, yoksa
+"renk yazıyorum bir şey olmuyor" diye sürücüyü suçlar.
+
+## 6. `hp-wmi` ile çakışma yok
 
 Faz 2'de saptandı: `hp-wmi` GUID'i sahiplenmiyor, `wmi_evaluate_method` ile
 çağırıyor ve kendisi bir `platform_driver`. Aydınlatma grubu (`0x020009`)
