@@ -99,20 +99,34 @@ kaynak aynı yeri gösteriyor.
 
 ### Bölge sırası — makinede ölçüldü (2026-09-11)
 
-Bayt sırası doğrulandı ama **yuva sırası fiziksel sırayla ters çıktı.**
-Dört bölgeye sırayla kırmızı / yeşil / mavi / sarı yazıldığında klavyede
-soldan sağa **sarı / mavi / yeşil / kırmızı** göründü:
+Renkler doğru çıktığı için R/G/B bayt sırası kesin. Ama **yuva sırası
+fiziksel sırayla ne aynı ne de tam ters — karışık.** Tek tek bölge
+yakarak ölçüldü:
 
-| sysfs `zone` | Donanım yuvası | Veri ofseti | Fiziksel konum |
-|---|---|---|---|
-| 0 | 3 | 25 + 9 = 34 | en sol |
-| 1 | 2 | 25 + 6 = 31 | sol orta |
-| 2 | 1 | 25 + 3 = 28 | sağ orta |
-| 3 | 0 | 25 + 0 = 25 | en sağ |
+| Donanım yuvası | Veri ofseti | Fiziksel bölge |
+|---|---|---|
+| 0 | 25 | numpad (en sağ) |
+| 1 | 28 | orta-sağ (JKL / Enter tarafı) |
+| 2 | 31 | **en sol** (Esc / Tab / Caps sütunu) |
+| 3 | 34 | WASD |
 
-Renkler doğru çıktığı için R/G/B sırası kesin; çevrilmesi gereken yalnızca
-bölge numarası. Modül bu çevrimi kendi yapıyor (`zone_slot[]`), böylece
-`zone0` kullanıcının beklediği gibi soldaki bölge oluyor.
+İlk bakışta "tam ters" görünüyor çünkü yuva 0 en sağa, yuva 3 sola yakın
+düşüyor; ama ortadaki ikisi de yer değiştirmiş durumda. Bu yüzden ilk
+gözlem yanıltıcı oldu ve düz çevirme (`{3,2,1,0}`) yanlış çıktı — doğrusu
+ancak tek bölge yakarak bulundu.
+
+Modül `zone_slot[] = {2, 3, 1, 0}` ile çeviriyor, böylece sysfs numaraları
+fiziksel sırayı izliyor:
+
+| sysfs `zone` | Fiziksel bölge |
+|---|---|
+| `zone0` | en sol |
+| `zone1` | WASD |
+| `zone2` | orta-sağ |
+| `zone3` | numpad |
+
+Numaraların soldan sağa gitmesi arayüz için de gerekli: klavyeyi çizen bir
+UI bölgeleri sırayla gezebilmeli.
 
 Ayrıca oradan öğrenilen bir davranış: yazma **oku-değiştir-yaz** olmalı.
 Önce `0x02` ile 128 baytlık durum okunuyor, yalnızca ilgili 3 bayt

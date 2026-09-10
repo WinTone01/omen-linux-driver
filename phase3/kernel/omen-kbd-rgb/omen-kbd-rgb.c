@@ -44,18 +44,23 @@ enum lighting_query {
 #define STATE_SIZE		128
 
 /*
- * Donanim yuvalari fiziksel sirayla TERS: yuva 0 en SAGDAKI bolge.
+ * sysfs bolge numarasi -> donanim yuvasi.
  *
- * Makinede olculdu (2026-09-11): zone0..3'e sirayla kirmizi/yesil/mavi/sari
- * yazildiginda klavyede soldan saga sari/mavi/yesil/kirmizi gorundu.
- * Renkler dogruydu, yalnizca sira tersti - yani R/G/B bayt sirasi dogru,
- * cevrilmesi gereken bolge numarasi.
+ * Yuva sirasi fiziksel sirayla ne ayni ne de tam ters; karisik. Makinede
+ * tek tek bolge yakarak olculdu (2026-09-11):
  *
- * Kullanici zone0'in soldaki oldugunu bekler (okuma yonu, ve OMEN Gaming
- * Hub da oyle numaraliyor). Cevrimi burada yapiyoruz ki sysfs adlari
- * sezgisel kalsin.
+ *   yuva 0 (ofset 25) -> numpad, en sag
+ *   yuva 1 (ofset 28) -> orta-sag  (JKL / Enter tarafi)
+ *   yuva 2 (ofset 31) -> EN SOL    (Esc / Tab / Caps sutunu)
+ *   yuva 3 (ofset 34) -> WASD
+ *
+ * Kullanici zone0'in soldaki oldugunu bekler (okuma yonu), ve arayuzun
+ * klavyeyi soldan saga cizebilmesi icin numaralarin fiziksel sirayi
+ * izlemesi gerekiyor. Cevrim burada:
+ *
+ *   zone0 = en sol, zone1 = WASD, zone2 = orta-sag, zone3 = numpad
  */
-static const u8 zone_slot[] = { 3, 2, 1, 0 };
+static const u8 zone_slot[] = { 2, 3, 1, 0 };
 /* LM04'teki olu atama (Local1 = 0x64) olcegin 0-100 oldugunu soyluyor. */
 #define BRIGHTNESS_MAX		100
 

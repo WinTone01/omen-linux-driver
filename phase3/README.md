@@ -122,6 +122,15 @@ echo "255 0 0" | sudo tee /sys/class/leds/omen:rgb:kbd_backlight_zone0/multi_int
 echo 60        | sudo tee /sys/class/leds/omen::kbd_backlight/brightness
 ```
 
+Bolgeler soldan saga numarali: `zone0` en sol, `zone1` WASD, `zone2`
+orta-sag, `zone3` numpad. (Donanim yuvalari bu sirada DEGIL; modul
+ceviriyor — bkz. protokol belgesi.)
+
+> **Acma/kapama surucude degil.** `LRGB`/`LBRT` yazmak aydinlatmayi
+> ACMIYOR; renkler register'a isler ve geri okuma dogru deger verir ama
+> klavye karanliksa oyle kalir. Master anahtar EC'nin ic durumu ve
+> **`Fn+F4`** ile yonetiliyor. Renk yazip bir sey gormuyorsan once ona bas.
+
 Yalnizca aydinlatma komut grubunu (`0x020009`) kullanir, `hp-wmi` ile yan
 yana calisir — `blacklist hp_wmi` gerekmez. Protokol:
 [`docs/rgb-protocol.md`](docs/rgb-protocol.md)
@@ -139,5 +148,5 @@ calismaya devam eder.
 |---|---|
 | M1 fan egrisi + durum araci | **calisiyor**, servis olarak dogrulandi |
 | M1b `omenctl` kontrol komutlari (unix socket) | **calisiyor** |
-| M2 `omen-kbd-rgb` cekirdek modulu | **derlendi**, donanim testi bekliyor |
+| M2 `omen-kbd-rgb` cekirdek modulu | **calisiyor**, makinede dogrulandi |
 | M3 Tauri arayuzu | planlandi |
