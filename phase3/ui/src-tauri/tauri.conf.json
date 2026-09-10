@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OMEN Control",
+  "version": "0.1.0",
+  "identifier": "dev.wintone.omen-control",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "OMEN Control",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 940,
+        "minHeight": 620,
+        "decorations": false,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "rpm", "appimage"],
+    "category": "Utility",
+    "shortDescription": "Fan, thermal and RGB control for the HP OMEN 16-ap0xxx"
+  }
+}

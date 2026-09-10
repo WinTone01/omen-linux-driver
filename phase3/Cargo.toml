@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/omen-core", "crates/omend", "crates/omenctl"]
+members = ["crates/omen-core", "crates/omend", "crates/omenctl", "ui/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

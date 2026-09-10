@@ -1,0 +1,13 @@
+# The omen-kbd-rgb keyboard LEDs, writable by the 'omen' group.
+#
+# Installed as /etc/udev/rules.d/99-omen-leds.rules. To apply without a
+# reboot:  sudo udevadm control --reload && sudo udevadm trigger -s leds
+#
+# Why LEDs are handled with a udev rule while fan control goes through the
+# daemon: a wrong fan setpoint can stop the fans while thermal protection
+# fails to step in, so those writes have to be arbitrated in one place. A
+# wrong colour is just a wrong colour. Going through the LED class also means
+# brightnessctl, the desktop's brightness keys and anything else keep working
+# - the point is that our UI is the best option, not the only one.
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="omen:*", RUN+="/bin/chgrp omen /sys/class/leds/%k/brightness /sys/class/leds/%k/multi_intensity", RUN+="/bin/chmod g+w /sys/class/leds/%k/brightness /sys/class/leds/%k/multi_intensity"
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="omen::kbd_backlight", RUN+="/bin/chgrp omen /sys/class/leds/%k/brightness", RUN+="/bin/chmod g+w /sys/class/leds/%k/brightness"

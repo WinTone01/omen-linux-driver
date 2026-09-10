@@ -108,3 +108,52 @@ pub struct Snapshot {
     pub temps: Vec<(String, f32)>,
     pub uptime_secs: u64,
 }
+
+/// Client side of the protocol. Shared by omenctl and the UI so there is only
+/// one implementation of "talk to the daemon".
+pub mod client {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    use super::{check_socket_path, socket_path, Request, Response};
+
+    #[derive(Debug, thiserror::Error)]
+    pub enum ClientError {
+        #[error("{0}")]
+        Path(String),
+        #[error("could not connect to omend ({path}): {source}")]
+        Connect {
+            path: String,
+            #[source]
+            source: std::io::Error,
+        },
+        #[error("transport error: {0}")]
+        Io(#[from] std::io::Error),
+        #[error("could not parse the reply: {0}")]
+        Json(#[from] serde_json::Error),
+        #[error("omend closed the connection without replying")]
+        Empty,
+    }
+
+    pub fn send(req: &Request) -> Result<Response, ClientError> {
+        let path = socket_path();
+        check_socket_path(&path).map_err(ClientError::Path)?;
+        let stream = UnixStream::connect(&path).map_err(|source| ClientError::Connect {
+            path: path.display().to_string(),
+            source,
+        })?;
+
+        let mut writer = stream.try_clone()?;
+        let mut line = serde_json::to_string(req)?;
+        line.push('\n');
+        writer.write_all(line.as_bytes())?;
+        writer.flush()?;
+
+        let mut reader = BufReader::new(stream);
+        let mut buf = String::new();
+        if reader.read_line(&mut buf)? == 0 {
+            return Err(ClientError::Empty);
+        }
+        Ok(serde_json::from_str(&buf)?)
+    }
+}

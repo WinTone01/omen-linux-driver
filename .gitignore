@@ -21,3 +21,6 @@ phase3/kernel/**/.*.cmd
 phase3/kernel/**/Module.symvers
 phase3/kernel/**/modules.order
 phase3/kernel/**/.tmp_versions/
+
+# Tauri generated
+phase3/ui/src-tauri/gen/
