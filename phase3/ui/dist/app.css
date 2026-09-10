@@ -499,3 +499,53 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 /* The Auto mode explanation is a warning, not a description: on this machine
  * that mode genuinely does not cool. */
 .hint.is-warning { color: var(--accent-amber); }
+
+/* ── Charts ─────────────────────────────────────────────────── */
+
+/* The reference metrics for the ring gauge: 132px across with a 6px stroke
+ * over a #353535 track. Ours was heavier and read as a different control. */
+.ring { width: 132px; height: 132px; }
+.ring__track { stroke: #353535; stroke-width: 6; }
+.ring__prog  { stroke-width: 6; }
+.ring__pct   { font-size: 25px; }
+
+.chart-card .panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-head__note { font-size: 11px; color: var(--text-muted); }
+
+.chart-legend { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
+.chart-legend__key { width: 10px; height: 2px; border-radius: 1px; display: inline-block; }
+.chart-legend__key--temp { background: var(--omen-red); }
+.chart-legend__key--fan  { background: var(--accent-teal); }
+.chart-legend__key--fan:not(:first-child) { margin-left: 8px; }
+
+.chart { width: 100%; height: 150px; display: block; }
+.chart--curve { height: 190px; }
+
+.chart-grid line { stroke: #242424; stroke-width: 1; }
+.chart-grid text { fill: #5a5a5a; font-size: 9px; font-family: var(--mono); }
+
+.chart-line { fill: none; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+/* vector-effect keeps the stroke even width under the non-uniform scaling
+ * that preserveAspectRatio="none" applies to the history chart. */
+.chart-line--temp  { stroke: var(--omen-red); vector-effect: non-scaling-stroke; }
+.chart-line--fan   { stroke: var(--accent-teal); opacity: .75; vector-effect: non-scaling-stroke; }
+.chart-line--curve { stroke: var(--omen-red); stroke-width: 2; }
+
+#curve-now circle { fill: var(--omen-red); stroke: #101010; stroke-width: 2; }
+#curve-now line   { stroke: var(--omen-red); stroke-dasharray: 3 3; opacity: .5; }
+#curve-now text   { fill: var(--text-dim); font-size: 10px; font-family: var(--mono); }
+
+.chart-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}

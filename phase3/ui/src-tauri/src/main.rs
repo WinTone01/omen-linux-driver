@@ -38,6 +38,19 @@ struct UiState {
     /// installed, or the 'omen' group membership needs a new login.
     leds_writable: bool,
     profile_choices: Vec<String>,
+    /// The active curve, so the UI can draw it. Read from the config file
+    /// rather than asked of the daemon: the daemon's snapshot carries what it
+    /// is doing now, not the table behind it, and the file is world-readable.
+    curve: Vec<CurvePoint>,
+    /// "step" or "linear" - the chart has to be drawn the way the curve is
+    /// actually read, or it would show a ramp where the daemon holds a value.
+    interpolation: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CurvePoint {
+    temp_c: f32,
+    rpm: u32,
 }
 
 fn snapshot() -> (Option<Snapshot>, Option<String>, Option<String>) {
@@ -193,6 +206,12 @@ fn daemon_hint(e: &client::ClientError) -> Option<String> {
 fn get_state() -> UiState {
     let (daemon, daemon_error, daemon_hint) = snapshot();
 
+    // A broken config file must not blank the whole panel, so a failure here
+    // just means no chart.
+    let curve = omen_core::config::Config::load(&omen_core::config::Config::default_path())
+        .ok()
+        .and_then(|c| c.curve().ok());
+
     let (leds, leds_error, leds_writable) = match Leds::discover() {
         Ok(l) => (Some(l.state()), None, l.writable()),
         Err(e) => (None, Some(e.to_string()), false),
@@ -208,6 +227,22 @@ fn get_state() -> UiState {
         profile_choices: omen_core::profile::PlatformProfile::discover()
             .map(|p| p.choices())
             .unwrap_or_default(),
+        curve: curve
+            .as_ref()
+            .map(|c| {
+                c.points()
+                    .iter()
+                    .map(|p| CurvePoint {
+                        temp_c: p.temp_c,
+                        rpm: p.rpm,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        interpolation: match curve.as_ref().map(|c| c.interpolation()) {
+            Some(omen_core::curve::Interpolation::Linear) => "linear".into(),
+            _ => "step".into(),
+        },
     }
 }
 

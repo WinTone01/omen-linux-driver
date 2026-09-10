@@ -43,6 +43,19 @@ const mockState = {
   leds_error: null,
   leds_writable: true,
   profile_choices: ["low-power", "balanced", "performance"],
+  interpolation: "step",
+  curve: [
+    { temp_c: 45, rpm: 0 },
+    { temp_c: 50, rpm: 1800 },
+    { temp_c: 55, rpm: 1800 },
+    { temp_c: 60, rpm: 1800 },
+    { temp_c: 65, rpm: 1800 },
+    { temp_c: 70, rpm: 2400 },
+    { temp_c: 75, rpm: 2400 },
+    { temp_c: 80, rpm: 2400 },
+    { temp_c: 85, rpm: 2400 },
+    { temp_c: 90, rpm: 3300 },
+  ],
 };
 
 async function mockInvoke(cmd, args) {
@@ -317,7 +330,9 @@ function renderDaemon(s) {
   }
 
   for (const [key, value] of [["fan1", d.fan1_rpm], ["fan2", d.fan2_rpm]]) {
-    const v = value ?? 0;
+    // Rounded on the way out: an RPM is a whole number to a reader, and a
+    // stray float renders as a wall of decimals.
+    const v = Math.round(value ?? 0);
     $(`#${key}-rpm`).textContent = v;
     // Coloured by how hard the fan itself is working, not by CPU temperature:
     // a fan ring turning amber because the CPU is warm says nothing about the
@@ -361,7 +376,12 @@ function renderDaemon(s) {
   }
 }
 
-const modeText = (m) => (m.mode === "manual" ? `manual (${m.rpm} RPM)` : m.mode);
+/* The protocol names are not the labels people see - "curve" is presented as
+ * Automatic and "auto" as EC default, so this has to translate rather than
+ * print the wire value. */
+const MODE_LABEL = { curve: "Automatic", auto: "EC default", max: "Max" };
+const modeText = (m) =>
+  m.mode === "manual" ? `Manual (${m.rpm} RPM)` : (MODE_LABEL[m.mode] ?? m.mode);
 
 function fmtUptime(secs) {
   if (secs == null) return "—";
@@ -460,6 +480,101 @@ function renderLeds(s) {
   }
 }
 
+/* ── charts ──────────────────────────────────────────────────── */
+
+const NS = "http://www.w3.org/2000/svg";
+const HISTORY_MAX = 60; // 60 samples x 2 s = two minutes
+const history = { temp: [], fan: [] };
+
+const TEMP_MIN = 30, TEMP_MAX = 100;
+const FAN_MAX = 4800;
+
+const el = (name, attrs) => {
+  const n = document.createElementNS(NS, name);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  return n;
+};
+
+/** Maps a series onto an SVG path across the full 600x150 box. */
+function seriesPath(values, min, max, w = 600, h = 150) {
+  if (values.length < 2) return "";
+  const step = w / (HISTORY_MAX - 1);
+  return values
+    .map((v, i) => {
+      const x = i * step;
+      const y = h - ((Math.max(min, Math.min(max, v)) - min) / (max - min)) * h;
+      return `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
+
+function drawGrid(id, rows, w, h) {
+  const g = $(id);
+  if (g.childElementCount) return;
+  for (let i = 1; i < rows; i++) {
+    const y = (h / rows) * i;
+    g.append(el("line", { x1: 0, y1: y, x2: w, y2: y }));
+  }
+}
+
+function pushHistory(temp, fan) {
+  history.temp.push(temp ?? 0);
+  history.fan.push(fan ?? 0);
+  if (history.temp.length > HISTORY_MAX) {
+    history.temp.shift();
+    history.fan.shift();
+  }
+  drawGrid("#chart-grid", 4, 600, 150);
+  $("#line-temp").setAttribute("d", seriesPath(history.temp, TEMP_MIN, TEMP_MAX));
+  $("#line-fan").setAttribute("d", seriesPath(history.fan, 0, FAN_MAX));
+  const secs = (history.temp.length - 1) * (POLL_MS / 1000);
+  $("#chart-window").textContent =
+    secs >= 60 ? `last ${Math.round(secs / 60)} min` : `last ${secs} s`;
+}
+
+const CURVE_MIN_C = 40, CURVE_MAX_C = 100;
+
+function drawCurve(points, interpolation, nowTemp, nowRpm) {
+  if (!points?.length) return;
+  const W = 600, H = 190;
+  drawGrid("#curve-grid", 4, W, H);
+
+  const x = (c) => ((c - CURVE_MIN_C) / (CURVE_MAX_C - CURVE_MIN_C)) * W;
+  const y = (rpm) => H - (rpm / FAN_MAX) * (H - 10) - 5;
+
+  // Drawn the way the curve is actually read. With step interpolation a
+  // straight line between points would show a ramp where the daemon holds a
+  // value - the chart would be lying about the behaviour.
+  const step = interpolation !== "linear";
+  let d = "";
+  points.forEach((p, i) => {
+    const px = x(p.temp_c), py = y(p.rpm);
+    if (i === 0) {
+      d += `M${px.toFixed(1)} ${py.toFixed(1)}`;
+    } else if (step) {
+      d += ` L${px.toFixed(1)} ${y(points[i - 1].rpm).toFixed(1)} L${px.toFixed(1)} ${py.toFixed(1)}`;
+    } else {
+      d += ` L${px.toFixed(1)} ${py.toFixed(1)}`;
+    }
+  });
+  // Hold the last entry out to the right edge, which is what happens above
+  // the top of the table.
+  const last = points[points.length - 1];
+  d += ` L${W} ${y(last.rpm).toFixed(1)}`;
+  $("#curve-line").setAttribute("d", d);
+
+  const marker = $("#curve-now");
+  marker.replaceChildren();
+  if (nowTemp == null) return;
+  const mx = Math.max(0, Math.min(W, x(nowTemp)));
+  const my = y(nowRpm ?? 0);
+  marker.append(el("line", { x1: mx, y1: 0, x2: mx, y2: H }));
+  if (nowRpm) marker.append(el("circle", { cx: mx, cy: my, r: 4 }));
+  const label = el("text", { x: Math.min(mx + 6, W - 60), y: 14 });
+  label.textContent = `${nowTemp.toFixed(0)}°C`;
+  marker.append(label);
+}
+
 async function refresh() {
   try {
     state = await invoke("get_state");
@@ -470,6 +585,14 @@ async function refresh() {
   renderDaemon(state);
   renderProfiles(state);
   renderLeds(state);
+
+  const d = state.daemon;
+  pushHistory(d?.driver_temp_c, d?.fan1_rpm);
+  drawCurve(state.curve, state.interpolation, d?.driver_temp_c, d?.target_rpm);
+  $("#curve-note").textContent =
+    state.interpolation === "linear"
+      ? "linear between points"
+      : "held between points, as OMEN Gaming Hub does";
 }
 
 buildKeycaps();
