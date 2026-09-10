@@ -7,6 +7,12 @@ ConditionPathExists=/sys/class/dmi/id/board_name
 
 [Service]
 Type=simple
+# Surec root olarak kosuyor (sysfs'e yazmak icin gerekli) ama EK GRUBU
+# 'omen'. Boylece actigi socket dogrudan root:omen oluyor ve daemon'in
+# chown yapmasi gerekmiyor - CapabilityBoundingSet bos oldugu icin
+# CAP_CHOWN zaten yok. Grup yoksa systemd servisi baslatmaz, o yuzden
+# sysusers dosyasi kurulmali.
+Group=omen
 ExecStart=/usr/bin/omend --config /etc/omen/omend.toml
 Restart=on-failure
 RestartSec=5

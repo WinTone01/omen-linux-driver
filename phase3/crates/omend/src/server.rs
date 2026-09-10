@@ -47,15 +47,22 @@ pub fn spawn(shared: Shared) -> Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))
         .context("socket izinleri ayarlanamadi")?;
     match omen_group_gid() {
-        Some(gid) => {
-            if let Err(e) = std::os::unix::fs::chown(path, None, Some(gid)) {
-                warn!("socket 'omen' grubuna verilemedi: {e}");
-            } else {
-                info!("socket: {} (grup 'omen', 0660)", path.display());
-            }
+        // systemd unit'i Group=omen ile kosuyorsa socket zaten dogru
+        // grupta dogar; chown'a hic kalkismayalim. CapabilityBoundingSet
+        // bos oldugu icin CAP_CHOWN yok, kalkisirsak yalnizca gurultu
+        // uretiriz.
+        Some(gid) if socket_gid(path) == Some(gid) => {
+            info!("socket: {} (grup 'omen', 0660)", path.display());
         }
+        Some(gid) => match std::os::unix::fs::chown(path, None, Some(gid)) {
+            Ok(()) => info!("socket: {} (grup 'omen', 0660)", path.display()),
+            Err(e) => warn!(
+                "socket 'omen' grubuna verilemedi ({e}) - istemciler sudo ister. \
+                 systemd altindaysan unit'te 'Group=omen' var mi?"
+            ),
+        },
         None => info!(
-            "socket: {} (root, 0660 - istemciler sudo ister)",
+            "socket: {} (root, 0660 - 'omen' grubu yok, istemciler sudo ister)",
             path.display()
         ),
     }
@@ -77,6 +84,11 @@ pub fn spawn(shared: Shared) -> Result<()> {
         .context("dinleyici thread'i baslatilamadi")?;
 
     Ok(())
+}
+
+fn socket_gid(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| m.gid())
 }
 
 /// /etc/group icinden 'omen' grubunun gid'i. libc bagimliligi getirmemek

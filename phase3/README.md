@@ -83,6 +83,20 @@ devreye girmez. `omend` bes kurala uyar:
 
 Egriyi denemeden once ikinci bir terminalde `watch -n1 sensors` acik olsun.
 
+### Dogrulama (2026-09-11, 7.2.4-1-cachyos)
+
+Kural 1'in uc kapisi da makinede denendi:
+
+| Cikis yolu | Mekanizma | Sonuc |
+|---|---|---|
+| Ctrl+C (SIGINT) | `Drop` | `pwm1_enable` 2'ye dondu |
+| `omend --restore-auto` | dogrudan | 2'ye dondu |
+| `pkill -9` (SIGKILL) | systemd `ExecStopPost` | 2'ye dondu |
+
+Sonuncusu onemli: SIGKILL'de `Drop` CALISMAZ, fani yalnizca systemd
+kurtarabilir. Test daemon manuel moddayken (`pwm1_enable = 1`) yapildi,
+yoksa bir sey kanitlamazdi.
+
 ## Yapi
 
 ```
@@ -100,7 +114,7 @@ calismaya devam eder.
 
 | | |
 |---|---|
-| M1 fan egrisi + durum araci | **calisiyor**, makinede dogrulandi |
+| M1 fan egrisi + durum araci | **calisiyor**, servis olarak dogrulandi |
 | M1b `omenctl` kontrol komutlari (unix socket) | **calisiyor** |
 | M2 `omen-kbd-rgb` cekirdek modulu | planlandi |
 | M3 Tauri arayuzu | planlandi |
