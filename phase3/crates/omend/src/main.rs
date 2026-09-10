@@ -113,9 +113,14 @@ fn run(args: Args) -> Result<()> {
             omen_core::fan::DEFAULT_MAX_RPM,
         )
         .context("fan not found")?;
-        fan.restore_auto()
-            .context("could not return the fan to automatic")?;
-        info!("fan returned to automatic (pwm1_enable=2)");
+        // Same decision as the in-process exit path, and the same code, so
+        // the two cannot drift apart. Defaults rather than the config file:
+        // a broken config must not make the recovery step fail.
+        guard::park(
+            &fan,
+            Thermal::discover().ok().as_ref(),
+            omen_core::config::SafetyConfig::default().stall_temp_c,
+        );
         return Ok(());
     }
 
@@ -162,10 +167,15 @@ fn run(args: Args) -> Result<()> {
         warn!("--dry-run: nothing will be written");
     }
 
+    let hot_above_c = cfg.safety.stall_temp_c;
     let mut rt = Runtime::new(fan.clone(), thermal, cfg, read_only)?;
     rt.log_curve();
 
-    let mut keeper = AutoRestore::new(fan);
+    let mut keeper = AutoRestore::new(
+        fan,
+        Thermal::discover().context("no temperature source found")?,
+        hot_above_c,
+    );
     if read_only {
         keeper.disarm();
     }
@@ -211,12 +221,22 @@ fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, PartialEq)]
-enum SafetyState {
-    Normal,
-    /// The curve has been abandoned, control is with the EC. The reason was
-    /// logged.
-    Fallback,
+/// An active safety override: the fans have been forced to full power and
+/// normal driving is suspended until the temperature comes back down.
+///
+/// This used to hand control to the EC instead. That was wrong, and the
+/// machine demonstrated it: with `pwm1_enable = 2` the fans sat at 0 RPM
+/// while the CPU climbed 78 -> 85 C in twelve seconds under load, and the
+/// cutout - whose only action was to hand control to the EC - fired at 98 C
+/// and changed nothing, because the fan was already there. A safety net
+/// whose action is "give the problem back to whatever caused it" is not a
+/// safety net. At these temperatures the only defensible action is full
+/// power.
+#[derive(Debug)]
+struct Emergency {
+    reason: String,
+    /// Normal driving resumes once the temperature falls below this.
+    recover_below: f32,
 }
 
 /// What did we last write to the fan? Used to avoid rewriting the same value.
@@ -233,7 +253,10 @@ struct Runtime {
     thermal: Thermal,
     cfg: Config,
     governor: Governor,
-    state: SafetyState,
+    emergency: Option<Emergency>,
+    /// When the fans were first seen stopped while hot. `None` means they are
+    /// either moving or the machine is cool.
+    stall_since: Option<Instant>,
     mode: ControlMode,
     applied: Applied,
     read_only: bool,
@@ -253,7 +276,8 @@ impl Runtime {
             thermal,
             cfg,
             governor,
-            state: SafetyState::Normal,
+            emergency: None,
+            stall_since: None,
             mode: ControlMode::Curve,
             applied: Applied::Unknown,
             read_only,
@@ -284,18 +308,24 @@ impl Runtime {
         let temp = match self.thermal.hottest() {
             Ok(v) => Some(v),
             Err(e) => {
-                // Safety rule 3: if the temperature cannot be read, do not run
-                // the curve.
-                if self.state != SafetyState::Fallback {
-                    error!("could not read a temperature ({e}) - falling back to automatic");
-                    self.fall_back();
+                // Safety rule 3: if the temperature cannot be read we are
+                // flying blind. Full power is the only state we can be sure
+                // about; the EC cannot be trusted to take over (see
+                // Emergency).
+                if self.emergency.is_none() {
+                    self.declare_emergency(
+                        format!("no temperature could be read ({e})"),
+                        // Nothing to compare against, so hold until a reading
+                        // comes back.
+                        f32::NEG_INFINITY,
+                    );
                 }
                 None
             }
         };
 
         if let Some((label, celsius)) = &temp {
-            if self.check_safety(label, *celsius) {
+            if self.guard(label, *celsius) {
                 self.drive(label, *celsius);
             }
         }
@@ -337,32 +367,83 @@ impl Runtime {
         }
     }
 
-    /// The critical cutout. Applies in EVERY mode - a manual request from the
-    /// user does not disable thermal protection.
+    /// Everything that can override normal driving, in order of severity.
     ///
-    /// `true` -> normal driving may continue.
-    fn check_safety(&mut self, label: &str, temp: f32) -> bool {
-        match self.state {
-            SafetyState::Normal if temp >= self.cfg.safety.critical_c => {
-                error!(
-                    "{label} {temp:.1}C >= critical {:.1}C - control handed to the EC",
-                    self.cfg.safety.critical_c
-                );
-                self.fall_back();
-                false
+    /// Returns `true` when normal driving may continue.
+    fn guard(&mut self, label: &str, temp: f32) -> bool {
+        // Already in an emergency: hold full power until it is properly cool
+        // again. Leaving early just re-enters it a few seconds later.
+        if let Some(e) = &self.emergency {
+            if temp > e.recover_below {
+                debug!("emergency hold ({}), {label} {temp:.1}C", e.reason);
+                self.apply(Applied::Max, "emergency");
+                return false;
             }
-            SafetyState::Fallback => {
-                let recover_at = self.cfg.safety.critical_c - self.cfg.safety.recover_delta_c;
-                if temp > recover_at {
-                    debug!("in safety fallback, {label} {temp:.1}C > {recover_at:.1}C");
-                    return false;
-                }
-                info!("{label} {temp:.1}C <= {recover_at:.1}C - taking control back");
-                self.state = SafetyState::Normal;
-                true
-            }
-            SafetyState::Normal => true,
+            info!(
+                "{label} {temp:.1}C <= {:.1}C - leaving emergency ({})",
+                e.recover_below, e.reason
+            );
+            self.emergency = None;
+            self.stall_since = None;
+            self.applied = Applied::Unknown;
+            return true;
         }
+
+        // The critical cutout. Applies in EVERY mode - a manual request from
+        // the user does not disable thermal protection.
+        if temp >= self.cfg.safety.critical_c {
+            self.declare_emergency(
+                format!("{label} {temp:.1}C >= critical {:.1}C", self.cfg.safety.critical_c),
+                self.cfg.safety.critical_c - self.cfg.safety.recover_delta_c,
+            );
+            return false;
+        }
+
+        // Cooling failure: hot, and the fans are not turning.
+        //
+        // This is the check that would have caught the incident. It is
+        // deliberately about BEHAVIOUR rather than about a particular mode -
+        // whatever the reason the fans are stopped, stopped fans at this
+        // temperature are wrong.
+        let stopped = matches!((self.fan.rpm(1), self.fan.rpm(2)), (Ok(0), Ok(0)));
+        if stopped && temp >= self.cfg.safety.stall_temp_c {
+            let since = *self.stall_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= self.cfg.stall_grace() {
+                self.declare_emergency(
+                    format!(
+                        "{label} {temp:.1}C with both fans stopped for {}s",
+                        since.elapsed().as_secs()
+                    ),
+                    self.cfg.safety.stall_temp_c - self.cfg.safety.recover_delta_c,
+                );
+                // Auto is the mode that produces this on purpose, by handing
+                // the fans to an EC that does not take them. Staying in it
+                // would oscillate between full power and no cooling, so we
+                // take the machine back to the curve and say so.
+                if self.mode == ControlMode::Auto {
+                    warn!("auto mode is not cooling this machine - switching to the curve");
+                    self.mode = ControlMode::Curve;
+                    self.governor.reset();
+                }
+                return false;
+            }
+            debug!("{label} {temp:.1}C, fans stopped for {:?}", since.elapsed());
+        } else {
+            self.stall_since = None;
+        }
+
+        true
+    }
+
+    fn declare_emergency(&mut self, reason: String, recover_below: f32) {
+        error!("EMERGENCY: {reason} - forcing the fans to full power");
+        self.emergency = Some(Emergency {
+            reason,
+            recover_below,
+        });
+        self.governor.reset();
+        self.applied = Applied::Unknown;
+        self.apply(Applied::Max, "emergency");
     }
 
     fn drive(&mut self, label: &str, temp: f32) {
@@ -403,9 +484,10 @@ impl Runtime {
                     }
                     Err(e) => {
                         // A failed write leaves the setpoint in an unknown
-                        // state. Handing control back is the safest response.
-                        error!("could not write the setpoint ({e}) - falling back to automatic");
-                        self.fall_back();
+                        // state, and the EC will not pick the curve up on its
+                        // own. Full power is the state we can be sure about.
+                        let reason = format!("could not write the setpoint ({e})");
+                        self.declare_emergency(reason, self.cfg.safety.stall_temp_c);
                     }
                 }
             }
@@ -433,20 +515,6 @@ impl Runtime {
         }
     }
 
-    fn fall_back(&mut self) {
-        self.state = SafetyState::Fallback;
-        // Do not let hysteresis hold on to the old decision; decide fresh on
-        // the way out.
-        self.governor.reset();
-        self.applied = Applied::Unknown;
-        if self.read_only {
-            return;
-        }
-        if let Err(e) = self.fan.restore_auto() {
-            error!("CRITICAL: could not switch to automatic: {e}");
-        }
-    }
-
     fn snapshot(&self, driver: Option<(String, f32)>) -> Snapshot {
         Snapshot {
             mode: Some(self.mode),
@@ -461,7 +529,8 @@ impl Runtime {
             fan2_rpm: self.fan.rpm(2).ok(),
             pwm: self.fan.pwm().ok(),
             profile: PlatformProfile::discover().and_then(|p| p.get().ok()),
-            safety_fallback: self.state == SafetyState::Fallback,
+            safety_fallback: self.emergency.is_some(),
+            safety_reason: self.emergency.as_ref().map(|e| e.reason.clone()),
             temps: self
                 .thermal
                 .read_all()

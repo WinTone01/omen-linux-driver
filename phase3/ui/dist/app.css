@@ -495,3 +495,7 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 }
 .hub-toast.is-error { border-color: var(--omen-red); }
 @keyframes rise { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* The Auto mode explanation is a warning, not a description: on this machine
+ * that mode genuinely does not cool. */
+.hint.is-warning { color: var(--accent-amber); }

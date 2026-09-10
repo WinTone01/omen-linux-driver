@@ -68,21 +68,53 @@ Set `OMEND_SOCKET` to run a second instance, or to try things without root.
 A wrong EC write can stop the fans entirely, and thermal protection does not
 always step in. `omend` follows five rules:
 
-1. **Always hand control back on exit.** Three gates: `Drop` for normal exit
-   and for panics, and systemd `ExecStopPost=omend --restore-auto` for SIGKILL.
-2. **Critical cutout.** Above `critical_c` (97 °C by default) the curve is
-   abandoned and control returns to the EC; it re-engages once the temperature
-   drops by `recover_delta_c`. The cutout must be *above* the top of the curve,
-   otherwise the daemon refuses to start — see below.
-3. **Watchdog.** If a temperature cannot be read, or a setpoint cannot be
-   written, fall back to automatic. Staying at the last setpoint in an unknown
-   state is the most dangerous behaviour available.
-4. **Two layers of clamping.** The setpoint is clamped to `min_rpm..max_rpm` in
+1. **Always leave the fans in a safe state on exit.** Three gates: `Drop` for
+   normal exit and for panics, and systemd `ExecStopPost=omend --restore-auto`
+   for SIGKILL. Above `stall_temp_c` that state is *full power*, not
+   automatic — see the incident below.
+2. **Critical cutout.** Above `critical_c` (97 °C by default) normal driving is
+   suspended and the fans are forced to **full power**; it resumes once the
+   temperature drops by `recover_delta_c`. The cutout must be *above* the top
+   of the curve, otherwise the daemon refuses to start.
+3. **Stall detector.** Fans reading 0 RPM above `stall_temp_c` (75 °C) for
+   `stall_grace_secs` means cooling has failed, whatever the reason. Full
+   power, immediately. This check is about behaviour rather than about a
+   particular mode, so it catches causes nobody predicted.
+4. **Watchdog.** If a temperature cannot be read, or a setpoint cannot be
+   written, force full power. Staying at the last setpoint in an unknown state
+   is the most dangerous behaviour available.
+5. **Two layers of clamping.** The setpoint is clamped to `min_rpm..max_rpm` in
    `omend`, and again to the fan table's limits in the kernel.
-5. **Only the daemon writes.** `omenctl` sends a request over the socket
-   instead of touching the fan. That way clamping, the critical cutout and
-   restore-on-exit are guaranteed in one place — including in manual mode. The
-   cutout overrides the user's request too.
+6. **Only the daemon writes.** `omenctl` sends a request over the socket
+   instead of touching the fan. That way clamping, the cutout and the exit
+   behaviour are guaranteed in one place — including in manual mode. The
+   overrides beat the user's request too.
+
+### The incident that rewrote rules 1 to 4 (2026-09-11)
+
+`Auto` mode was selected while the machine was under load at about 81 °C.
+Seventy-six seconds later the CPU was at 98 °C. The critical cutout fired —
+and did nothing, because its only action at the time was *hand control to the
+EC*, and the fan was already there.
+
+Measured afterwards, deliberately and with a hard revert: with
+`pwm1_enable = 2` the fans sat at **0 RPM** for twelve straight seconds while
+the CPU climbed 78.6 → 85.5 °C under load. The EC never took them.
+
+Two mistakes, both ours:
+
+- **The claim that `SRP = 0` means "revert to automatic" was wrong** on this
+  board. It came from upstream's `HP_FAN_SPEED_AUTOMATIC` comment and from one
+  measurement taken minutes after the module first loaded. It does not hold
+  once the driver has been in manual mode. The Phase 2 document now carries
+  that correction.
+- **A safety net whose action is to hand the problem back to whatever caused
+  it is not a safety net.** Every override now forces full power, which is the
+  one state that is unambiguously safe at these temperatures.
+
+Selecting `Auto` no longer risks this: the stall detector forces full power
+within a few seconds and puts the machine back on the curve, saying so in the
+log and in the UI.
 
 Rule 2 is not a formality: the first version defaulted the cutout to 90 °C
 while the curve ran to 4800 RPM at 95 °C, which made the most aggressive part
@@ -98,13 +130,17 @@ All three gates of rule 1 were exercised on the machine:
 
 | Exit path | Mechanism | Result |
 |---|---|---|
-| Ctrl+C (SIGINT) | `Drop` | `pwm1_enable` returned to 2 |
-| `omend --restore-auto` | direct | returned to 2 |
-| `pkill -9` (SIGKILL) | systemd `ExecStopPost` | returned to 2 |
+| Ctrl+C (SIGINT) | `Drop` | fans left in a safe state |
+| `omend --restore-auto` | direct | same |
+| `pkill -9` (SIGKILL) | systemd `ExecStopPost` | same |
 
 The last one matters most: on SIGKILL `Drop` does **not** run, and only systemd
-can recover the fan. The test was done while the daemon was in manual mode
-(`pwm1_enable = 1`), otherwise it would have proven nothing.
+can recover the fan. The test was done while the daemon was in manual mode,
+otherwise it would have proven nothing.
+
+At the time all three returned `pwm1_enable` to 2. That is still what happens
+on a cool machine; above `stall_temp_c` they now leave the fans at full power
+instead, for the reason in the incident above.
 
 ## Layout
 

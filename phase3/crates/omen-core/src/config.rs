@@ -73,6 +73,27 @@ pub struct SafetyConfig {
     /// How far the temperature must fall to leave the safety fallback.
     #[serde(default = "default_recover")]
     pub recover_delta_c: f32,
+
+    /// Above this temperature, fans reading 0 RPM means cooling has failed.
+    ///
+    /// Measured on this machine (2026-09-11): with `pwm1_enable = 2` the fans
+    /// stayed at 0 RPM while the CPU climbed 78 -> 85 C in twelve seconds
+    /// under load. The EC does NOT take the curve back the way upstream's
+    /// `HP_FAN_SPEED_AUTOMATIC` comment implies, at least once the driver has
+    /// been in manual mode. So "hand control to the EC" cannot be treated as
+    /// a safe resting state, and something has to notice when it is not
+    /// working.
+    ///
+    /// Kept well above any legitimate fan-stop (the EC idles the fans in the
+    /// 40s) and well below the critical cutout.
+    #[serde(default = "default_stall_temp")]
+    pub stall_temp_c: f32,
+
+    /// How long the fans may read 0 RPM above `stall_temp_c` before we force
+    /// them to full power. A few seconds of grace covers a fan spinning up
+    /// and the tachometer lagging.
+    #[serde(default = "default_stall_grace")]
+    pub stall_grace_secs: u64,
 }
 
 fn yes() -> bool {
@@ -105,6 +126,12 @@ fn default_critical() -> f32 {
 fn default_recover() -> f32 {
     10.0
 }
+fn default_stall_temp() -> f32 {
+    75.0
+}
+fn default_stall_grace() -> u64 {
+    6
+}
 
 impl Default for FanConfig {
     fn default() -> Self {
@@ -126,6 +153,8 @@ impl Default for SafetyConfig {
         Self {
             critical_c: default_critical(),
             recover_delta_c: default_recover(),
+            stall_temp_c: default_stall_temp(),
+            stall_grace_secs: default_stall_grace(),
         }
     }
 }
@@ -163,6 +192,12 @@ impl Config {
         if self.safety.recover_delta_c <= 0.0 {
             return Err(Error::Curve("recover_delta_c must be positive".into()));
         }
+        if self.safety.stall_temp_c >= self.safety.critical_c {
+            return Err(Error::Curve(format!(
+                "stall_temp_c ({:.0} C) must be below critical_c ({:.0} C)",
+                self.safety.stall_temp_c, self.safety.critical_c
+            )));
+        }
 
         // Curve validity is checked in Curve::new.
         let curve = self.curve()?;
@@ -197,6 +232,10 @@ impl Config {
 
     pub fn min_dwell(&self) -> Duration {
         Duration::from_secs(self.fan.min_dwell_secs)
+    }
+
+    pub fn stall_grace(&self) -> Duration {
+        Duration::from_secs(self.safety.stall_grace_secs)
     }
 }
 

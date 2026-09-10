@@ -103,8 +103,11 @@ pub struct Snapshot {
     pub fan2_rpm: Option<u32>,
     pub pwm: Option<u8>,
     pub profile: Option<String>,
-    /// Whether the critical cutout has tripped.
+    /// Whether a safety override is active (the fans are forced to full).
     pub safety_fallback: bool,
+    /// Why, in words, so the UI does not have to guess.
+    #[serde(default)]
+    pub safety_reason: Option<String>,
     pub temps: Vec<(String, f32)>,
     pub uptime_secs: u64,
 }

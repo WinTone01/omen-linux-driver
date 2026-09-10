@@ -47,5 +47,24 @@ curve = [
 # aggressive region can never be used. omend checks this at startup.
 critical_c = 97.0
 
-# Leaving the cutout: the curve re-engages at 97 - 10 = 87 C.
+# Leaving an override: normal control resumes 10 C below whichever threshold
+# tripped it.
 recover_delta_c = 10.0
+
+# Above this temperature, fans reading 0 RPM means cooling has failed and the
+# fans are forced to full power.
+#
+# This is not hypothetical. Measured on this machine: with pwm1_enable = 2 the
+# fans stayed at 0 RPM while the CPU climbed 78 -> 85 C in twelve seconds under
+# load. The EC does NOT take the curve back the way upstream's
+# HP_FAN_SPEED_AUTOMATIC comment implies, at least once the driver has been in
+# manual mode. So "hand control to the EC" is not a safe resting state, and
+# something has to notice when it is not working.
+#
+# Keep it well above any legitimate fan-stop (the EC idles the fans in the 40s)
+# and below critical_c.
+stall_temp_c = 75.0
+
+# How long the fans may read 0 RPM above stall_temp_c before full power is
+# forced. A few seconds covers a fan spinning up while the tachometer lags.
+stall_grace_secs = 6

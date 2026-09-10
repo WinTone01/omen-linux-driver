@@ -280,9 +280,27 @@ via DKMS. Unpatched vs patched:
 
 `dmesg`: `hp_wmi: Registered as platform profile handler`
 
-Fan behaviour in automatic mode: 45.4 °C → 0/0 RPM (fan-stop), 58.6 °C →
-2400/2100 RPM. So `SRP = 0` does not switch the fans off; it hands control back
-to the EC.
+Fan behaviour in automatic mode, right after the module was loaded:
+45.4 °C → 0/0 RPM (fan-stop), 58.6 °C → 2400/2100 RPM.
+
+> **Corrected on 2026-09-11 — do not rely on the paragraph that used to be
+> here.** From that measurement it was concluded that `SRP = 0` does not
+> switch the fans off but hands control back to the EC, matching upstream's
+> `HP_FAN_SPEED_AUTOMATIC` comment. That conclusion does not hold.
+>
+> Measured later, after the daemon had been driving manual setpoints: with
+> `pwm1_enable = 2` the fans stayed at **0 RPM for the whole observation**
+> while the CPU climbed 78.6 → 85.5 °C in twelve seconds under load. The EC
+> did not take the fans back at any point.
+>
+> So the reading above was of a *fresh* state - a module that had only just
+> registered and had never been in manual mode. It is not a general rule.
+> Once the driver has taken manual control, "automatic" leaves the fans
+> stopped, and handing control to the EC is **not** a safe resting state on
+> this board.
+>
+> What that cost, and what was done about it, is in
+> [`phase3/README.md`](../../phase3/README.md#safety).
 
 **`HPCM = 48` is this phase's most important result.** The value captured from
 the OGH log on Windows in Phase 1 came out identical on Linux through a

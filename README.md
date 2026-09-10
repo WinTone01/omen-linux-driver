@@ -40,7 +40,10 @@ and run on this machine on 2026-09-11:
 - `hp-wmi` registered as a platform profile handler, alongside `amd-pmf`
 - EC `0x95` read back as **48** → Phase 1's Windows measurement independently
   confirmed on Linux, through a completely different path
-- The automatic fan curve works: fan-stop at 45 °C, 2400/2100 RPM at 58 °C
+- The EC's own fan curve appeared to work: fan-stop at 45 °C, 2400/2100 RPM at
+  58 °C — but see the correction in the Phase 2 document; that only held for a
+  freshly loaded module, and "automatic" is not a safe resting state once the
+  driver has taken manual control
 - Made permanent with DKMS; survived a reboot
 
 Details: [`phase2/docs/phase2-plan.md`](phase2/docs/phase2-plan.md)

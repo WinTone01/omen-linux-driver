@@ -214,7 +214,7 @@ function buildZonePickers() {
 
 const MODE_HELP = {
   curve: "The curve in /etc/omen/omend.toml drives the fan. Below its lowest point control is handed back to the EC, which keeps the fans stopped at idle.",
-  auto: "Control belongs to the EC entirely. This is what the machine does out of the box.",
+  auto: "Hands the fans to the EC - and on this machine the EC does not take them. Measured: the fans sat at 0 RPM while the CPU climbed 78 to 85 C in twelve seconds under load. omend will force full power if that happens and put you back on the curve.",
   manual: "A fixed target. The critical cutout still applies — a request here does not disable thermal protection.",
   max: "Fans at full power (WMI 0x27). The EC takes over the curve while this is on.",
 };
@@ -285,12 +285,15 @@ function renderDaemon(s) {
 
   dot.className = "status-dot is-up";
   text.textContent = "omend connected";
-  banner.classList.remove("is-error");
   banner.hidden = !s.daemon.safety_fallback;
   if (s.daemon.safety_fallback) {
+    banner.classList.add("is-error");
     banner.innerHTML =
-      "<strong>The critical cutout has tripped.</strong> The curve is " +
-      "suspended and the EC has control until the temperature falls back.";
+      "<strong>Safety override: the fans are at full power.</strong> Normal " +
+      "control resumes once the temperature comes back down." +
+      (s.daemon.safety_reason ? `<br><code>${s.daemon.safety_reason}</code>` : "");
+  } else {
+    banner.classList.remove("is-error");
   }
 
   const d = s.daemon;
@@ -338,6 +341,7 @@ function renderDaemon(s) {
     b.classList.toggle("is-active", b.dataset.mode === active),
   );
   $("#fan-mode-help").textContent = MODE_HELP[active] ?? "";
+  $("#fan-mode-help").classList.toggle("is-warning", active === "auto");
   $("#manual-card").style.opacity = active === "manual" ? "1" : ".55";
 
   if (active === "manual" && d.mode.rpm != null && Date.now() > holdUntil) {
