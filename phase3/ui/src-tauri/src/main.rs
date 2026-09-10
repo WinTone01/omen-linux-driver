@@ -28,6 +28,10 @@ struct UiState {
     /// Why the daemon is unreachable, so the UI can say something useful
     /// instead of just "disconnected".
     daemon_error: Option<String>,
+    /// A plain-language next step for the common causes. The raw error says
+    /// "Permission denied", which does not tell anyone that the fix is a new
+    /// login session.
+    daemon_hint: Option<String>,
     leds: Option<LedState>,
     leds_error: Option<String>,
     /// False when the LED files are read-only for us: the udev rule is not
@@ -36,18 +40,44 @@ struct UiState {
     profile_choices: Vec<String>,
 }
 
-fn snapshot() -> (Option<Snapshot>, Option<String>) {
+fn snapshot() -> (Option<Snapshot>, Option<String>, Option<String>) {
     match client::send(&Request::Status) {
-        Ok(Response::Ok(s)) => (Some(*s), None),
-        Ok(Response::Error { message }) => (None, Some(message)),
-        Ok(Response::Done { message }) => (None, Some(message)),
-        Err(e) => (None, Some(e.to_string())),
+        Ok(Response::Ok(s)) => (Some(*s), None, None),
+        Ok(Response::Error { message }) | Ok(Response::Done { message }) => {
+            (None, Some(message), None)
+        }
+        Err(e) => {
+            let hint = daemon_hint(&e);
+            (None, Some(e.to_string()), hint)
+        }
+    }
+}
+
+/// Turns a connection failure into a next step.
+///
+/// The two causes are almost always: the socket is there but we are not in
+/// the 'omen' group yet (a fresh usermod only applies to new login sessions),
+/// or the service is not running. "Permission denied" on its own tells the
+/// user neither.
+fn daemon_hint(e: &client::ClientError) -> Option<String> {
+    use std::io::ErrorKind;
+    match e {
+        client::ClientError::Connect { source, .. } => Some(match source.kind() {
+            ErrorKind::PermissionDenied => "You are not in the 'omen' group in this session.                  Run <code>sudo usermod -aG omen $USER</code> if you have not, then log out                  and back in - an open session keeps the group list it started with."
+                .into(),
+            ErrorKind::NotFound | ErrorKind::ConnectionRefused => {
+                "The service does not appear to be running. Start it with                  <code>sudo systemctl enable --now omend</code>."
+                    .into()
+            }
+            _ => return None,
+        }),
+        _ => None,
     }
 }
 
 #[tauri::command]
 fn get_state() -> UiState {
-    let (daemon, daemon_error) = snapshot();
+    let (daemon, daemon_error, daemon_hint) = snapshot();
 
     let (leds, leds_error, leds_writable) = match Leds::discover() {
         Ok(l) => (Some(l.state()), None, l.writable()),
@@ -57,6 +87,7 @@ fn get_state() -> UiState {
     UiState {
         daemon,
         daemon_error,
+        daemon_hint,
         leds,
         leds_error,
         leds_writable,

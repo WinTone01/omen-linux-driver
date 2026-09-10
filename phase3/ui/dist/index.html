@@ -8,258 +8,259 @@
 </head>
 <body>
 
-<header class="titlebar" data-tauri-drag-region>
-  <div class="brand" data-tauri-drag-region>
-    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 2 2 8v8l10 6 10-6V8L12 2Zm0 2.5 7.5 4.5v6L12 19.5 4.5 15V9L12 4.5Z"/>
-      <path d="M12 7.5 7.5 10v4L12 16.5 16.5 14v-4L12 7.5Z" opacity=".55"/>
-    </svg>
-    <span class="brand-text">OMEN <em>Control</em></span>
-  </div>
-  <div class="titlebar-spacer" data-tauri-drag-region></div>
-  <div class="win-buttons">
-    <button class="win-btn" data-win="minimize" title="Minimise" aria-label="Minimise">
-      <svg viewBox="0 0 10 10"><path d="M0 5h10"/></svg>
-    </button>
-    <button class="win-btn" data-win="maximize" title="Maximise" aria-label="Maximise">
-      <svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" rx="1"/></svg>
-    </button>
-    <button class="win-btn win-btn--close" data-win="close" title="Close" aria-label="Close">
-      <svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10"/></svg>
-    </button>
-  </div>
-</header>
+<div class="app">
 
-<div class="shell">
-  <nav class="sidebar">
-    <div class="device">
-      <div class="device-name" id="device-name">OMEN 16-ap0xxx</div>
-      <div class="device-sub" id="device-sub">board 8D24</div>
+  <!-- ── Title bar ────────────────────────────────────────────── -->
+  <header class="titlebar" data-tauri-drag-region>
+    <div class="titlebar__brand" data-tauri-drag-region>
+      <svg class="omen-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 2 2 8v8l10 6 10-6V8L12 2Zm0 2.5 7.5 4.5v6L12 19.5 4.5 15V9L12 4.5Z"/>
+        <path d="M12 7.5 7.5 10v4L12 16.5 16.5 14v-4L12 7.5Z" opacity=".55"/>
+      </svg>
+      <span class="titlebar__title">OMEN Control</span>
     </div>
-    <ul class="nav" role="tablist">
-      <li><button class="nav-item is-active" data-view="dashboard" role="tab">Dashboard</button></li>
-      <li><button class="nav-item" data-view="performance" role="tab">Performance</button></li>
-      <li><button class="nav-item" data-view="fan" role="tab">Fan</button></li>
-      <li><button class="nav-item" data-view="lighting" role="tab">Lighting</button></li>
-    </ul>
-    <div class="sidebar-foot">
-      <div class="status-dot" id="conn-dot"></div>
-      <span id="conn-text">connecting…</span>
+
+    <div class="titlebar__tools">
+      <div class="profile-dd">
+        <span class="profile-dd__label">Profile</span>
+        <button class="profile-dd__btn" id="profile-quick" type="button">
+          <span id="profile-quick-label">—</span>
+          <svg viewBox="0 0 12 12" class="chev" aria-hidden="true"><path d="M2 4.5 6 8.5l4-4"/></svg>
+        </button>
+      </div>
+      <button class="icon-btn" id="btn-refresh" title="Refresh" aria-label="Refresh">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 11a8 8 0 1 0-2.3 6"/><path d="M20 5v6h-6"/>
+        </svg>
+      </button>
     </div>
-  </nav>
 
-  <main class="content">
+    <div class="titlebar__window-controls">
+      <button class="win-btn" data-win="minimize" aria-label="Minimise">
+        <svg viewBox="0 0 10 10"><path d="M0 5h10"/></svg>
+      </button>
+      <button class="win-btn" data-win="maximize" aria-label="Maximise">
+        <svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" rx="1"/></svg>
+      </button>
+      <button class="win-btn win-btn--close" data-win="close" aria-label="Close">
+        <svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10"/></svg>
+      </button>
+    </div>
+  </header>
 
-    <!-- ── Dashboard ─────────────────────────────────────────── -->
-    <section class="view is-active" data-view="dashboard">
-      <h1 class="view-title">Dashboard</h1>
-      <div class="grid grid-3">
-        <div class="card stat">
-          <div class="stat-label">CPU</div>
-          <div class="stat-value"><span id="d-cpu">—</span><small>°C</small></div>
-          <div class="bar"><i id="d-cpu-bar"></i></div>
+  <div class="body">
+
+    <!-- ── Sidebar ────────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="sidebar-device">
+        <div class="device-sidebar__head">
+          <h2 class="device-sidebar__device-name" id="device-name">OMEN GAMING LAPTOP 16-AP0XXX</h2>
+          <span class="device-sidebar__board" id="device-board">BOARD 8D24</span>
         </div>
-        <div class="card stat">
-          <div class="stat-label">Fan 1</div>
-          <div class="stat-value"><span id="d-fan1">—</span><small>RPM</small></div>
-          <div class="bar"><i id="d-fan1-bar"></i></div>
-        </div>
-        <div class="card stat">
-          <div class="stat-label">Fan 2</div>
-          <div class="stat-value"><span id="d-fan2">—</span><small>RPM</small></div>
-          <div class="bar"><i id="d-fan2-bar"></i></div>
+        <nav class="device-list" role="tablist">
+          <button class="device-link is-active" data-view="vitals"      role="tab">System Vitals</button>
+          <button class="device-link"           data-view="performance" role="tab">Performance Control</button>
+          <button class="device-link"           data-view="fan"         role="tab">Fan Control</button>
+          <button class="device-link"           data-view="lighting"    role="tab">Lighting</button>
+        </nav>
+      </div>
+      <div class="sidebar__footer">
+        <div class="sidebar-status">
+          <span class="status-dot" id="conn-dot"></span>
+          <span id="conn-text">connecting…</span>
         </div>
       </div>
+    </aside>
 
-      <div class="grid grid-2">
-        <div class="card">
-          <h2 class="card-title">Now</h2>
-          <dl class="kv">
-            <dt>Profile</dt><dd id="d-profile">—</dd>
-            <dt>Fan mode</dt><dd id="d-mode">—</dd>
-            <dt>Target</dt><dd id="d-target">—</dd>
-            <dt>Driving sensor</dt><dd id="d-driver">—</dd>
-            <dt>Service uptime</dt><dd id="d-uptime">—</dd>
-          </dl>
-        </div>
-        <div class="card">
-          <h2 class="card-title">Temperatures</h2>
-          <div id="d-temps" class="temp-list"></div>
-        </div>
+    <!-- ── Main ───────────────────────────────────────────────── -->
+    <main class="main">
+      <div class="main-tabs" role="tablist">
+        <button class="main-tab is-active" data-view="vitals"      role="tab">System Vitals</button>
+        <button class="main-tab"           data-view="performance" role="tab">Performance Control</button>
+        <button class="main-tab"           data-view="fan"         role="tab">Fan Control</button>
+        <button class="main-tab"           data-view="lighting"    role="tab">Lighting</button>
       </div>
 
-      <div class="card notice" id="d-notice" hidden></div>
-    </section>
+      <div class="main-scroll">
 
-    <!-- ── Performance ───────────────────────────────────────── -->
-    <section class="view" data-view="performance">
-      <h1 class="view-title">Performance</h1>
-      <p class="view-lede">
-        The platform profile is driven by two handlers on this machine —
-        <code>amd-pmf</code> and <code>hp-wmi</code>. Changing it here writes
-        both.
-      </p>
-      <div class="grid grid-3" id="profile-cards"></div>
-      <div class="card">
-        <h2 class="card-title">Configuration</h2>
-        <p class="muted">
-          The fan curve lives in <code>/etc/omen/omend.toml</code>. After
-          editing it, have the service re-read it without a restart.
-        </p>
-        <button class="btn" id="btn-reload">Reload configuration</button>
+        <!-- ── System Vitals ──────────────────────────────────── -->
+        <section class="view is-active" data-view="vitals" role="tabpanel">
+          <div class="banner" id="daemon-banner" hidden></div>
+
+          <div class="vitals-grid">
+            <div class="card ring-card">
+              <div class="ring-card__head">CPU</div>
+              <div class="ring" id="ring-cpu" style="--p:0">
+                <svg viewBox="0 0 120 120" class="ring__svg">
+                  <circle class="ring__track" cx="60" cy="60" r="52"/>
+                  <circle class="ring__prog"  cx="60" cy="60" r="52"/>
+                </svg>
+                <div class="ring__label">
+                  <span class="ring__pct" id="cpu-temp">—</span>
+                  <span class="ring__sub">Package</span>
+                </div>
+              </div>
+              <div class="ring-card__foot"><span id="cpu-label">—</span></div>
+            </div>
+
+            <div class="card ring-card">
+              <div class="ring-card__head">FAN 1</div>
+              <div class="ring" id="ring-fan1" style="--p:0">
+                <svg viewBox="0 0 120 120" class="ring__svg">
+                  <circle class="ring__track" cx="60" cy="60" r="52"/>
+                  <circle class="ring__prog"  cx="60" cy="60" r="52"/>
+                </svg>
+                <div class="ring__label">
+                  <span class="ring__pct" id="fan1-rpm">—</span>
+                  <span class="ring__sub">RPM</span>
+                </div>
+              </div>
+              <div class="ring-card__foot"><span id="fan1-foot">CPU side</span></div>
+            </div>
+
+            <div class="card ring-card">
+              <div class="ring-card__head">FAN 2</div>
+              <div class="ring" id="ring-fan2" style="--p:0">
+                <svg viewBox="0 0 120 120" class="ring__svg">
+                  <circle class="ring__track" cx="60" cy="60" r="52"/>
+                  <circle class="ring__prog"  cx="60" cy="60" r="52"/>
+                </svg>
+                <div class="ring__label">
+                  <span class="ring__pct" id="fan2-rpm">—</span>
+                  <span class="ring__sub">RPM</span>
+                </div>
+              </div>
+              <div class="ring-card__foot"><span id="fan2-foot">GPU side</span></div>
+            </div>
+          </div>
+
+          <div class="panel-grid">
+            <div class="card">
+              <div class="panel-head"><h2 class="panel-head__title">System Temperature</h2></div>
+              <div id="temp-list" class="temp-list"></div>
+            </div>
+            <div class="card">
+              <div class="panel-head"><h2 class="panel-head__title">Your settings</h2></div>
+              <dl class="kv">
+                <dt>Performance profile</dt><dd id="v-profile">—</dd>
+                <dt>Fan mode</dt><dd id="v-mode">—</dd>
+                <dt>Fan target</dt><dd id="v-target">—</dd>
+                <dt>Driving sensor</dt><dd id="v-driver">—</dd>
+                <dt>Service uptime</dt><dd id="v-uptime">—</dd>
+              </dl>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Performance Control ────────────────────────────── -->
+        <section class="view" data-view="performance" role="tabpanel">
+          <div class="panel-head"><h2 class="panel-head__title">Performance mode</h2></div>
+          <div class="power-grid" id="profile-cards"></div>
+
+          <div class="card">
+            <div class="panel-head"><h2 class="panel-head__title">Configuration</h2></div>
+            <p class="hint">
+              The fan curve lives in <code>/etc/omen/omend.toml</code>. After editing
+              it, have the service re-read it without a restart.
+            </p>
+            <button class="btn" id="btn-reload">Reload configuration</button>
+          </div>
+        </section>
+
+        <!-- ── Fan Control ────────────────────────────────────── -->
+        <section class="view" data-view="fan" role="tabpanel">
+          <div class="panel-head"><h2 class="panel-head__title">Fan mode</h2></div>
+          <div class="seg-4" id="fan-modes">
+            <button data-mode="curve">Curve</button>
+            <button data-mode="auto">Auto</button>
+            <button data-mode="manual">Manual</button>
+            <button data-mode="max">Max</button>
+          </div>
+          <p class="hint" id="fan-mode-help"></p>
+
+          <div class="card" id="manual-card">
+            <div class="panel-head"><h2 class="panel-head__title">Manual target</h2></div>
+            <div class="slider-row">
+              <input type="range" id="rpm-range" min="1800" max="4800" step="100" value="2400">
+              <output id="rpm-out">2400 RPM</output>
+            </div>
+            <p class="hint">
+              Clamped to 1800–4800 RPM and rounded to 100 RPM, the EC's real
+              resolution. The critical cutout still applies in manual mode.
+            </p>
+          </div>
+
+          <div class="card">
+            <div class="panel-head"><h2 class="panel-head__title">Live</h2></div>
+            <div class="mini-grid">
+              <div><span class="mini-label">Fan 1</span><span class="mini-value" id="f-fan1">—</span></div>
+              <div><span class="mini-label">Fan 2</span><span class="mini-value" id="f-fan2">—</span></div>
+              <div><span class="mini-label">PWM</span><span class="mini-value" id="f-pwm">—</span></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Lighting ───────────────────────────────────────── -->
+        <section class="view" data-view="lighting" role="tabpanel">
+          <div class="banner" id="light-banner" hidden></div>
+
+          <div class="card">
+            <div class="panel-head"><h2 class="panel-head__title">Zones</h2></div>
+            <div class="kb-wrap">
+              <svg class="kb" viewBox="0 0 520 182" role="img" aria-label="Keyboard zones">
+                <rect class="kb-body" x="4" y="4" width="512" height="158" rx="10"/>
+                <g class="kb-zones">
+                  <rect id="z0" x="10"  y="10" width="124" height="146" rx="6"/>
+                  <rect id="z1" x="134" y="10" width="126" height="146" rx="6"/>
+                  <rect id="z2" x="260" y="10" width="126" height="146" rx="6"/>
+                  <rect id="z3" x="386" y="10" width="124" height="146" rx="6"/>
+                </g>
+                <g class="kb-keys" id="kb-keys"></g>
+                <g class="kb-labels">
+                  <text x="74"  y="176">LEFT</text>
+                  <text x="200" y="176">WASD</text>
+                  <text x="326" y="176">CENTRE</text>
+                  <text x="449" y="176">NUMPAD</text>
+                </g>
+              </svg>
+            </div>
+            <div class="zone-row" id="zone-row"></div>
+            <div class="swatch-row">
+              <span class="mini-label">All zones</span>
+              <button class="light-swatch" data-preset="#e81123" style="--c:#e81123" title="OMEN red"></button>
+              <button class="light-swatch" data-preset="#ffffff" style="--c:#ffffff" title="White"></button>
+              <button class="light-swatch" data-preset="#00e5ff" style="--c:#00e5ff" title="Cyan"></button>
+              <button class="light-swatch" data-preset="#78ff3c" style="--c:#78ff3c" title="Green"></button>
+              <button class="light-swatch" data-preset="#a855f7" style="--c:#a855f7" title="Violet"></button>
+              <label class="light-swatch light-swatch--pick" title="Custom">
+                <input type="color" id="all-color" value="#e81123">
+              </label>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="panel-head"><h2 class="panel-head__title">Brightness</h2></div>
+            <div class="slider-row">
+              <input type="range" id="bright-range" min="0" max="100" step="5" value="100">
+              <output id="bright-out">100%</output>
+            </div>
+            <p class="hint">
+              Turning the backlight <strong>on</strong> is not the driver's job:
+              writing a colour while the keyboard is dark lands in the registers
+              but shows nothing. The master switch is internal EC state — press
+              <kbd>Fn</kbd>+<kbd>F4</kbd>.
+            </p>
+          </div>
+        </section>
+
       </div>
-    </section>
 
-    <!-- ── Fan ───────────────────────────────────────────────── -->
-    <section class="view" data-view="fan">
-      <h1 class="view-title">Fan</h1>
-      <div class="card">
-        <h2 class="card-title">Mode</h2>
-        <div class="seg" id="fan-modes">
-          <button data-mode="curve">Curve</button>
-          <button data-mode="auto">Auto</button>
-          <button data-mode="manual">Manual</button>
-          <button data-mode="max">Max</button>
-        </div>
-        <p class="muted" id="fan-mode-help"></p>
-      </div>
-
-      <div class="card" id="manual-card">
-        <h2 class="card-title">Manual target</h2>
-        <div class="slider-row">
-          <input type="range" id="rpm-range" min="1800" max="4800" step="100" value="2400">
-          <output id="rpm-out">2400 RPM</output>
-        </div>
-        <p class="muted">
-          Clamped to 1800–4800 RPM, and rounded to 100 RPM — the EC's real
-          resolution. The critical cutout still applies in manual mode.
-        </p>
-      </div>
-
-      <div class="card">
-        <h2 class="card-title">Live</h2>
-        <div class="grid grid-2">
-          <div><div class="stat-label">Fan 1</div><div class="stat-value small"><span id="f-fan1">—</span><small>RPM</small></div></div>
-          <div><div class="stat-label">Fan 2</div><div class="stat-value small"><span id="f-fan2">—</span><small>RPM</small></div></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ── Lighting ──────────────────────────────────────────── -->
-    <section class="view" data-view="lighting">
-      <h1 class="view-title">Lighting</h1>
-
-      <div class="card warn" id="light-warn" hidden></div>
-
-      <div class="card">
-        <h2 class="card-title">Zones</h2>
-        <div class="kb-wrap">
-          <svg class="kb" viewBox="0 0 520 182" role="img" aria-label="Keyboard zones">
-            <rect class="kb-body" x="4" y="4" width="512" height="158" rx="10"/>
-            <g class="kb-zones">
-              <rect id="z0" x="10"  y="10" width="124" height="146" rx="6"/>
-              <rect id="z1" x="134" y="10" width="126" height="146" rx="6"/>
-              <rect id="z2" x="260" y="10" width="126" height="146" rx="6"/>
-              <rect id="z3" x="386" y="10" width="124" height="146" rx="6"/>
-            </g>
-            <g class="kb-keys">
-        <rect x="14.0" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="48.0" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="81.9" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="115.9" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="149.9" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="183.9" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="217.8" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="251.8" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="285.8" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="319.8" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="353.7" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="387.7" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="421.7" y="16.0" width="31.5" height="27" rx="3"/>
-        <rect x="455.6" y="16.0" width="50.4" height="27" rx="3"/>
-        <rect x="14.0" y="45.5" width="47.5" height="27" rx="3"/>
-        <rect x="64.0" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="98.2" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="132.4" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="166.6" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="200.8" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="235.0" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="269.2" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="303.4" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="337.6" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="371.7" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="405.9" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="440.1" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="474.3" y="45.5" width="31.7" height="27" rx="3"/>
-        <rect x="14.0" y="75.0" width="56.3" height="27" rx="3"/>
-        <rect x="72.8" y="75.0" width="32.2" height="27" rx="3"/>
-        <rect x="107.5" y="75.0" width="32.2" height="27" rx="3"/>
-        <rect x="142.2" y="75.0" width="32.2" height="27" rx="3"/>
-        <rect x="176.9" y="75.0" width="32.2" height="27" rx="3"/>
-        <rect x="211.6" y="75.0" width="32.2" height="27" rx="3"/>
-        <rect x="246.3" y="75.0" width="32.2" height="27" rx="3"/>
-        <rect x="281.0" y="75.0" width="32.2" height="27" rx="3"/>
-        <rect x="315.7" y="75.0" width="32.2" height="27" rx="3"/>
-        <rect x="350.4" y="75.0" width="32.2" height="27" rx="3"/>
-        <rect x="385.1" y="75.0" width="32.2" height="27" rx="3"/>
-        <rect x="419.8" y="75.0" width="32.2" height="27" rx="3"/>
-        <rect x="454.5" y="75.0" width="51.5" height="27" rx="3"/>
-        <rect x="14.0" y="104.5" width="73.3" height="27" rx="3"/>
-        <rect x="89.8" y="104.5" width="32.6" height="27" rx="3"/>
-        <rect x="124.9" y="104.5" width="32.6" height="27" rx="3"/>
-        <rect x="160.0" y="104.5" width="32.6" height="27" rx="3"/>
-        <rect x="195.1" y="104.5" width="32.6" height="27" rx="3"/>
-        <rect x="230.2" y="104.5" width="32.6" height="27" rx="3"/>
-        <rect x="265.3" y="104.5" width="32.6" height="27" rx="3"/>
-        <rect x="300.4" y="104.5" width="32.6" height="27" rx="3"/>
-        <rect x="335.5" y="104.5" width="32.6" height="27" rx="3"/>
-        <rect x="370.6" y="104.5" width="32.6" height="27" rx="3"/>
-        <rect x="405.7" y="104.5" width="32.6" height="27" rx="3"/>
-        <rect x="440.8" y="104.5" width="65.2" height="27" rx="3"/>
-        <rect x="14.0" y="134.0" width="43.4" height="27" rx="3"/>
-        <rect x="59.9" y="134.0" width="43.4" height="27" rx="3"/>
-        <rect x="105.7" y="134.0" width="43.4" height="27" rx="3"/>
-        <rect x="151.6" y="134.0" width="216.8" height="27" rx="3"/>
-        <rect x="370.9" y="134.0" width="43.4" height="27" rx="3"/>
-        <rect x="416.8" y="134.0" width="43.4" height="27" rx="3"/>
-        <rect x="462.6" y="134.0" width="43.4" height="27" rx="3"/>
-            </g>
-            <g class="kb-labels">
-              <text x="74"  y="166">left</text>
-              <text x="200" y="166">WASD</text>
-              <text x="326" y="166">centre</text>
-              <text x="449" y="166">numpad</text>
-            </g>
-          </svg>
-        </div>
-        <div class="zone-row" id="zone-row"></div>
-        <div class="all-row">
-          <label>All zones <input type="color" id="all-color" value="#e4002b"></label>
-          <button class="btn btn-ghost" data-preset="#e4002b">OMEN red</button>
-          <button class="btn btn-ghost" data-preset="#ffffff">White</button>
-          <button class="btn btn-ghost" data-preset="#00e5ff">Cyan</button>
-        </div>
-      </div>
-
-      <div class="card">
-        <h2 class="card-title">Brightness</h2>
-        <div class="slider-row">
-          <input type="range" id="bright-range" min="0" max="100" step="5" value="100">
-          <output id="bright-out">100%</output>
-        </div>
-        <p class="muted">
-          Turning the backlight <strong>on</strong> is not the driver's job:
-          writing a colour while the keyboard is dark lands in the registers
-          but shows nothing. The master switch is internal EC state — press
-          <kbd>Fn</kbd>+<kbd>F4</kbd>.
-        </p>
-      </div>
-    </section>
-
-  </main>
+      <footer class="main-footer"><span class="main-footer__ver">0.1.0</span></footer>
+    </main>
+  </div>
 </div>
 
-<div class="toast" id="toast" hidden></div>
+<div class="hub-toast" id="toast" hidden></div>
 <script src="app.js"></script>
 </body>
 </html>

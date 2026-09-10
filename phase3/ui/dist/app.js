@@ -1,9 +1,9 @@
 /*
  * OMEN Control - front end.
  *
- * No build step and no framework on purpose: the whole thing is a handful of
+ * No build step and no framework on purpose: the page is a handful of
  * elements refreshed on a timer, and a bundler would be more moving parts
- * than the page itself. The backend hands us the entire state in one call
+ * than the page itself. The backend returns the whole state in one call
  * (get_state), so a refresh is a single round trip.
  */
 
@@ -25,25 +25,20 @@ const mockState = {
     mode: { mode: "curve" },
     profile: "balanced",
     driver_label: "cpu/Tctl",
-    driver_temp_c: 61.4,
-    target_rpm: 1900,
-    fan1_rpm: 1902,
-    fan2_rpm: 1804,
-    pwm: 101,
+    driver_temp_c: 72.4,
+    target_rpm: 2100,
+    fan1_rpm: 2103,
+    fan2_rpm: 1908,
+    pwm: 112,
     safety_fallback: false,
     uptime_secs: 4230,
-    temps: [["cpu/Tctl", 61.4], ["igpu/edge", 48.0], ["board/temp1", 45.0]],
+    temps: [["cpu/Tctl", 72.4], ["igpu/edge", 54.0], ["board/temp1", 46.0]],
   },
   daemon_error: null,
   leds: {
     brightness: 100,
     backlight_off: false,
-    zones: [
-      { r: 228, g: 0, b: 43 },
-      { r: 228, g: 0, b: 43 },
-      { r: 228, g: 0, b: 43 },
-      { r: 228, g: 0, b: 43 },
-    ],
+    zones: Array.from({ length: 4 }, () => ({ r: 232, g: 17, b: 35 })),
   },
   leds_error: null,
   leds_writable: true,
@@ -57,7 +52,9 @@ async function mockInvoke(cmd, args) {
     case "set_mode":
       mockState.daemon.mode = args.mode;
       mockState.daemon.target_rpm =
-        args.mode.mode === "manual" ? args.mode.rpm : args.mode.mode === "curve" ? 1900 : null;
+        args.mode.mode === "manual" ? args.mode.rpm
+        : args.mode.mode === "curve" ? 2100
+        : null;
       return `mode: ${args.mode.mode}`;
     case "set_profile":
       mockState.daemon.profile = args.profile;
@@ -77,11 +74,11 @@ async function mockInvoke(cmd, args) {
   }
 }
 
-const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 const POLL_MS = 2000;
-const ZONES = ["left", "wasd", "centre", "numpad"];
+const ZONES = ["Left", "WASD", "Centre", "Numpad"];
 
 let state = null;
 /* Suppresses the poll briefly after the user acts, so a stale reading does
@@ -97,20 +94,28 @@ function toast(message, isError = false) {
   el.classList.toggle("is-error", isError);
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, isError ? 6000 : 2600);
+  toastTimer = setTimeout(() => { el.hidden = true; }, isError ? 7000 : 2600);
 }
 
 const hex = ({ r, g, b }) =>
   "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
 
-function rgb(hexStr) {
-  const n = parseInt(hexStr.slice(1), 16);
+function rgb(h) {
+  const n = parseInt(h.slice(1), 16);
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
 
-/** Maps a value onto 0-100% for the little bars. */
-const pct = (v, min, max) =>
-  Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100));
+const pct = (v, min, max) => Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100));
+
+const heat = (c) => (c >= 85 ? "is-hot" : c >= 70 ? "is-warm" : "is-cool");
+const fanHeat = (rpm) => (rpm >= 3600 ? "is-hot" : rpm >= 2400 ? "is-warm" : "is-cool");
+
+function setRing(id, percent, cls) {
+  const el = $(id);
+  el.style.setProperty("--p", percent.toFixed(1));
+  el.classList.remove("is-cool", "is-warm", "is-hot");
+  if (cls) el.classList.add(cls);
+}
 
 async function act(fn, okMessage) {
   try {
@@ -123,67 +128,67 @@ async function act(fn, okMessage) {
   }
 }
 
-/* ── window controls ─────────────────────────────────────────── */
+/* ── chrome ──────────────────────────────────────────────────── */
 
-$$(".win-btn").forEach((btn) =>
-  btn.addEventListener("click", () => {
-    const what = btn.dataset.win;
+$$(".win-btn").forEach((b) =>
+  b.addEventListener("click", () => {
+    const what = b.dataset.win;
     if (what === "minimize") appWindow.minimize();
     else if (what === "maximize") appWindow.toggleMaximize();
     else appWindow.close();
   }),
 );
 
-/* ── navigation ──────────────────────────────────────────────── */
+$("#btn-refresh").addEventListener("click", () => refresh());
 
-$$(".nav-item").forEach((item) =>
-  item.addEventListener("click", () => {
-    $$(".nav-item").forEach((n) => n.classList.remove("is-active"));
-    item.classList.add("is-active");
-    $$(".view").forEach((v) =>
-      v.classList.toggle("is-active", v.dataset.view === item.dataset.view),
-    );
-  }),
+/* The sidebar list and the tab strip select the same views, so a click on
+ * either has to move both. */
+function selectView(id) {
+  $$("[data-view]").forEach((el) => {
+    const match = el.dataset.view === id;
+    if (el.classList.contains("view")) el.classList.toggle("is-active", match);
+    else el.classList.toggle("is-active", match);
+  });
+  $(".main-scroll").scrollTop = 0;
+}
+
+$$(".device-link, .main-tab").forEach((el) =>
+  el.addEventListener("click", () => selectView(el.dataset.view)),
 );
 
-/* ── fan ─────────────────────────────────────────────────────── */
+/* ── keyboard graphic ────────────────────────────────────────── */
 
-const MODE_HELP = {
-  curve: "The curve in /etc/omen/omend.toml drives the fan. Below its lowest point control is handed back to the EC, which keeps the fans stopped at idle.",
-  auto: "Control belongs to the EC entirely. This is what the machine does out of the box.",
-  manual: "A fixed target. The critical cutout still applies — a request here does not disable thermal protection.",
-  max: "Fans at full power (WMI 0x27). The EC takes over the curve while this is on.",
-};
-
-$$("#fan-modes button").forEach((btn) =>
-  btn.addEventListener("click", () => {
-    const mode = btn.dataset.mode;
-    const payload =
-      mode === "manual"
-        ? { mode: "manual", rpm: Number($("#rpm-range").value) }
-        : { mode };
-    act(() => invoke("set_mode", { mode: payload }));
-  }),
-);
-
-$("#rpm-range").addEventListener("input", (e) => {
-  $("#rpm-out").textContent = `${e.target.value} RPM`;
-});
-
-$("#rpm-range").addEventListener("change", (e) => {
-  // Only send it if manual is the active mode; otherwise moving the slider
-  // would silently take the fan away from the curve.
-  if (state?.daemon?.mode?.mode !== "manual") return;
-  act(() =>
-    invoke("set_mode", { mode: { mode: "manual", rpm: Number(e.target.value) } }),
-  );
-});
-
-$("#btn-reload").addEventListener("click", () =>
-  act(() => invoke("reload_config")),
-);
-
-/* ── lighting ────────────────────────────────────────────────── */
+/* Generated rather than written by hand: 80-odd rects of varying width are
+ * unreadable in markup, and the row shapes are what make it read as a
+ * keyboard rather than a grid. */
+function buildKeycaps() {
+  const X0 = 14, X1 = 506, Y0 = 16, ROWH = 27, GAP = 2.5;
+  const rows = [
+    [...Array(13).fill(1), 1.6],
+    [1.5, ...Array(12).fill(1), 1.0],
+    [1.75, ...Array(11).fill(1), 1.6],
+    [2.25, ...Array(10).fill(1), 2.0],
+    [1.25, 1.25, 1.25, 6.25, 1.25, 1.25, 1.25],
+  ];
+  const ns = "http://www.w3.org/2000/svg";
+  const g = $("#kb-keys");
+  rows.forEach((widths, r) => {
+    const y = Y0 + r * (ROWH + GAP);
+    const unit = (X1 - X0 - GAP * (widths.length - 1)) / widths.reduce((a, b) => a + b, 0);
+    let x = X0;
+    widths.forEach((w) => {
+      const kw = w * unit;
+      const rect = document.createElementNS(ns, "rect");
+      rect.setAttribute("x", x.toFixed(1));
+      rect.setAttribute("y", y.toFixed(1));
+      rect.setAttribute("width", kw.toFixed(1));
+      rect.setAttribute("height", ROWH);
+      rect.setAttribute("rx", 3);
+      g.append(rect);
+      x += kw + GAP;
+    });
+  });
+}
 
 function buildZonePickers() {
   const row = $("#zone-row");
@@ -194,10 +199,9 @@ function buildZonePickers() {
     const input = document.createElement("input");
     input.type = "color";
     input.id = `zone-${i}`;
-    input.addEventListener("change", () => {
-      const c = rgb(input.value);
-      act(() => invoke("set_zone", { index: i, ...c }), null);
-    });
+    input.addEventListener("change", () =>
+      act(() => invoke("set_zone", { index: i, ...rgb(input.value) }), null),
+    );
     const label = document.createElement("label");
     label.textContent = name;
     label.htmlFor = input.id;
@@ -206,14 +210,48 @@ function buildZonePickers() {
   });
 }
 
+/* ── fan ─────────────────────────────────────────────────────── */
+
+const MODE_HELP = {
+  curve: "The curve in /etc/omen/omend.toml drives the fan. Below its lowest point control is handed back to the EC, which keeps the fans stopped at idle.",
+  auto: "Control belongs to the EC entirely. This is what the machine does out of the box.",
+  manual: "A fixed target. The critical cutout still applies — a request here does not disable thermal protection.",
+  max: "Fans at full power (WMI 0x27). The EC takes over the curve while this is on.",
+};
+
+$$("#fan-modes button").forEach((b) =>
+  b.addEventListener("click", () => {
+    const mode = b.dataset.mode;
+    const payload = mode === "manual"
+      ? { mode: "manual", rpm: Number($("#rpm-range").value) }
+      : { mode };
+    act(() => invoke("set_mode", { mode: payload }));
+  }),
+);
+
+$("#rpm-range").addEventListener("input", (e) => {
+  $("#rpm-out").textContent = `${e.target.value} RPM`;
+});
+
+$("#rpm-range").addEventListener("change", (e) => {
+  // Only send it in manual mode; otherwise dragging the slider would
+  // silently take the fan away from the curve.
+  if (state?.daemon?.mode?.mode !== "manual") return;
+  act(() => invoke("set_mode", { mode: { mode: "manual", rpm: Number(e.target.value) } }));
+});
+
+$("#btn-reload").addEventListener("click", () => act(() => invoke("reload_config")));
+
+/* ── lighting ────────────────────────────────────────────────── */
+
 $("#all-color").addEventListener("change", (e) =>
   act(() => invoke("set_all_zones", rgb(e.target.value)), null),
 );
 
-$$("[data-preset]").forEach((btn) =>
-  btn.addEventListener("click", () => {
-    $("#all-color").value = btn.dataset.preset;
-    act(() => invoke("set_all_zones", rgb(btn.dataset.preset)), null);
+$$("[data-preset]").forEach((b) =>
+  b.addEventListener("click", () => {
+    $("#all-color").value = b.dataset.preset;
+    act(() => invoke("set_all_zones", rgb(b.dataset.preset)), null);
   }),
 );
 
@@ -230,64 +268,69 @@ $("#bright-range").addEventListener("change", (e) =>
 function renderDaemon(s) {
   const dot = $("#conn-dot");
   const text = $("#conn-text");
+  const banner = $("#daemon-banner");
 
   if (!s.daemon) {
     dot.className = "status-dot is-down";
     text.textContent = "omend unreachable";
-    $("#d-notice").hidden = false;
-    $("#d-notice").innerHTML =
-      `<strong>The omend service is not reachable.</strong> ` +
-      `Fan readings and control are unavailable; lighting still works. ` +
-      `<br>${s.daemon_error ?? ""}`;
+    banner.hidden = false;
+    banner.classList.add("is-error");
+    banner.innerHTML =
+      `<strong>The omend service cannot be reached.</strong> ` +
+      `Fan readings and control are unavailable; lighting still works.` +
+      (s.daemon_hint ? `<br>${s.daemon_hint}` : "") +
+      (s.daemon_error ? `<br><code>${s.daemon_error}</code>` : "");
     return;
   }
 
   dot.className = "status-dot is-up";
   text.textContent = "omend connected";
-  $("#d-notice").hidden = true;
-
-  const d = s.daemon;
-  const cpu = d.driver_temp_c;
-
-  $("#d-cpu").textContent = cpu != null ? cpu.toFixed(1) : "—";
-  $("#d-cpu-bar").style.width = cpu != null ? `${pct(cpu, 30, 100)}%` : "0";
-  $("#d-cpu-bar").classList.toggle("is-hot", (cpu ?? 0) >= 80);
-
-  for (const [id, value] of [["fan1", d.fan1_rpm], ["fan2", d.fan2_rpm]]) {
-    const v = value ?? 0;
-    $(`#d-${id}`).textContent = v === 0 ? "0" : v;
-    $(`#d-${id}-bar`).style.width = `${pct(v, 0, 4800)}%`;
-    $(`#f-${id}`).textContent = v === 0 ? "0" : v;
-  }
-
-  $("#d-profile").textContent = d.profile ?? "—";
-  $("#d-mode").textContent = d.mode ? modeText(d.mode) : "—";
-  $("#d-target").textContent =
-    d.target_rpm != null
-      ? `${d.target_rpm} RPM`
-      : d.mode?.mode === "max"
-        ? "full power"
-        : "automatic (EC)";
-  $("#d-driver").textContent =
-    d.driver_label && d.driver_temp_c != null
-      ? `${d.driver_label} ${d.driver_temp_c.toFixed(1)} °C`
-      : "—";
-  $("#d-uptime").textContent = fmtUptime(d.uptime_secs);
-
-  if (d.safety_fallback) {
-    $("#d-notice").hidden = false;
-    $("#d-notice").innerHTML =
+  banner.classList.remove("is-error");
+  banner.hidden = !s.daemon.safety_fallback;
+  if (s.daemon.safety_fallback) {
+    banner.innerHTML =
       "<strong>The critical cutout has tripped.</strong> The curve is " +
       "suspended and the EC has control until the temperature falls back.";
   }
 
-  $("#d-temps").innerHTML = (d.temps ?? [])
-    .map(
-      ([label, c]) =>
-        `<div class="temp-row"><span>${label}</span>` +
-        `<span class="bar"><i style="width:${pct(c, 30, 100)}%"></i></span>` +
-        `<span>${c.toFixed(1)} °C</span></div>`,
-    )
+  const d = s.daemon;
+  const cpu = d.driver_temp_c;
+
+  if (cpu != null) {
+    $("#cpu-temp").textContent = `${cpu.toFixed(0)}°`;
+    setRing("#ring-cpu", pct(cpu, 30, 100), heat(cpu));
+    $("#cpu-label").textContent = d.driver_label ?? "";
+  }
+
+  for (const [key, value] of [["fan1", d.fan1_rpm], ["fan2", d.fan2_rpm]]) {
+    const v = value ?? 0;
+    $(`#${key}-rpm`).textContent = v;
+    // Coloured by how hard the fan itself is working, not by CPU temperature:
+    // a fan ring turning amber because the CPU is warm says nothing about the
+    // fan.
+    setRing(`#ring-${key}`, pct(v, 0, 4800), fanHeat(v));
+    $(`#f-${key}`).textContent = v;
+  }
+  $("#f-pwm").textContent = d.pwm != null ? `${d.pwm}/255` : "—";
+
+  $("#v-profile").textContent = d.profile ?? "—";
+  $("#v-profile").className = "is-term";
+  $("#v-mode").textContent = d.mode ? modeText(d.mode) : "—";
+  $("#v-mode").className = "is-term";
+  $("#v-target").textContent =
+    d.target_rpm != null ? `${d.target_rpm} RPM`
+    : d.mode?.mode === "max" ? "full power"
+    : "automatic (EC)";
+  $("#v-driver").textContent =
+    d.driver_label && cpu != null ? `${d.driver_label} ${cpu.toFixed(1)} °C` : "—";
+  $("#v-uptime").textContent = fmtUptime(d.uptime_secs);
+  $("#profile-quick-label").textContent = d.profile ?? "—";
+
+  $("#temp-list").innerHTML = (d.temps ?? [])
+    .map(([label, c]) =>
+      `<div class="temp-row"><span class="temp-row__name">${label}</span>` +
+      `<span class="temp-row__bar"><i class="${heat(c)}" style="width:${pct(c, 30, 100)}%"></i></span>` +
+      `<span class="temp-row__val">${c.toFixed(1)} °C</span></div>`)
     .join("");
 
   const active = d.mode?.mode ?? "curve";
@@ -295,7 +338,7 @@ function renderDaemon(s) {
     b.classList.toggle("is-active", b.dataset.mode === active),
   );
   $("#fan-mode-help").textContent = MODE_HELP[active] ?? "";
-  $("#manual-card").style.opacity = active === "manual" ? "1" : ".5";
+  $("#manual-card").style.opacity = active === "manual" ? "1" : ".55";
 
   if (active === "manual" && d.mode.rpm != null && Date.now() > holdUntil) {
     $("#rpm-range").value = d.mode.rpm;
@@ -312,60 +355,73 @@ function fmtUptime(secs) {
   return h > 0 ? `${h} h ${m} min` : `${m} min ${secs % 60} s`;
 }
 
+const PROFILE_INFO = {
+  "low-power": {
+    blurb: "Lowest power draw and the quietest fans. Best on battery.",
+    icon: "M12 3v9m0 9a8 8 0 0 1-5.7-13.7M12 21a8 8 0 0 0 5.7-13.7",
+  },
+  balanced: {
+    blurb: "The default. HPCM = 48 on the firmware side.",
+    icon: "M3 12h4l3-7 4 14 3-7h4",
+  },
+  performance: {
+    blurb: "Raises the power limit and the fan ceiling. HPCM = 49.",
+    icon: "M13 2 4 14h6l-1 8 9-12h-6l1-8Z",
+  },
+};
+
 function renderProfiles(s) {
   const box = $("#profile-cards");
   const current = s.daemon?.profile;
-  const blurb = {
-    "low-power": "Lowest power draw, quietest. Best on battery.",
-    balanced: "The default. HPCM = 48 on the firmware side.",
-    performance: "Raises the power limit. HPCM = 49.",
-  };
 
   if (box.dataset.built !== String(s.profile_choices.length)) {
     box.innerHTML = "";
     s.profile_choices.forEach((name) => {
+      const info = PROFILE_INFO[name] ?? { blurb: "", icon: "" };
       const card = document.createElement("button");
-      card.className = "profile-card";
+      card.className = "power-card";
       card.dataset.profile = name;
-      card.innerHTML = `<h3>${name.replace("-", " ")}</h3><p>${blurb[name] ?? ""}</p>`;
-      card.addEventListener("click", () =>
-        act(() => invoke("set_profile", { profile: name })),
-      );
+      card.innerHTML =
+        `<svg class="power-card__icon" viewBox="0 0 24 24"><path d="${info.icon}"/></svg>` +
+        `<h3>${name.replace("-", " ")}</h3><p>${info.blurb}</p>`;
+      card.addEventListener("click", () => act(() => invoke("set_profile", { profile: name })));
       box.append(card);
     });
     box.dataset.built = String(s.profile_choices.length);
   }
-  $$(".profile-card").forEach((c) =>
+  $$(".power-card").forEach((c) =>
     c.classList.toggle("is-active", c.dataset.profile === current),
   );
 }
 
 function renderLeds(s) {
-  const warn = $("#light-warn");
+  const banner = $("#light-banner");
 
   if (!s.leds) {
-    warn.hidden = false;
-    warn.innerHTML =
+    banner.hidden = false;
+    banner.innerHTML =
       "<strong>The RGB module is not loaded.</strong> " +
-      `Load it with <code>sudo modprobe -a led-class-multicolor wmi</code> ` +
-      `then <code>sudo insmod omen-kbd-rgb.ko</code>.<br>${s.leds_error ?? ""}`;
+      "Build it in <code>phase3/kernel/omen-kbd-rgb</code>, then " +
+      "<code>sudo modprobe -a led-class-multicolor wmi</code> and " +
+      `<code>sudo insmod omen-kbd-rgb.ko</code>.<br><code>${s.leds_error ?? ""}</code>`;
     return;
   }
 
   if (!s.leds_writable) {
-    warn.hidden = false;
-    warn.innerHTML =
+    banner.hidden = false;
+    banner.innerHTML =
       "<strong>The LED files are read-only for this user.</strong> " +
-      "Install the udev rule (packaging/99-omen-leds.rules) and join the " +
-      "<code>omen</code> group, then log out and back in.";
+      "Install the udev rule (<code>packaging/99-omen-leds.rules</code>) and " +
+      "join the <code>omen</code> group. A fresh group membership only takes " +
+      "effect in a new login session.";
   } else if (s.leds.backlight_off) {
-    warn.hidden = false;
-    warn.innerHTML =
-      "<strong>The keyboard backlight is off.</strong> Colours will still be " +
-      "written but nothing will light up. The master switch is internal EC " +
-      "state — press <kbd>Fn</kbd>+<kbd>F4</kbd>.";
+    banner.hidden = false;
+    banner.innerHTML =
+      "<strong>The keyboard backlight is off.</strong> Colours will be written " +
+      "but nothing will light up. The master switch is internal EC state — " +
+      "press <kbd>Fn</kbd>+<kbd>F4</kbd>.";
   } else {
-    warn.hidden = true;
+    banner.hidden = true;
   }
 
   s.leds.zones.forEach((c, i) => {
@@ -373,16 +429,14 @@ function renderLeds(s) {
     const swatch = $(`#zone-${i}`);
     if (swatch && Date.now() > holdUntil) swatch.value = colour;
     const zone = $(`#z${i}`);
-    if (zone) {
-      // A zone set to black is off; show the unlit plastic rather than a
-      // black rectangle that reads as "broken".
-      const lit = c.r + c.g + c.b > 0 && !s.leds.backlight_off;
-      zone.style.fill = lit ? colour : "#2a2a31";
-      // A wide glow spills onto the neighbouring zones and shifts their hue -
-      // red bleeding over cyan reads as mauve, over green as olive. Keep it
-      // tight enough to stay inside its own zone.
-      zone.style.filter = lit ? `drop-shadow(0 0 3px ${colour}55)` : "none";
-    }
+    if (!zone) return;
+    // A zone set to black is off; show unlit plastic rather than a black
+    // rectangle, which reads as "broken".
+    const lit = c.r + c.g + c.b > 0 && !s.leds.backlight_off;
+    zone.style.fill = lit ? colour : "#262626";
+    // A wide glow spills onto the neighbouring zones and shifts their hue -
+    // red bleeding over cyan reads as mauve. Keep it inside its own zone.
+    zone.style.filter = lit ? `drop-shadow(0 0 3px ${colour}55)` : "none";
   });
 
   if (s.leds.brightness != null && Date.now() > holdUntil) {
@@ -403,8 +457,7 @@ async function refresh() {
   renderLeds(state);
 }
 
+buildKeycaps();
 buildZonePickers();
 refresh();
-setInterval(() => {
-  if (Date.now() > holdUntil) refresh();
-}, POLL_MS);
+setInterval(() => { if (Date.now() > holdUntil) refresh(); }, POLL_MS);
