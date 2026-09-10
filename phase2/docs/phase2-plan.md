@@ -253,3 +253,72 @@ power management'a girmemesinden geliyor (5–10 W). Bu makinede RTX 5060 var.
 Bu proje fan/termal tarafını çözüyor; dGPU tarafı ayrı bir iş
 (`nvidia.NVreg_DynamicPowerManagement`, `udev` kuralları, PCIe runtime PM).
 Karıştırılmamalı.
+
+---
+
+## 9. Sonuç — makinede doğrulandı (2026-09-11)
+
+Ortam: CachyOS, kernel **7.2.4-1-cachyos**, board 8D24, BIOS F.11.
+
+Yama uygulandı (`victus_s_thermal_profile_boards[]` + `omen_v1_legacy_thermal_params`),
+modül out-of-tree derlenip DKMS'e alındı. Yamasız/yamalı karşılaştırma:
+
+| Ölçüm | Yamasız | Yamalı |
+|---|---|---|
+| `hwmon/pwm1` | **yok** | **var** |
+| `pwm1_enable` | var (2 = auto) | var (2 = auto) |
+| `fan1_input`, `fan2_input` | var | var |
+| profil işleyicileri | `amd-pmf` | `amd-pmf` + **`hp-wmi`** |
+| EC `0x95` (HPCM) | 0 (hiç yazılmamış) | **48** = Balanced |
+| EC `0x34`/`0x35` (SRP) | 255 (dokunulmamış) | 0 = otomatik |
+
+`dmesg`: `hp_wmi: Registered as platform profile handler`
+
+Fan davranışı (otomatik mod): 45.4°C → 0/0 RPM (fan-stop), 58.6°C → 2400/2100 RPM.
+Yani `SRP = 0` fanı kapatmıyor, kontrolü EC'ye devrediyor.
+
+**`HPCM = 48` bu fazın en önemli çıktısı.** Faz 1'de Windows'ta OGH log'undan
+yakalanan değer, Linux'ta bambaşka bir yoldan (platform_profile → WMI 0x1A → EC)
+aynı çıktı. Protokol çıkarımı bağımsız olarak doğrulanmış oldu.
+
+### Yol boyunca çıkan, planda olmayan üç şey
+
+1. **`platform_profile`'ı yamasız hâlde `amd-pmf` sağlıyordu**, `hp-wmi` değil.
+   Strix Point'in AMD PMF sürücüsü kendi işleyicisini kaydediyor. §4'teki
+   "platform_profile muhtemelen gelir (legacy yol)" beklentisi bu yüzden
+   yanıltıcıydı — profil vardı ama `hp-wmi` sürmüyordu, `HPCM` de bu yüzden 0'dı.
+   6.14+ çok-işleyici API'si sayesinde ikisi çakışmadan yan yana çalışıyor.
+
+2. **CachyOS çekirdeği clang+LLD ile derlenmiş.** Out-of-tree modül `LLVM=1`
+   olmadan derlenmiyor; kbuild clang'a özgü bayrakları gcc'ye geçirip patlıyor.
+   `build-module.sh` artık `.config`'e bakıp kendisi karar veriyor.
+
+3. **`SRP = 0` "fan kapalı" değil, "otomatiğe dön" demek** — upstream'de
+   `HP_FAN_SPEED_AUTOMATIC 0x00`. Yamasız hâldeki `0xFF` ise "hiç yazılmamış".
+
+### `hp-wmi` GUID'i sahiplenmiyor
+
+`wmi_evaluate_method(HPWMI_BIOS_GUID, ...)` ile çağrı yapıyor; WMI cihazına
+`wmi_driver` olarak bağlanmıyor, kendisi bir `platform_driver`. Yani aynı GUID'i
+başka bir modül de kullanabilir. Faz 3'te RGB modülünün `hp-wmi` ile yan yana
+çalışabilmesinin sebebi bu — `blacklist hp_wmi` gerekmiyor.
+
+### DKMS ve çekirdek yükseltmesi
+
+DKMS paketi `v7.2` etiketinden indirilmiş kaynağı taşıyor. Çekirdek 7.3'e
+geçtiğinde AUTOINSTALL bu kaynağı yeni çekirdeğe karşı derlemeye çalışır ve
+`victus_s_thermal_profile_boards[]` / `omen_v1_legacy_thermal_params` isimleri
+7.3'te değiştiği için **tutmaz**. O gün:
+
+```bash
+sudo dkms remove -m hp-wmi-8d24 -v 7.2 --all
+bash phase2/scripts/build-module.sh --install
+```
+
+Script etiketi çalışan çekirdekten türetip 7.3 biçimini kendi seçer.
+
+### Kalan iş
+
+Yama upstream'e gönderilmeli (`platform-driver-x86` + `linux-hwmon`). Gerekçe
+olarak hem Faz 1 ölçümleri hem buradaki Linux doğrulaması kullanılabilir;
+8D26 ve 8E35 kayıtları daha az dayanakla kabul edilmişti.

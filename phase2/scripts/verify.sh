@@ -50,6 +50,28 @@ else
   no "platform_profile yok"
 fi
 
+# Profilin VAR olmasi hp-wmi'nin surdugu anlamina GELMIYOR. Bu makinede
+# (Strix Point) amd-pmf de bir profil isleyicisi kaydediyor ve legacy
+# sysfs dosyasi kimin kaydettigini soylemiyor. 6.14+ cok-isleyici API'si
+# ile ayirt edilebiliyor. Ayrim onemli: profili amd-pmf suruyorsa
+# EC 0x95 (HPCM) hicbir zaman yazilmaz - adim 6'daki 0 degeri oradan gelir.
+HP_PP=0
+if [ -d /sys/class/platform-profile ]; then
+  for h in /sys/class/platform-profile/*/; do
+    [ -r "$h/name" ] || continue
+    info "isleyici : $(cat "$h/name") -> $(cat "$h/profile" 2>/dev/null)"
+    case "$(cat "$h/name")" in hp-wmi|hp_wmi) HP_PP=1 ;; esac
+  done
+  if [ "$HP_PP" = "1" ]; then
+    ok "profili hp-wmi suruyor"
+  else
+    no "profili hp-wmi SURMUYOR - beklenen durum (8D24 eslesmesi yok)"
+    info "yama sonrasi burada ikinci bir 'hp-wmi' isleyicisi gorunmeli"
+  fi
+else
+  info "/sys/class/platform-profile yok (cekirdek < 6.14) - isleyici ayirt edilemiyor"
+fi
+
 say "4. Fan / hwmon"
 FOUND=0
 for d in /sys/class/hwmon/hwmon*; do
@@ -152,13 +174,39 @@ else
     set -- $R
     F1=$(( $2 * 256 + $1 )); F2=$(( $4 * 256 + $3 ))
     printf '       0x95 HPCM (profil)  = %s   (48=Balanced, 49=Performance, 4=Unleashed)\n' "$HPCM"
-    printf '       0x34 SRP1 (fan1 hedef) = %s  -> %s RPM\n' "$S1" "$((S1*100))"
-    printf '       0x35 SRP2 (fan2 hedef) = %s  -> %s RPM\n' "$S2" "$((S2*100))"
+    # 0xFF = "manuel setpoint yok", yani fani EC'nin kendisi suruyor.
+    # 255*100 = 25500 RPM diye yazmak yaniltici olurdu.
+    for i in 1 2; do
+      eval "V=\$S$i"
+      case "$V" in
+        255) printf '       0x3%s SRP%s (fan%s hedef) = 255 -> manuel setpoint yok (EC suruyor)\n' "$((i+3))" "$i" "$i" ;;
+        *)   printf '       0x3%s SRP%s (fan%s hedef) = %s  -> %s RPM\n' "$((i+3))" "$i" "$i" "$V" "$((V*100))" ;;
+      esac
+    done
     printf '       0xB0 fan1 takometre = %s RPM\n' "$F1"
     printf '       0xB2 fan2 takometre = %s RPM\n' "$F2"
+    # Takometre caprazlamasi: EC 0xB0/0xB2 ile hwmon ayni sayiyi vermeli.
+    # Verirse EC penceresi ile Faz 1 haritasi dogrulanmis olur - HPCM'in
+    # degeri ne olursa olsun.
+    HWFAN=$(cat /sys/class/hwmon/hwmon*/fan1_input 2>/dev/null | head -1)
+    if [ -n "$HWFAN" ] && [ "$F1" -gt 0 ] && [ $((F1 > HWFAN ? F1 - HWFAN : HWFAN - F1)) -lt 150 ]; then
+      ok "EC takometresi hwmon ile tutuyor ($F1 ~ $HWFAN) - EC haritasi dogru"
+    fi
     case "$HPCM" in
       48|49|4) ok "HPCM Faz 1'de yakalanan degerlerden biri" ;;
-      *)       no "HPCM beklenmeyen deger ($HPCM) - Faz 1 haritasi gozden gecirilmeli" ;;
+      0)
+        # HPCM'i yalnizca GM1A (WMI 0x1A) yazar. Windows'ta bunu OGH yapar;
+        # Linux'ta hp-wmi profil isleyicisi yapardi - ama adim 3'te goruldugu
+        # gibi profili amd-pmf suruyor. Yani 0 = "hic yazilmamis", harita
+        # hatasi degil. Adim 3 ile birlikte okunmali.
+        if [ "${HP_PP:-0}" = "1" ]; then
+          no "HPCM 0 - profili hp-wmi suruyor ama HPCM yazilmamis, bu BEKLENMEYEN"
+        else
+          ok "HPCM 0 - beklenen: profili hp-wmi surmuyor (adim 3), 0x95 hic yazilmadi"
+          info "yama sonrasi profil degistirip burayi tekrar oku: 48/49 gormelisin"
+        fi
+        ;;
+      *) no "HPCM beklenmeyen deger ($HPCM) - Faz 1 haritasi gozden gecirilmeli" ;;
     esac
   else
     no "$EC okunamadi (debugfs mount edili mi? CONFIG_ACPI_EC_DEBUGFS?)"

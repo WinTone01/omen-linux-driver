@@ -10,7 +10,8 @@ Linux'ta karşılığını sağlamayı hedefler.
 | Faz | Kapsam | Durum |
 |---|---|---|
 | 1 | Protokol çıkarımı (Windows) | **Tamamlandı** |
-| 2 | Linux implementasyonu | Planlandı, test bekliyor |
+| 2 | `hp-wmi` 8D24 desteği | **Tamamlandı, makinede doğrulandı** |
+| 3 | Fan eğrisi + RGB + arayüz | Devam ediyor |
 
 ### Faz 1 sonucu
 
@@ -26,12 +27,25 @@ desteklediğiyle **birebir aynı**. Yeni sürücü yazmaya gerek yok; eksik olan
 
 Ayrıntı ve her bulgunun kaynağı: [`phase1/docs/phase1-findings.md`](phase1/docs/phase1-findings.md)
 
-### Faz 2 planı
+### Faz 2 sonucu
 
-`hp-wmi`'nin DMI tablosunda `8D24` yok, ama aynı model ailesinin kardeş kartları
-(`8D26`, `8E35`) 2026-06-09'da eklenmiş. Gereken **tek satırlık bir ekleme**.
+Tahmin doğrulandı: gereken tek şey `hp-wmi`'nin DMI tablosuna **tek satırlık
+bir ekleme**ydi (`8D24` → `omen_v1_legacy`). Yamalı modül 2026-09-11'de bu
+makinede derlenip çalıştırıldı:
+
+- `pwm1` açıldı → manuel fan kontrolü mümkün (yamasız hâlde yoktu)
+- `hp-wmi` platform profil işleyicisi olarak kaydoldu, `amd-pmf` ile çakışmadan
+- EC `0x95` = **48** okundu → Faz 1'in Windows ölçümü Linux'ta bağımsız doğrulandı
+- Otomatik fan eğrisi çalışıyor: 45°C'de fan-stop, 58°C'de 2400/2100 RPM
+- DKMS ile kalıcı, reboot'ta hayatta kaldı
 
 Ayrıntı: [`phase2/docs/phase2-plan.md`](phase2/docs/phase2-plan.md)
+
+### Faz 3
+
+Fan eğrisi daemon'ı, 4 bölge RGB klavye sürücüsü ve web arayüzü.
+
+Ayrıntı: [`phase3/docs/phase3-plan.md`](phase3/docs/phase3-plan.md)
 
 ## Hedef donanım
 

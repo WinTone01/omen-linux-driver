@@ -28,6 +28,28 @@ command -v curl >/dev/null || die "curl yok."
 echo "  kernel : $KVER"
 echo "  build  : $BUILD"
 
+# Cekirdek hangi derleyiciyle kuruldu? CachyOS clang+LLD kullaniyor; gcc ile
+# derlemeye kalkarsan kbuild clang'a ozgu bayraklari gcc'ye gecirir
+# (-mllvm, -mretpoline-external-thunk ...) ve derleme daha ilk dosyada patlar.
+# Modulun cekirdekle ayni derleyiciyle uretilmesi gerekiyor.
+LLVM_ARGS=()
+if grep -q '^CONFIG_CC_IS_CLANG=y' "$BUILD/.config" 2>/dev/null; then
+  command -v clang  >/dev/null || die "cekirdek clang ile derlenmis ama clang yok. 'sudo pacman -S clang lld llvm' ile kur."
+  command -v ld.lld >/dev/null || die "cekirdek LLD ile baglanmis ama ld.lld yok. 'sudo pacman -S lld' ile kur."
+  LLVM_ARGS=(LLVM=1)
+  KCC=$(sed -n 's/^CONFIG_CC_VERSION_TEXT="\(.*\)"$/\1/p' "$BUILD/.config")
+  MYCC=$(clang --version | head -1)
+  echo "  toolchain : clang (LLVM=1)"
+  echo "    cekirdek: $KCC"
+  echo "    yerel   : $MYCC"
+  # Surum uyusmazligi olumcul degil ama modul yuklenirken sorun cikarabilir.
+  KMAJ=$(printf '%s' "$KCC"  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  MMAJ=$(printf '%s' "$MYCC" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  [ "$KMAJ" = "$MMAJ" ] || echo "    UYARI: surumler farkli ($KMAJ vs $MMAJ). Derleme yine de denenecek."
+else
+  echo "  toolchain : gcc"
+fi
+
 # Calisan cekirdegin ana surumune karsilik gelen upstream etiketi.
 # 7.2.3-1-cachyos -> v7.2 ; 7.3.0-rc2 -> v7.3
 BASE=$(printf '%s' "$KVER" | sed 's/^\([0-9]\+\.[0-9]\+\).*/\1/')
@@ -61,17 +83,18 @@ say "3. 8D24 kaydi ekleniyor"
 bash "$HERE/add-8d24.sh" "$WORK/hp-wmi.c"
 
 say "4. Derleniyor"
-cat > "$WORK/Makefile" <<'MK'
+cat > "$WORK/Makefile" <<MK
 obj-m := hp-wmi.o
-KDIR  ?= /lib/modules/$(shell uname -r)/build
+KDIR  ?= /lib/modules/\$(shell uname -r)/build
+LLVM_FLAG ?= ${LLVM_ARGS[*]:-}
 
 all:
-	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
+	\$(MAKE) -C \$(KDIR) M=\$(CURDIR) \$(LLVM_FLAG) modules
 clean:
-	$(MAKE) -C $(KDIR) M=$(CURDIR) clean
+	\$(MAKE) -C \$(KDIR) M=\$(CURDIR) \$(LLVM_FLAG) clean
 MK
 
-if make -C "$BUILD" M="$WORK" modules 2>&1 | tail -25; then
+if make -C "$BUILD" M="$WORK" "${LLVM_ARGS[@]}" modules 2>&1 | tail -25; then
   [ -f "$WORK/hp-wmi.ko" ] || die "derleme bitti ama hp-wmi.ko olusmadi."
 else
   die "derleme basarisiz. Ciktiyi yukarida gor."
@@ -83,8 +106,13 @@ cat <<EOF
   Test (gecici, reboot'ta kaybolur):
 
     sudo modprobe -r hp_wmi 2>/dev/null
+    sudo modprobe sparse-keymap rfkill wmi      # insmod bagimlilik cozmez
     sudo insmod $WORK/hp-wmi.ko
     sudo bash $HERE/verify.sh
+
+  NOT: 'insmod: Unknown symbol in module' alirsan atlanan satir yukaridaki
+  modprobe'dur. insmod, modul.dep'e bakmaz; bagimliliklari elle yuklemek
+  gerekir (sparse_keymap, rfkill, wmi).
 
   Beklenen: adim 3'te platform_profile, adim 4'te hp hwmon + pwm dosyalari.
 
@@ -111,6 +139,8 @@ sudo tee "$DEST/dkms.conf" >/dev/null <<EOF
 PACKAGE_NAME="$PKG"
 PACKAGE_VERSION="$VER"
 BUILT_MODULE_NAME[0]="hp-wmi"
+_llvm=\$(grep -q '^CONFIG_CC_IS_CLANG=y' "\${kernel_source_dir}/.config" 2>/dev/null && echo LLVM=1)
+MAKE[0]="make -C \${kernel_source_dir} M=\${dkms_tree}/$PKG/$VER/build \${_llvm} modules"
 DEST_MODULE_LOCATION[0]="/updates"
 AUTOINSTALL="yes"
 EOF
