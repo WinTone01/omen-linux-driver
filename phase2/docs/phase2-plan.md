@@ -53,6 +53,31 @@ Bugünkü durum: mainline **7.3-rc2**, kararlı **7.2.4** (7.2 → 2026-08-16).
 `driver_data` tipi değişti). Yani kararlı 7.2 ile çalışılabilir; yamanın
 biçimi sadece sürüme göre farklı yazılır.
 
+### Binary üzerinde doğrulandı (2026-09-10)
+
+Hedef dağıtım **CachyOS, kernel 7.2.3-1-cachyos**. `verify.sh` bu çekirdeğin
+`hp-wmi.ko.zst` dosyasındaki DMI string'lerini çıkardı — 76 kart:
+
+```
+84DA 84DB 84DC 8572 8573 8574 8575 8600..8607 860A 8746..874A 8786..8788
+878A..878C 87B5 886B 886C 88C8 88CB 88D1 88D2 88F4..88F8 88FD..88FF
+8900 8901 8902 8912 8917 8918 8949 894A 89EB 8A15 8A25 8A42 8A44 8A4D
+8B2F 8BAB 8BAD 8BBE 8BC2 8BCA 8BCD 8BD4 8BD5 8C58 8C76 8C77 8C78 8C99
+8C9C 8D26 8D41 8D87 8E35 8E41
+```
+
+- **`8D24` yok** → yama gerekiyor (beklenen)
+- **`8D26` var** → çekirdek 16-ap0xxx ailesini tanıyor (beklenen)
+- 7.3'te bulunan `8BAA`, `8BA9`, `8BB3`, `8DD6`, `8D88` burada yok — bunlar
+  2026-07/08'de eklendi, 7.2'de olmamaları tutarlı
+
+Yani analiz artık yalnızca upstream kaynağa değil, **çalıştırılacak binary'ye**
+dayanıyor. Uygulanacak biçim: **7.2 formu**.
+
+> Kısıt: `strings` yöntemi modüldeki tüm DMI dizilerini birleştirir; bir kartın
+> hangi dizide olduğunu ayırt etmez. 8D24/8D26 sorusu için yeterli, dizi bilgisi
+> kaynaktan biliniyor.
+
 ## 2. Hangi parametre seti — gerekçelendirilmiş
 
 Upstream'de dört seçenek var. Faz 1'de yakaladığımız değerlerle karşılaştırma:
