@@ -42,8 +42,25 @@ enum lighting_query {
  */
 #define ZONE_DATA_OFFSET	0x19
 #define STATE_SIZE		128
+
+/*
+ * Donanim yuvalari fiziksel sirayla TERS: yuva 0 en SAGDAKI bolge.
+ *
+ * Makinede olculdu (2026-09-11): zone0..3'e sirayla kirmizi/yesil/mavi/sari
+ * yazildiginda klavyede soldan saga sari/mavi/yesil/kirmizi gorundu.
+ * Renkler dogruydu, yalnizca sira tersti - yani R/G/B bayt sirasi dogru,
+ * cevrilmesi gereken bolge numarasi.
+ *
+ * Kullanici zone0'in soldaki oldugunu bekler (okuma yonu, ve OMEN Gaming
+ * Hub da oyle numaraliyor). Cevrimi burada yapiyoruz ki sysfs adlari
+ * sezgisel kalsin.
+ */
+static const u8 zone_slot[] = { 3, 2, 1, 0 };
 /* LM04'teki olu atama (Local1 = 0x64) olcegin 0-100 oldugunu soyluyor. */
 #define BRIGHTNESS_MAX		100
+
+static_assert(ARRAY_SIZE(zone_slot) == ZONE_COUNT,
+	      "zone_slot ile ZONE_COUNT uyusmuyor");
 
 struct bios_args {
 	u32 signature;
@@ -210,7 +227,7 @@ static int omen_zone_set(struct led_classdev *cdev, enum led_brightness brightne
 	if (ret)
 		return ret;
 
-	slot = state + ZONE_DATA_OFFSET + index * COLORS_PER_ZONE;
+	slot = state + ZONE_DATA_OFFSET + zone_slot[index] * COLORS_PER_ZONE;
 	slot[0] = mc->subled_info[0].brightness;	/* R */
 	slot[1] = mc->subled_info[1].brightness;	/* G */
 	slot[2] = mc->subled_info[2].brightness;	/* B */
@@ -231,7 +248,8 @@ static int omen_zone_read_initial(struct omen_rgb *rgb)
 		return ret;
 
 	for (i = 0; i < ZONE_COUNT; i++) {
-		const u8 *slot = state + ZONE_DATA_OFFSET + i * COLORS_PER_ZONE;
+		const u8 *slot = state + ZONE_DATA_OFFSET +
+				 zone_slot[i] * COLORS_PER_ZONE;
 		int c;
 
 		for (c = 0; c < COLORS_PER_ZONE; c++)

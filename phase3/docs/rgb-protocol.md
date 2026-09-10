@@ -97,6 +97,23 @@ state[offset + 2] = blue
 `25` bizim DSDT'den çıkardığımız `0x19` ile birebir aynı — iki bağımsız
 kaynak aynı yeri gösteriyor.
 
+### Bölge sırası — makinede ölçüldü (2026-09-11)
+
+Bayt sırası doğrulandı ama **yuva sırası fiziksel sırayla ters çıktı.**
+Dört bölgeye sırayla kırmızı / yeşil / mavi / sarı yazıldığında klavyede
+soldan sağa **sarı / mavi / yeşil / kırmızı** göründü:
+
+| sysfs `zone` | Donanım yuvası | Veri ofseti | Fiziksel konum |
+|---|---|---|---|
+| 0 | 3 | 25 + 9 = 34 | en sol |
+| 1 | 2 | 25 + 6 = 31 | sol orta |
+| 2 | 1 | 25 + 3 = 28 | sağ orta |
+| 3 | 0 | 25 + 0 = 25 | en sağ |
+
+Renkler doğru çıktığı için R/G/B sırası kesin; çevrilmesi gereken yalnızca
+bölge numarası. Modül bu çevrimi kendi yapıyor (`zone_slot[]`), böylece
+`zone0` kullanıcının beklediği gibi soldaki bölge oluyor.
+
 Ayrıca oradan öğrenilen bir davranış: yazma **oku-değiştir-yaz** olmalı.
 Önce `0x02` ile 128 baytlık durum okunuyor, yalnızca ilgili 3 bayt
 değiştirilip `0x03` ile geri yazılıyor. 12 baytın dışındaki alanın ne
