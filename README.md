@@ -123,11 +123,26 @@ flowchart LR
 
 ## Install
 
+One line, from anywhere:
+
 ```bash
-git clone https://github.com/WinTone01/omen-linux-driver
+git clone https://github.com/WinTone01/omen-linux-driver.git && cd omen-linux-driver && ./install.sh
+```
+
+<details>
+<summary>Same thing, one step at a time</summary>
+
+<br>
+
+```bash
+git clone https://github.com/WinTone01/omen-linux-driver.git
 cd omen-linux-driver
 ./install.sh
 ```
+
+Over SSH instead: `git clone git@github.com:WinTone01/omen-linux-driver.git`
+
+</details>
 
 That is the whole thing. It identifies the machine first and refuses to go on
 if it is not an HP OMEN or Victus, checks what is missing before building
@@ -140,7 +155,7 @@ anything, and installs three pieces in the order they depend on each other:
 | `omen-control` | `omend`, `omenctl`, `omen-ui`, the unit and the udev rules |
 
 ```console
-$ ./install.sh --check          # look at the machine and stop
+$ ./install.sh --check          # nothing is installed, it just looks
 [1/2] This machine
     vendor   HP
     model    OMEN Gaming Laptop 16-ap0xxx
