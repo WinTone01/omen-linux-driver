@@ -673,6 +673,34 @@ fn graphics() -> Section {
         }
     }
 
+    // The mux is reported by omen-kbd-rgb, which asks the firmware. Its
+    // absence is not a fault: most machines do not have one, and on this one
+    // it means the module is not loaded.
+    checks.push(match crate::gpu::mux::discover() {
+        Some(mux) => Check::new(
+            "mux",
+            "Graphics switcher",
+            Verdict::Ok,
+            format!(
+                "{} (supports {})",
+                mux.current.clone().unwrap_or_else(|| "?".into()),
+                mux.supported.join(", ")
+            ),
+        ),
+        None if about::module_status("omen_kbd_rgb").loaded => Check::new(
+            "mux",
+            "Graphics switcher",
+            Verdict::Skip,
+            "this machine's firmware does not offer one",
+        ),
+        None => Check::new(
+            "mux",
+            "Graphics switcher",
+            Verdict::Skip,
+            "unknown - omen-kbd-rgb is what asks the firmware, and it is not loaded",
+        ),
+    });
+
     Section {
         title: "Graphics".into(),
         checks,

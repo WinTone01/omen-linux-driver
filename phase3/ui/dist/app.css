@@ -33,6 +33,8 @@
   --omen-red:      #e81123;
   --omen-red-dark: #a80f1a;
   --accent-teal:   #2dd4bf;
+  --accent-violet: #a855f7;
+  --accent-green:  #3ddc84;
   --accent-amber:  #f0a92a;
 
   --titlebar-h: 48px;
@@ -306,12 +308,20 @@ kbd {
 
 .vitals-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  /* Four across, as the Hub has them. They shrink rather than wrap: a
+   * vitals row that becomes a vitals column stops reading as a dashboard. */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 16px;
 }
 
-.ring-card { display: flex; flex-direction: column; align-items: center; margin-bottom: 0; padding: 18px 16px 16px; }
+.ring-card {
+  display: flex; flex-direction: column; align-items: center;
+  margin-bottom: 0; padding: 18px 16px 16px;
+  /* The temperature badge hangs off the ring, so the card is the frame it
+   * is positioned against. */
+  position: relative;
+}
 .ring-card__head {
   font-size: 11px; font-weight: 700; letter-spacing: .1em;
   color: var(--text-muted); text-transform: uppercase;
@@ -319,7 +329,7 @@ kbd {
 }
 .ring-card__foot { margin-top: 12px; font-size: 11.5px; color: var(--text-muted); }
 
-.ring { position: relative; width: 150px; height: 150px; }
+.ring { position: relative; width: 140px; height: 140px; }
 .ring__svg { width: 100%; height: 100%; transform: rotate(-90deg); }
 .ring__track { fill: none; stroke: #262626; stroke-width: 9; }
 .ring__prog {
@@ -331,9 +341,37 @@ kbd {
   stroke-dashoffset: calc(var(--ring-circ) - (var(--ring-circ) * var(--p) / 100));
   transition: stroke-dashoffset .5s var(--ease-out), stroke .3s var(--ease-out);
 }
-.ring.is-cool .ring__prog { stroke: var(--accent-teal); }
-.ring.is-warm .ring__prog { stroke: var(--accent-amber); }
-.ring.is-hot  .ring__prog { stroke: var(--omen-red); }
+/* The Hub draws the ring in violet regardless of the value and puts the
+ * colour-coding in the temperature badge instead. Utilization being amber
+ * says nothing - a busy CPU is a CPU doing its job. Heat is the thing worth
+ * colouring, and that is what the badge does. */
+.ring__prog { stroke: var(--accent-violet); }
+.ring.is-cool .ring__prog,
+.ring.is-warm .ring__prog,
+.ring.is-hot  .ring__prog { stroke: var(--accent-violet); }
+
+/* Fans are the exception: their ring IS the measurement, so it keeps the
+ * colour of how hard they are working. */
+#ring-fan1.is-cool .ring__prog { stroke: var(--accent-teal); }
+#ring-fan1.is-warm .ring__prog { stroke: var(--accent-amber); }
+#ring-fan1.is-hot  .ring__prog { stroke: var(--omen-red); }
+
+/* The badge: a circle at the bottom-left of the ring, green until it is not,
+ * exactly as the Hub does it. */
+.ring-card__badge {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-94px, 30px);
+  width: 52px; height: 52px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-variant-numeric: tabular-nums;
+  background: var(--bg-card);
+  border: 2px solid var(--accent-green);
+  color: var(--accent-green);
+}
+.ring-card__badge.is-warm { border-color: var(--accent-amber); color: var(--accent-amber); }
+.ring-card__badge.is-hot  { border-color: var(--omen-red);     color: var(--omen-red); }
+.ring-card__badge.is-cool { border-color: var(--accent-green);  color: var(--accent-green); }
 
 .ring__label {
   position: absolute; inset: 0;
@@ -342,7 +380,11 @@ kbd {
   gap: 2px;
 }
 .ring__pct { font-size: 27px; font-weight: 300; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-.ring__sub { font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .08em; }
+/* Narrow enough to clear the badge that overlaps the ring at 7 o'clock. */
+.ring__sub {
+  font-size: 9px; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: .06em; max-width: 96px; text-align: center; line-height: 1.2;
+}
 
 /* ── Lists ──────────────────────────────────────────────────── */
 
@@ -810,3 +852,71 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .hist-row__target { text-align: right; color: var(--text); }
 .hist-row.is-max .hist-row__target { color: var(--omen-red); }
 .hist-row.is-off .hist-row__target { color: var(--accent-teal); }
+
+
+/* ── storage and processes ───────────────────────────────────── */
+
+.panel-grid--wide { grid-template-columns: 1fr 1fr; }
+
+.disk-list, .proc-list { display: flex; flex-direction: column; gap: 8px; }
+
+.disk-row { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; }
+.disk-row__name { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.disk-row__bar {
+  height: 6px; border-radius: 3px; background: var(--bg-elevated);
+  overflow: hidden; display: block;
+}
+.disk-row__bar i { display: block; height: 100%; background: var(--accent-teal); }
+.disk-row__bar i.is-hot { background: var(--omen-red); }
+.disk-row__free { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.proc-row {
+  display: grid; grid-template-columns: 1fr 52px 72px; gap: 10px; align-items: baseline;
+  font-size: 11.5px;
+}
+.proc-row__name { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proc-row__cpu, .proc-row__mem {
+  text-align: right; font-family: var(--mono); font-size: 11px;
+  color: var(--text-muted); font-variant-numeric: tabular-nums;
+}
+
+/* ── performance strip ───────────────────────────────────────── */
+
+.perf-strip {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 24px; flex-wrap: wrap;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 14px 18px; margin-bottom: 16px;
+}
+.perf-strip__fan { display: flex; align-items: center; gap: 12px; }
+.perf-strip__numbers { display: flex; gap: 34px; }
+.perf-strip__numbers div { display: flex; flex-direction: column; align-items: flex-end; }
+/* Large and green, the way the Hub shows them - these are the three numbers
+ * someone opens this page to see. */
+.perf-strip__numbers b {
+  font-size: 24px; font-weight: 400; color: var(--accent-green);
+  font-variant-numeric: tabular-nums; line-height: 1.1;
+}
+.perf-strip__numbers b.is-warm { color: var(--accent-amber); }
+.perf-strip__numbers b.is-hot  { color: var(--omen-red); }
+.perf-strip__numbers span {
+  font-size: 10px; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: .06em;
+}
+
+/* The hue strip, as the Hub draws it: the choice is the colour itself, so
+ * the control shows every option at once. */
+/* The base range rule sets a flat track and a 4px height; both have to be
+ * overridden here or the gradient is a hairline nobody can aim at. */
+input[type="range"].hue-slider {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(to right,
+    #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%,
+    #0000ff 67%, #ff00ff 83%, #ff0000 100%);
+}
+input[type="range"].hue-slider::-webkit-slider-thumb {
+  width: 18px; height: 18px;
+  background: #fff;
+  border: 3px solid #141414;
+}

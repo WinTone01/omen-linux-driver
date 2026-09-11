@@ -2245,6 +2245,7 @@ dependencies = [
 name = "omen-ui"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "omen-core",
  "serde",
  "serde_json",

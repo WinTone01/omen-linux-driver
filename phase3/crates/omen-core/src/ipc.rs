@@ -149,6 +149,9 @@ pub enum Request {
     /// Run the fans at full power for a while, to clear dust, then go back
     /// to whatever was happening before.
     CleanFans { seconds: u64 },
+    /// Which GPU the panel is wired to from the next boot: hybrid, discrete
+    /// or uma. Takes effect at the next boot, not now.
+    SetGpuMux { mode: String },
     /// Re-read the config from disk.
     Reload,
 }
@@ -241,6 +244,9 @@ pub struct Snapshot {
     /// running rather than from the file it hopes is being used.
     #[serde(default)]
     pub curve: Option<CurveSpec>,
+    /// The graphics mux, on a machine that has one.
+    #[serde(default)]
+    pub mux: Option<crate::gpu::mux::Mux>,
     /// Discrete GPU runtime power state, when there is a dGPU.
     #[serde(default)]
     pub gpu: Option<crate::gpu::GpuPower>,

@@ -46,6 +46,7 @@ const mockState = {
       address: "0000:04:00.0", control: "auto", status: "active",
       suspended_ms: 0, holders: [{ pid: 1688, name: "quickshell" }],
     },
+    mux: { supported: ["uma", "hybrid", "discrete"], current: "hybrid" },
   },
   daemon_error: null,
   leds: {
@@ -104,6 +105,19 @@ async function mockInvoke(cmd, args) {
         { uptime_secs: 96, label: "cpu/Tctl", temp_c: 58.1, target_rpm: 1800, reason: "cpu/Tctl 58.1C" },
         { uptime_secs: 240, label: "dgpu/ec", temp_c: 74.0, target_rpm: 2400, reason: "dgpu/ec 74.0C" },
       ];
+    case "system_info":
+      return {
+        cpu_percent: 13, mem_used_gb: 15.6, mem_total_gb: 31.9, mem_percent: 49,
+        disks: [
+          { mount: "/", free_gb: 56.9, total_gb: 476.2, used_percent: 88 },
+          { mount: "/home", free_gb: 170.2, total_gb: 931.5, used_percent: 82 },
+        ],
+        processes: [
+          { pid: 1, name: "Century-Win64-Shipping", cpu_percent: 7, mem_mb: 1808 },
+          { pid: 2, name: "steamwebhelper", cpu_percent: 2, mem_mb: 385 },
+          { pid: 3, name: "chrome", cpu_percent: 1, mem_mb: 66 },
+        ],
+      };
     case "diagnose":
       return {
         sections: [
@@ -150,6 +164,9 @@ async function mockInvoke(cmd, args) {
       };
     case "diagnostics":
       return "omen-control 0.1.0\nboard        8D24\n(mock)\n";
+    case "set_gpu_mux":
+      mockState.daemon.mux.current = args.mode;
+      return `graphics set to ${args.mode}; it takes effect after a reboot`;
     case "set_dgpu_power":
       mockState.daemon.gpu.control = args.power;
       return args.power === "auto"
@@ -516,23 +533,40 @@ function renderDaemon(s) {
   const d = s.daemon;
   const cpu = d.driver_temp_c;
 
-  if (cpu != null) {
-    $("#cpu-temp").textContent = `${cpu.toFixed(0)}°`;
-    setRing("#ring-cpu", pct(cpu, 30, 100), heat(cpu));
-    $("#cpu-label").textContent = d.driver_label ?? "";
+  // The Hub puts utilization in the ring and temperature in a badge below
+  // it. We follow that where we have both: the CPU has a real load figure,
+  // the GPU does not (NVIDIA exposes utilization only through NVML), so its
+  // ring shows temperature and says so.
+  const cpuTemp = namedTemp(d, "cpu") ?? cpu;
+  if (cpuTemp != null) setBadge("#cpu-badge", cpuTemp);
+  $("#cpu-label").textContent = d.driver_label ?? "";
+
+  const gpuTemp = namedTemp(d, "dgpu") ?? namedTemp(d, "igpu");
+  if (gpuTemp != null) {
+    $("#gpu-temp").textContent = `${gpuTemp.toFixed(0)}°`;
+    setRing("#ring-gpu", pct(gpuTemp, 30, 100), heat(gpuTemp));
+    setBadge("#gpu-badge", gpuTemp);
+    $("#gpu-label").textContent = d.temps?.find(([l]) => l.startsWith("dgpu"))
+      ? "discrete" : "integrated";
   }
 
   for (const [key, value] of [["fan1", d.fan1_rpm], ["fan2", d.fan2_rpm]]) {
     // Rounded on the way out: an RPM is a whole number to a reader, and a
     // stray float renders as a wall of decimals.
     const v = Math.round(value ?? 0);
-    $(`#${key}-rpm`).textContent = v;
+    const out = $(`#${key}-rpm`);
+    if (out) out.textContent = v;
     // Coloured by how hard the fan itself is working, not by CPU temperature:
     // a fan ring turning amber because the CPU is warm says nothing about the
     // fan.
-    setRing(`#ring-${key}`, pct(v, 0, 4800), fanHeat(v));
-    $(`#f-${key}`).textContent = v;
+    if ($(`#ring-${key}`)) setRing(`#ring-${key}`, pct(v, 0, 4800), fanHeat(v));
+    const live = $(`#f-${key}`);
+    if (live) live.textContent = v;
   }
+  // The second fan has no ring of its own on this page - the Hub has four
+  // cards, not five - so it is named in the foot of the first.
+  $("#fan1-foot").textContent = `${t("CPU side")} ${Math.round(d.fan1_rpm ?? 0)}`;
+  $("#fan2-foot").textContent = `${t("GPU side")} ${Math.round(d.fan2_rpm ?? 0)}`;
   $("#f-pwm").textContent = d.pwm != null ? `${d.pwm}/255` : "—";
 
   $("#v-profile").textContent = d.profile ?? "—";
@@ -1897,6 +1931,254 @@ function renderExtras(s) {
   }
 }
 
+/* ── the Hub's non-thermal vitals ────────────────────────────────
+ *
+ * CPU load, memory, disks and the busiest processes. Read straight from /proc
+ * in the Rust side; none of it goes near the daemon, because none of it is
+ * hardware-specific and none of it needs privileges.
+ */
+
+function namedTemp(daemon, prefix) {
+  const hit = (daemon?.temps ?? []).find(([label]) => label.startsWith(prefix));
+  return hit ? hit[1] : null;
+}
+
+/* The green circle the Hub hangs off the bottom-left of each ring. */
+function setBadge(id, celsius) {
+  setBadgeText(id, `${celsius.toFixed(0)}°C`, heat(celsius));
+}
+
+function setBadgeText(id, text, cls) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = `ring-card__badge ${cls ?? ""}`;
+  el.hidden = false;
+}
+
+async function renderSystem() {
+  let info;
+  try {
+    info = await invoke("system_info");
+  } catch {
+    return;
+  }
+
+  if (info.cpu_percent != null) {
+    $("#cpu-util").textContent = `${Math.round(info.cpu_percent)}%`;
+    setRing("#ring-cpu", info.cpu_percent, loadHeat(info.cpu_percent));
+    const strip = $("#perf-cpu-util");
+    if (strip) strip.textContent = `${Math.round(info.cpu_percent)}%`;
+  }
+
+  $("#ram-pct").textContent = `${Math.round(info.mem_percent)}%`;
+  setRing("#ring-ram", info.mem_percent, loadHeat(info.mem_percent));
+  $("#ram-foot").textContent =
+    `${info.mem_used_gb.toFixed(1)}GB / ${info.mem_total_gb.toFixed(1)}GB`;
+
+  const disks = $("#disk-list");
+  disks.replaceChildren();
+  for (const disk of info.disks) {
+    const row = document.createElement("div");
+    row.className = "disk-row";
+
+    const name = document.createElement("span");
+    name.className = "disk-row__name";
+    name.textContent = disk.mount;
+
+    const bar = document.createElement("span");
+    bar.className = "disk-row__bar";
+    const fill = document.createElement("i");
+    fill.className = disk.used_percent > 90 ? "is-hot" : "is-cool";
+    fill.style.width = `${disk.used_percent.toFixed(0)}%`;
+    bar.append(fill);
+
+    const free = document.createElement("span");
+    free.className = "disk-row__free";
+    free.textContent =
+      `${disk.free_gb.toFixed(1)} GB ${t("free of")} ${disk.total_gb.toFixed(1)} GB`;
+
+    row.append(name, bar, free);
+    disks.append(row);
+  }
+
+  const procs = $("#proc-list");
+  procs.replaceChildren();
+  for (const proc of info.processes) {
+    const row = document.createElement("div");
+    row.className = "proc-row";
+
+    const name = document.createElement("span");
+    name.className = "proc-row__name";
+    name.textContent = proc.name;
+    name.title = `pid ${proc.pid}`;
+
+    const cpuCell = document.createElement("span");
+    cpuCell.className = "proc-row__cpu";
+    cpuCell.textContent = `${proc.cpu_percent.toFixed(0)}%`;
+
+    const memCell = document.createElement("span");
+    memCell.className = "proc-row__mem";
+    memCell.textContent = proc.mem_mb >= 1024
+      ? `${(proc.mem_mb / 1024).toFixed(1)} GB`
+      : `${Math.round(proc.mem_mb)} MB`;
+
+    row.append(name, cpuCell, memCell);
+    procs.append(row);
+  }
+}
+
+const loadHeat = (p) => (p >= 85 ? "is-hot" : p >= 50 ? "is-warm" : "is-cool");
+
+/* ── graphics switcher ───────────────────────────────────────────
+ *
+ * This board does have a mux, which took some finding: in hybrid mode the
+ * panel is wired to the integrated GPU and the NVIDIA card enumerates only
+ * HDMI, which looks exactly like a machine with no mux. The firmware knows -
+ * its system design data declares UMA, hybrid and discrete - and the kernel
+ * module asks it.
+ *
+ * Switching is a firmware setting that takes effect during the next POST, so
+ * the card says so rather than pretending something changed.
+ */
+
+const MUX_INFO = {
+  hybrid: {
+    title: "Hybrid",
+    blurb: "The screen runs off the integrated GPU and the discrete one sleeps until something asks for it. Longer battery, quieter.",
+    icon: "M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm0 4a6 6 0 0 1 0 12Z",
+  },
+  discrete: {
+    title: "Discrete",
+    blurb: "The screen is driven by the NVIDIA GPU directly. Faster in games, and it never sleeps.",
+    icon: "M4 6h16v12H4Zm3 3h10v6H7Z",
+  },
+  uma: {
+    title: "Integrated only",
+    blurb: "The discrete GPU is switched off entirely. The longest battery life, and no NVIDIA acceleration at all.",
+    icon: "M6 6h12v12H6Zm3 3h6v6H9Z",
+  },
+};
+
+function renderMux(s) {
+  const card = $("#mux-card");
+  if (!card) return;
+  const mux = s.daemon?.mux ?? null;
+  card.hidden = !mux;
+  if (!mux) return;
+
+  const box = $("#mux-cards");
+  const key = mux.supported.join(",");
+  if (box.dataset.built !== key) {
+    box.dataset.built = key;
+    box.replaceChildren();
+    for (const mode of mux.supported) {
+      const info = MUX_INFO[mode] ?? { title: mode, blurb: "", icon: "" };
+      const el = document.createElement("button");
+      el.className = "power-card";
+      el.dataset.mux = mode;
+      el.innerHTML =
+        `<svg class="power-card__icon" viewBox="0 0 24 24"><path d="${info.icon}"/></svg>` +
+        `<h3>${t(info.title)}</h3><p>${t(info.blurb)}</p>`;
+      el.addEventListener("click", () => act(() => invoke("set_gpu_mux", { mode })));
+      box.append(el);
+    }
+  }
+
+  $$("#mux-cards .power-card").forEach((c) =>
+    c.classList.toggle("is-active", c.dataset.mux === mux.current));
+  $("#mux-note").textContent = mux.current
+    ? `${t("now")}: ${mux.current}`
+    : "";
+}
+
+/* The three numbers the Hub puts under the mode cards, and the fan switch
+ * next to them. */
+function renderPerfStrip(s) {
+  const d = s.daemon;
+  const cpu = namedTemp(d, "cpu") ?? d?.driver_temp_c ?? null;
+  const gpu = namedTemp(d, "dgpu") ?? namedTemp(d, "igpu");
+
+  const put = (id, value, suffix, cls) => {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = value == null ? "—" : `${Math.round(value)}${suffix}`;
+    el.className = value == null ? "" : cls ?? "";
+  };
+  put("#perf-cpu-temp", cpu, "°C", cpu != null ? heat(cpu) : "");
+  put("#perf-gpu-temp", gpu, "°C", gpu != null ? heat(gpu) : "");
+
+  const mode = d?.mode?.mode ?? "curve";
+  $$("#perf-fan button").forEach((b) =>
+    b.classList.toggle("is-active", b.dataset.mode === mode));
+}
+
+function bindPerfStrip() {
+  $$("#perf-fan button").forEach((b) =>
+    b.addEventListener("click", () =>
+      act(() => invoke("set_mode", { mode: { mode: b.dataset.mode } }))));
+}
+
+/* ── the Hub's lighting basics ───────────────────────────────────
+ *
+ * A hue strip and a Static/Off switch, which is what the Hub's basic view
+ * offers. Hue rather than a colour picker because that is the control people
+ * reach for; the swatches and the per-zone pickers are still below.
+ */
+
+function hueToRgb(hue) {
+  const h = ((hue % 360) + 360) % 360 / 60;
+  const sector = Math.floor(h);
+  const f = h - sector;
+  const up = Math.round(f * 255);
+  const down = 255 - up;
+  switch (sector) {
+    case 0: return { r: 255, g: up, b: 0 };
+    case 1: return { r: down, g: 255, b: 0 };
+    case 2: return { r: 0, g: 255, b: up };
+    case 3: return { r: 0, g: down, b: 255 };
+    case 4: return { r: up, g: 0, b: 255 };
+    default: return { r: 255, g: 0, b: down };
+  }
+}
+
+function bindLightBasics() {
+  // While dragging, only the preview moves; the keyboard is written when the
+  // slider is released. Every intermediate value would be four WMI calls.
+  $("#hue-range").addEventListener("input", (e) => {
+    const c = hueToRgb(Number(e.target.value));
+    for (let i = 0; i < ZONES.length; i++) {
+      const zone = $(`#z${i}`);
+      if (zone) zone.style.fill = hex(c);
+    }
+    holdUntil = Date.now() + 1200;
+  });
+  $("#hue-range").addEventListener("change", (e) =>
+    act(() => invoke("set_all_zones", hueToRgb(Number(e.target.value))), null));
+
+  $$("#light-mode button").forEach((b) =>
+    b.addEventListener("click", () => {
+      const on = b.dataset.light === "static";
+      act(async () => {
+        // "Off" is the backlight switch, not black zones: writing black
+        // would lose the colours and still leave the keyboard technically on.
+        if (!on) return invoke("set_brightness", { value: 0 });
+        await invoke("set_effect", {
+          effect: "none",
+          speed: 5,
+          color: state?.leds?.zones?.[1] ?? { r: 232, g: 17, b: 35 },
+        });
+        return invoke("set_brightness", { value: 100 });
+      }, null);
+    }));
+}
+
+function renderLightMode(s) {
+  const off = !!s.leds?.backlight_off || (s.leds?.brightness ?? 0) === 0;
+  $$("#light-mode button").forEach((b) =>
+    b.classList.toggle("is-active", (b.dataset.light === "off") === off));
+}
+
 async function refresh() {
   try {
     state = await invoke("get_state");
@@ -1910,12 +2192,16 @@ async function refresh() {
   renderGraphics(state);
   renderPowerRules(state);
   renderExtras(state);
+  renderSystem();
+  renderMux(state);
+  renderPerfStrip(state);
   if ($('.view[data-view="fan"]')?.classList.contains("is-active")) refreshHistory();
   renderStartupProfile(state);
   renderTrayDependent(state);
   maybeAlert(state);
   renderLeds(state);
   renderEffect(state);
+  renderLightMode(state);
 
   const d = state.daemon;
   pushHistory(d?.driver_temp_c, d?.fan1_rpm);
@@ -1941,6 +2227,8 @@ bindDiagnosis();
 bindPowerRules();
 bindHistory();
 bindExtras();
+bindPerfStrip();
+bindLightBasics();
 loadSettings();
 renderVersions();
 refresh();

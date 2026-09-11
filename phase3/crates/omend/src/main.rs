@@ -1119,6 +1119,7 @@ impl Runtime {
             lighting_restore: self.cfg.lighting.restore_on_start,
             lighting_off_on_battery: self.cfg.lighting.off_on_battery,
             effect: Some(self.cfg.lighting.spec()),
+            mux: omen_core::gpu::mux::discover(),
             gpu: self.gpu.get(),
             uptime_secs: self.started.elapsed().as_secs(),
         }

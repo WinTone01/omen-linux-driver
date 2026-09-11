@@ -238,3 +238,76 @@ impl Default for Watch {
         Self::new()
     }
 }
+
+/// The graphics mux.
+///
+/// This board has one, which took some finding. The runtime view does not
+/// show it: in hybrid mode the panel is wired to the integrated GPU and the
+/// NVIDIA card enumerates only HDMI, which is indistinguishable from a
+/// machine with no mux at all. The answer is in the firmware's own system
+/// design data - the DSDT's GM28 method computes byte 7 as
+/// BIT(0)|BIT(1)|BIT(2), meaning UMA, hybrid and discrete are all supported.
+///
+/// The kernel side is in omen-kbd-rgb, which asks the firmware and exposes
+/// it. Switching takes effect at the next boot: the firmware re-wires the
+/// panel during POST.
+pub mod mux {
+    use std::path::{Path, PathBuf};
+
+    use serde::{Deserialize, Serialize};
+
+    const DIR: &str = "/sys/devices/platform/omen-kbd-rgb";
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Mux {
+        /// What the firmware says it can do: "hybrid", "discrete", "uma".
+        pub supported: Vec<String>,
+        /// What it is set to now.
+        pub current: Option<String>,
+    }
+
+    fn path(file: &str) -> PathBuf {
+        Path::new(DIR).join(file)
+    }
+
+    fn read(file: &str) -> Option<String> {
+        std::fs::read_to_string(path(file))
+            .ok()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// `None` when this machine has no mux, or the module that reports it is
+    /// not loaded.
+    pub fn discover() -> Option<Mux> {
+        let supported: Vec<String> = read("gpu_mux_supported")?
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        if supported.is_empty() {
+            return None;
+        }
+        Some(Mux {
+            current: read("gpu_mux_mode"),
+            supported,
+        })
+    }
+
+    /// Asks the firmware to use `mode` from the next boot. Root only.
+    ///
+    /// Checked against the supported list first, rather than letting the
+    /// write fail: the kernel refuses an unsupported mode too, but the error
+    /// a user sees should say what the machine can actually do.
+    pub fn set(mode: &str) -> crate::error::Result<()> {
+        let mux = discover()
+            .ok_or_else(|| crate::Error::Curve("this machine has no graphics mux".into()))?;
+        if !mux.supported.iter().any(|m| m == mode) {
+            return Err(crate::Error::Curve(format!(
+                "{mode:?} is not supported; this machine offers {}",
+                mux.supported.join(", ")
+            )));
+        }
+        let file = path("gpu_mux_mode");
+        std::fs::write(&file, mode).map_err(|source| crate::Error::Write { path: file, source })
+    }
+}

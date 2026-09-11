@@ -17,6 +17,7 @@
 
 mod fwupd;
 mod settings;
+mod sysinfo;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -483,6 +484,21 @@ async fn diagnose_text() -> String {
         .unwrap_or_default()
 }
 
+/// CPU, memory, disks and the busiest processes - the parts of the Hub's
+/// System Vitals page that are not thermal.
+#[tauri::command]
+fn system_info() -> sysinfo::SysInfo {
+    sysinfo::read()
+}
+
+/// Which GPU drives the screen from the next boot. Goes through the daemon:
+/// the attribute is root-owned, and a change that only shows up after a
+/// reboot should be announced by the thing that knows that.
+#[tauri::command]
+fn set_gpu_mux(mode: String) -> Result<String, String> {
+    talk(Request::SetGpuMux { mode })
+}
+
 /// Whether the discrete GPU may suspend when idle. Not a graphics switch -
 /// this board has no mux.
 #[tauri::command]
@@ -694,6 +710,8 @@ fn main() {
             set_effect,
             set_app_profiles,
             set_dgpu_power,
+            set_gpu_mux,
+            system_info,
             set_startup_profile,
             set_power_rules,
             firmware,

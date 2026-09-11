@@ -93,6 +93,22 @@
 
           <div class="vitals-grid">
             <div class="card ring-card">
+              <div class="ring-card__head">GPU</div>
+              <div class="ring" id="ring-gpu" style="--p:0">
+                <svg viewBox="0 0 120 120" class="ring__svg">
+                  <circle class="ring__track" cx="60" cy="60" r="52"/>
+                  <circle class="ring__prog"  cx="60" cy="60" r="52"/>
+                </svg>
+                <div class="ring__label">
+                  <span class="ring__pct" id="gpu-temp">—</span>
+                  <span class="ring__sub">GPU Temperature</span>
+                </div>
+              </div>
+              <div class="ring-card__badge" id="gpu-badge" hidden></div>
+              <div class="ring-card__foot"><span id="gpu-label">—</span></div>
+            </div>
+
+            <div class="card ring-card">
               <div class="ring-card__head">CPU</div>
               <div class="ring" id="ring-cpu" style="--p:0">
                 <svg viewBox="0 0 120 120" class="ring__svg">
@@ -100,15 +116,31 @@
                   <circle class="ring__prog"  cx="60" cy="60" r="52"/>
                 </svg>
                 <div class="ring__label">
-                  <span class="ring__pct" id="cpu-temp">—</span>
-                  <span class="ring__sub">Package</span>
+                  <span class="ring__pct" id="cpu-util">—</span>
+                  <span class="ring__sub">CPU Utilization</span>
                 </div>
               </div>
+              <div class="ring-card__badge" id="cpu-badge" hidden></div>
               <div class="ring-card__foot"><span id="cpu-label">—</span></div>
             </div>
 
             <div class="card ring-card">
-              <div class="ring-card__head">FAN 1</div>
+              <div class="ring-card__head">RAM</div>
+              <div class="ring" id="ring-ram" style="--p:0">
+                <svg viewBox="0 0 120 120" class="ring__svg">
+                  <circle class="ring__track" cx="60" cy="60" r="52"/>
+                  <circle class="ring__prog"  cx="60" cy="60" r="52"/>
+                </svg>
+                <div class="ring__label">
+                  <span class="ring__pct" id="ram-pct">—</span>
+                  <span class="ring__sub">RAM Utilization</span>
+                </div>
+              </div>
+              <div class="ring-card__foot"><span id="ram-foot">—</span></div>
+            </div>
+
+            <div class="card ring-card">
+              <div class="ring-card__head">FANS</div>
               <div class="ring" id="ring-fan1" style="--p:0">
                 <svg viewBox="0 0 120 120" class="ring__svg">
                   <circle class="ring__track" cx="60" cy="60" r="52"/>
@@ -119,22 +151,18 @@
                   <span class="ring__sub">RPM</span>
                 </div>
               </div>
-              <div class="ring-card__foot"><span id="fan1-foot">CPU side</span></div>
+              <div class="ring-card__foot"><span id="fan1-foot">CPU side</span> · <span id="fan2-foot">GPU side</span></div>
             </div>
+          </div>
 
-            <div class="card ring-card">
-              <div class="ring-card__head">FAN 2</div>
-              <div class="ring" id="ring-fan2" style="--p:0">
-                <svg viewBox="0 0 120 120" class="ring__svg">
-                  <circle class="ring__track" cx="60" cy="60" r="52"/>
-                  <circle class="ring__prog"  cx="60" cy="60" r="52"/>
-                </svg>
-                <div class="ring__label">
-                  <span class="ring__pct" id="fan2-rpm">—</span>
-                  <span class="ring__sub">RPM</span>
-                </div>
-              </div>
-              <div class="ring-card__foot"><span id="fan2-foot">GPU side</span></div>
+          <div class="panel-grid panel-grid--wide">
+            <div class="card">
+              <div class="panel-head"><h2 class="panel-head__title">Storage</h2></div>
+              <div id="disk-list" class="disk-list"></div>
+            </div>
+            <div class="card">
+              <div class="panel-head"><h2 class="panel-head__title">Processes</h2></div>
+              <div id="proc-list" class="proc-list"></div>
             </div>
           </div>
 
@@ -189,6 +217,21 @@
           </p>
           <div class="power-grid" id="profile-cards"></div>
 
+          <div class="perf-strip">
+            <div class="perf-strip__fan">
+              <span class="mini-label">Fan Speed</span>
+              <div class="seg-4 seg-4--two" id="perf-fan">
+                <button data-mode="curve">Auto</button>
+                <button data-mode="max">Max</button>
+              </div>
+            </div>
+            <div class="perf-strip__numbers">
+              <div><b id="perf-cpu-temp">—</b><span>CPU Temperature</span></div>
+              <div><b id="perf-gpu-temp">—</b><span>GPU Temperature</span></div>
+              <div><b id="perf-cpu-util">—</b><span>CPU Utilization</span></div>
+            </div>
+          </div>
+
           <div class="card">
             <div class="panel-head">
               <h2 class="panel-head__title">Power source</h2>
@@ -211,6 +254,21 @@
                 <select id="power-bat-fan"></select>
               </dd>
             </dl>
+          </div>
+
+          <div class="card" id="mux-card" hidden>
+            <div class="panel-head">
+              <h2 class="panel-head__title">Graphics Switcher</h2>
+              <span class="panel-head__note" id="mux-note"></span>
+            </div>
+            <div class="power-grid" id="mux-cards"></div>
+            <p class="hint">
+              Changing this re-wires the screen during the next boot — nothing
+              happens until you restart. Hybrid keeps the discrete GPU asleep
+              until something asks for it; Discrete drives the panel from it
+              directly, which is faster in games and costs battery everywhere
+              else.
+            </p>
           </div>
 
           <div class="card" id="gfx-card">
@@ -372,7 +430,13 @@
           <div class="banner" id="light-banner" hidden></div>
 
           <div class="card">
-            <div class="panel-head"><h2 class="panel-head__title">Zones</h2></div>
+            <div class="panel-head">
+              <h2 class="panel-head__title">Zones</h2>
+              <div class="seg-4 seg-4--two" id="light-mode">
+                <button data-light="static">Static</button>
+                <button data-light="off">Off</button>
+              </div>
+            </div>
             <div class="kb-wrap">
               <svg class="kb" viewBox="0 0 520 182" role="img" aria-label="Keyboard zones">
                 <rect class="kb-body" x="4" y="4" width="512" height="158" rx="10"/>
@@ -392,6 +456,10 @@
               </svg>
             </div>
             <div class="zone-row" id="zone-row"></div>
+            <div class="slider-row">
+              <span class="mini-label">Hue</span>
+              <input type="range" id="hue-range" class="hue-slider" min="0" max="360" step="1" value="0">
+            </div>
             <div class="swatch-row">
               <span class="mini-label">All zones</span>
               <button class="light-swatch" data-preset="#e81123" style="--c:#e81123" title="OMEN red"></button>

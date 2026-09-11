@@ -418,6 +418,23 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             }
         }
 
+        Request::SetGpuMux { mode } => {
+            // Written by the daemon because the attribute is root-owned, and
+            // because this is the kind of change that should go through the
+            // thing that can also say what it means.
+            match omen_core::gpu::mux::set(&mode) {
+                Ok(()) => {
+                    info!("graphics mux -> {mode} (at the next boot)");
+                    Response::Done {
+                        message: format!("graphics set to {mode}; it takes effect after a reboot"),
+                    }
+                }
+                Err(e) => Response::Error {
+                    message: e.to_string(),
+                },
+            }
+        }
+
         Request::Reload => {
             shared.request_reload();
             Response::Done {

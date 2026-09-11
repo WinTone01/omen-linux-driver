@@ -53,6 +53,8 @@ USAGE:
                                    curve / max / auto / an RPM number
     omenctl app remove <PROCESS>   Drop one
 
+    omenctl gpu mux [MODE]         Which GPU drives the screen from the next
+                                   boot: hybrid / discrete / uma
     omenctl gpu [auto|on]          Discrete GPU: may it suspend when idle?
                                    Without an argument, shows what is holding
                                    it awake. This board has no mux, so there
@@ -534,6 +536,24 @@ fn power_rules(args: &[String]) -> Result<()> {
 }
 
 fn gpu_power(args: &[String]) -> Result<()> {
+    if args.get(1).map(String::as_str) == Some("mux") {
+        let snap = app_snapshot()?;
+        let Some(mux) = snap.mux.clone() else {
+            bail!(
+                "no graphics mux was found. Either this machine has none, or \
+                 omen-kbd-rgb is not loaded - it is the thing that asks the firmware."
+            );
+        };
+        let Some(mode) = args.get(2) else {
+            field("current", mux.current.clone().unwrap_or_else(|| "?".into()));
+            field("supported", mux.supported.join(" "));
+            println!("\n  Switching takes effect at the next boot: the firmware re-wires");
+            println!("  the panel during POST, nothing changes while the machine is up.");
+            return Ok(());
+        };
+        return client::report(client::send(&Request::SetGpuMux { mode: mode.clone() })?);
+    }
+
     match args.get(1) {
         None => {
             print_gpu(app_snapshot().ok().and_then(|s| s.gpu.clone()));

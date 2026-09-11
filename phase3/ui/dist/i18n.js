@@ -317,3 +317,39 @@ Object.assign(I18N.tr, {
   "The LED class does not survive a reboot — the keyboard comes up in whatever the firmware left — so the colours have to be written again by something. The service remembers them while no effect is running.":
     "LED sınıfı yeniden başlatmayı atlatmıyor — klavye, firmware ne bıraktıysa onunla açılıyor — dolayısıyla renkleri birinin yeniden yazması gerekiyor. Servis, hiçbir efekt çalışmazken onları hatırlıyor.",
 });
+
+/* Strings added with the Hub-style vitals page, the graphics switcher and the
+ * lighting basics. */
+Object.assign(I18N.tr, {
+  "GPU Temperature": "GPU Sıcaklığı",
+  "CPU Utilization": "CPU Kullanımı",
+  "RAM Utilization": "RAM Kullanımı",
+  "Storage": "Depolama",
+  "Processes": "Süreçler",
+  "free of": "boş /",
+  "CPU side": "CPU tarafı",
+  "GPU side": "GPU tarafı",
+  "integrated": "tümleşik",
+  "discrete": "ayrık",
+  "Fan Speed": "Fan hızı",
+  "Auto": "Otomatik",
+  "CPU Temperature": "CPU Sıcaklığı",
+
+  "Graphics Switcher": "Ekran kartı anahtarı",
+  "now": "şimdi",
+  "Hybrid": "Hibrit",
+  "Discrete": "Ayrık",
+  "Integrated Only": "Yalnızca tümleşik",
+  "The screen runs off the integrated GPU and the discrete one sleeps until something asks for it. Longer battery, quieter.":
+    "Ekran tümleşik GPU'dan çalışır, ayrık olan biri isteyene kadar uyur. Daha uzun pil, daha sessiz.",
+  "The screen is driven by the NVIDIA GPU directly. Faster in games, and it never sleeps.":
+    "Ekranı doğrudan NVIDIA GPU sürer. Oyunlarda daha hızlı, ve hiç uyumaz.",
+  "The discrete GPU is switched off entirely. The longest battery life, and no NVIDIA acceleration at all.":
+    "Ayrık GPU tamamen kapatılır. En uzun pil ömrü, ve hiç NVIDIA hızlandırma yok.",
+  "Changing this re-wires the screen during the next boot — nothing happens until you restart. Hybrid keeps the discrete GPU asleep until something asks for it; Discrete drives the panel from it directly, which is faster in games and costs battery everywhere else.":
+    "Bunu değiştirmek ekranı bir sonraki açılışta yeniden bağlar — yeniden başlatana kadar hiçbir şey olmaz. Hibrit, ayrık GPU'yu biri isteyene kadar uykuda tutar; Ayrık ise paneli doğrudan ondan sürer, ki bu oyunlarda daha hızlı ve diğer her yerde pilden yer.",
+
+  "Hue": "Renk tonu",
+  "Static": "Sabit",
+  "Off": "Kapalı",
+});

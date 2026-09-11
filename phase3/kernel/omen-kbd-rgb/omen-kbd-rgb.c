@@ -28,6 +28,59 @@
 #define HPWMI_SIGNATURE		0x55434553	/* "SECU" */
 #define HPWMI_LIGHTING		0x00020009
 
+/*
+ * The graphics mux.
+ *
+ * Three command groups are involved, which is why the helper takes the group
+ * rather than assuming lighting:
+ *
+ *   0x00020008 / 0x28  - system design data. 64 bytes; byte 7 is a bitmask of
+ *                        the mux modes this machine supports. On 8D24 the
+ *                        firmware computes it as BIT(0)|BIT(1)|BIT(2) - UMA,
+ *                        hybrid and discrete - which is visible in the DSDT's
+ *                        GM28 method, so the answer is known before asking.
+ *   0x00000001 / 0x52  - read the current mode (BIOS read, GDSS).
+ *   0x00000002 / 0x52  - set it (BIOS write, SDSS). The firmware re-wires the
+ *                        panel at the next boot; nothing changes until then.
+ */
+#define HPWMI_GAMING		0x00020008
+#define HPWMI_BIOS_READ		0x00000001
+#define HPWMI_BIOS_WRITE	0x00000002
+#define OMEN_DESIGN_DATA	0x28
+#define OMEN_GRAPHICS_MUX	0x52
+#define DESIGN_DATA_LEN		64
+#define DESIGN_MUX_BYTE		7
+
+/*
+ * Mode numbering as the firmware uses it, and as OMEN Gaming Hub writes it.
+ * The bit in the supported mask and the value written are different things:
+ * the mask is a bitmask, the value is this index.
+ */
+enum omen_mux_mode {
+	OMEN_MUX_HYBRID		= 0,
+	OMEN_MUX_DISCRETE	= 1,
+	OMEN_MUX_OPTIMUS	= 2,
+	OMEN_MUX_UMA		= 3,
+};
+
+static const char * const omen_mux_names[] = {
+	[OMEN_MUX_HYBRID]	= "hybrid",
+	[OMEN_MUX_DISCRETE]	= "discrete",
+	[OMEN_MUX_OPTIMUS]	= "optimus",
+	[OMEN_MUX_UMA]		= "uma",
+};
+
+/* Which bit of the supported mask belongs to each mode above. */
+static const u8 omen_mux_bit[] = {
+	[OMEN_MUX_HYBRID]	= BIT(1),
+	[OMEN_MUX_DISCRETE]	= BIT(2),
+	[OMEN_MUX_OPTIMUS]	= BIT(3),
+	[OMEN_MUX_UMA]		= BIT(0),
+};
+
+/* Set at probe. Zero means no mux, and the attributes are not created. */
+static u8 omen_mux_supported;
+
 enum lighting_query {
 	LIGHTING_COLOR_GET	= 0x02,	/* LM02 */
 	LIGHTING_COLOR_SET	= 0x03,	/* LM03 */
@@ -130,7 +183,8 @@ static int encode_outsize_for_pvsz(int outsize)
 	return 1;
 }
 
-static int omen_wmi_query(int query, void *buffer, int insize, int outsize)
+static int omen_wmi_call(u32 command, int query, void *buffer, int insize,
+			 int outsize)
 {
 	struct acpi_buffer input, output = { ACPI_ALLOCATE_BUFFER, NULL };
 	struct bios_return *bios_return;
@@ -155,7 +209,7 @@ static int omen_wmi_query(int query, void *buffer, int insize, int outsize)
 	input.pointer = args;
 
 	args->signature = HPWMI_SIGNATURE;
-	args->command = HPWMI_LIGHTING;
+	args->command = command;
 	args->commandtype = query;
 	args->datasize = insize;
 	if (insize)
@@ -206,6 +260,12 @@ out_free:
 	kfree(obj);
 	kfree(args);
 	return ret;
+}
+
+/* The lighting group, which is what most of this module uses. */
+static int omen_wmi_query(int query, void *buffer, int insize, int outsize)
+{
+	return omen_wmi_call(HPWMI_LIGHTING, query, buffer, insize, outsize);
 }
 
 /* Defined below, next to the zone handling it belongs to; brightness needs it
@@ -446,12 +506,148 @@ static ssize_t backlight_active_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(backlight_active);
 
+/* --- graphics mux --- */
+
+/*
+ * Which modes this machine's firmware says it supports.
+ *
+ * Asked once, at probe. It cannot change while the machine is running - it
+ * describes how the panel is wired - and the query is not free.
+ */
+static u8 omen_mux_read_supported(void)
+{
+	u8 buffer[DESIGN_DATA_LEN] = {};
+	int ret;
+
+	ret = omen_wmi_call(HPWMI_GAMING, OMEN_DESIGN_DATA, buffer, 0,
+			    sizeof(buffer));
+	if (ret) {
+		pr_debug("system design data unavailable (%d)\n", ret);
+		return 0;
+	}
+	return buffer[DESIGN_MUX_BYTE];
+}
+
+static int omen_mux_get(u8 *mode)
+{
+	u8 buffer[4] = {};
+	int ret;
+
+	ret = omen_wmi_call(HPWMI_BIOS_READ, OMEN_GRAPHICS_MUX, buffer,
+			    sizeof(buffer), sizeof(buffer));
+	if (ret)
+		return ret;
+
+	/* The top bit is a BIOS status flag rather than part of the mode. */
+	*mode = buffer[0] & GENMASK(6, 0);
+	return 0;
+}
+
+static int omen_mux_set(u8 mode)
+{
+	u8 buffer[4] = { mode, 0, 0, 0 };
+
+	return omen_wmi_call(HPWMI_BIOS_WRITE, OMEN_GRAPHICS_MUX, buffer,
+			     sizeof(buffer), sizeof(buffer));
+}
+
+static ssize_t gpu_mux_supported_show(struct device *dev,
+				      struct device_attribute *attr, char *buf)
+{
+	int i, n = 0;
+
+	for (i = 0; i < ARRAY_SIZE(omen_mux_names); i++) {
+		if (omen_mux_supported & omen_mux_bit[i])
+			n += sysfs_emit_at(buf, n, "%s%s", n ? " " : "",
+					   omen_mux_names[i]);
+	}
+	return n + sysfs_emit_at(buf, n, "\n");
+}
+static DEVICE_ATTR_RO(gpu_mux_supported);
+
+/*
+ * The mode in force, and the one to use from the next boot.
+ *
+ * Reading gives what the firmware currently has. Writing asks it to change,
+ * which takes effect at the next boot: the panel is re-wired by the firmware
+ * during POST, not by this driver. Nothing about the running system changes
+ * when this is written, which is worth knowing before concluding it did
+ * nothing.
+ */
+static ssize_t gpu_mux_mode_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	u8 mode;
+	int ret;
+
+	ret = omen_mux_get(&mode);
+	if (ret)
+		return ret < 0 ? ret : -EIO;
+
+	if (mode < ARRAY_SIZE(omen_mux_names) && omen_mux_names[mode])
+		return sysfs_emit(buf, "%s\n", omen_mux_names[mode]);
+	/* A mode we have no name for is still worth reporting as a number
+	 * rather than as an error - it is what the firmware said. */
+	return sysfs_emit(buf, "%u\n", mode);
+}
+
+static ssize_t gpu_mux_mode_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	int mode, ret;
+
+	mode = sysfs_match_string(omen_mux_names, buf);
+	if (mode < 0)
+		return mode;
+
+	/*
+	 * Refused rather than attempted when the firmware did not declare it.
+	 * Sending a mux command to a machine that has no mux is how other
+	 * drivers have produced ACPI faults, and there is nothing to gain by
+	 * finding out the hard way.
+	 */
+	if (!(omen_mux_supported & omen_mux_bit[mode]))
+		return -EOPNOTSUPP;
+
+	ret = omen_mux_set(mode);
+	if (ret)
+		return ret < 0 ? ret : -EIO;
+
+	dev_info(dev, "graphics mux set to %s; it takes effect at the next boot\n",
+		 omen_mux_names[mode]);
+	return count;
+}
+static DEVICE_ATTR_RW(gpu_mux_mode);
+
 static struct attribute *omen_rgb_attrs[] = {
 	&dev_attr_lighting_regs.attr,
 	&dev_attr_backlight_active.attr,
+	&dev_attr_gpu_mux_mode.attr,
+	&dev_attr_gpu_mux_supported.attr,
 	NULL,
 };
-ATTRIBUTE_GROUPS(omen_rgb);
+
+/* The mux attributes exist only on a machine that has one. */
+static umode_t omen_rgb_attr_visible(struct kobject *kobj,
+				     struct attribute *attr, int n)
+{
+	if (attr == &dev_attr_gpu_mux_mode.attr ||
+	    attr == &dev_attr_gpu_mux_supported.attr)
+		return omen_mux_supported ? attr->mode : 0;
+
+	return attr->mode;
+}
+
+static const struct attribute_group omen_rgb_group = {
+	.attrs		= omen_rgb_attrs,
+	.is_visible	= omen_rgb_attr_visible,
+};
+
+static const struct attribute_group *omen_rgb_groups[] = {
+	&omen_rgb_group,
+	NULL,
+};
 
 static int omen_rgb_probe(struct platform_device *pdev)
 {
@@ -586,6 +782,18 @@ static int __init omen_rgb_init(void)
 		pr_info("the lighting command group is unsupported (%d)\n", ret);
 		return -ENODEV;
 	}
+
+	/*
+	 * Asked before the device is created, because whether the mux
+	 * attributes exist is decided when its attribute group is added.
+	 */
+	omen_mux_supported = omen_mux_read_supported();
+	if (omen_mux_supported)
+		pr_info("graphics mux: %s%s%s%s\n",
+			omen_mux_supported & BIT(0) ? "uma " : "",
+			omen_mux_supported & BIT(1) ? "hybrid " : "",
+			omen_mux_supported & BIT(2) ? "discrete " : "",
+			omen_mux_supported & BIT(3) ? "optimus" : "");
 
 	omen_rgb_device = platform_create_bundle(&omen_rgb_driver,
 						 omen_rgb_probe, NULL, 0,
