@@ -15,6 +15,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod fwupd;
 mod settings;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -344,6 +345,28 @@ fn set_effect(effect: String, speed: u8, color: omen_core::leds::Rgb) -> Result<
 /// Per-application profiles. The list is replaced wholesale rather than
 /// patched, because its order is meaningful - the first running entry wins -
 /// and an add/remove API would have to invent a way to express that anyway.
+/// What fwupd can see, and what it has an update for. Never flashes anything
+/// - see the note at the top of fwupd.rs.
+#[tauri::command]
+async fn firmware() -> fwupd::Firmware {
+    // On a worker thread: the scan spawns fwupdmgr twice and the first call
+    // after boot starts the fwupd daemon, which is seconds, not milliseconds.
+    tauri::async_runtime::spawn_blocking(fwupd::scan)
+        .await
+        .unwrap_or_else(|e| fwupd::Firmware {
+            available: false,
+            error: Some(e.to_string()),
+            ..Default::default()
+        })
+}
+
+#[tauri::command]
+async fn firmware_refresh() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(fwupd::refresh)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// A machine setting, not a window one: it changes what happens at the next
 /// boot, for everyone.
 #[tauri::command]
@@ -610,6 +633,8 @@ fn main() {
             set_app_profiles,
             set_dgpu_power,
             set_startup_profile,
+            firmware,
+            firmware_refresh,
             get_settings,
             set_settings,
             versions,

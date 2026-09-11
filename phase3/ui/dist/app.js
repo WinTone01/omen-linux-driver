@@ -87,6 +87,20 @@ async function mockInvoke(cmd, args) {
       mockState.daemon.startup_profile = args.profile;
       return args.profile ? `${args.profile} will be selected at startup`
                           : "the startup profile will be left to the firmware";
+    case "firmware":
+      return {
+        available: true, error: null, updates: true,
+        devices: [
+          { name: "System Firmware", version: "F.09", update: "F.12",
+            updatable: true, needs_reboot: true },
+          { name: "MZVL81T0HFLB-00BH1", version: "HPS1NKXF", update: null,
+            updatable: true, needs_reboot: false },
+          { name: "TPM", version: "10.6.0.4", update: null,
+            updatable: false, needs_reboot: false },
+        ],
+      };
+    case "firmware_refresh":
+      return "metadata refreshed";
     case "get_settings":
       return structuredClone(mockSettings);
     case "set_settings":
@@ -213,6 +227,8 @@ $("#btn-refresh").addEventListener("click", () => refresh());
 
 /* The sidebar list and the tab strip select the same views, so a click on
  * either has to move both. */
+const LAST_VIEW_KEY = "omen.view";
+
 function selectView(id) {
   $$("[data-view]").forEach((el) => {
     const match = el.dataset.view === id;
@@ -220,11 +236,29 @@ function selectView(id) {
     else el.classList.toggle("is-active", match);
   });
   $(".main-scroll").scrollTop = 0;
+  // Remembered per machine, not in the settings file: which tab you had open
+  // is a property of this window on this screen, not something to sync or
+  // back up. localStorage can be unavailable, and a lost tab is not worth an
+  // error.
+  try {
+    localStorage.setItem(LAST_VIEW_KEY, id);
+  } catch {
+    /* not important enough to report */
+  }
 }
 
 $$(".device-link, .main-tab").forEach((el) =>
   el.addEventListener("click", () => selectView(el.dataset.view)),
 );
+
+/* Reopen where it was left. Verified against the markup rather than trusted:
+ * a stored name from an older version may no longer be a tab. */
+try {
+  const last = localStorage.getItem(LAST_VIEW_KEY);
+  if (last && $(`.main-tab[data-view="${last}"]`)) selectView(last);
+} catch {
+  /* first run, or storage is off */
+}
 
 /* ── keyboard graphic ────────────────────────────────────────── */
 
@@ -1400,6 +1434,110 @@ function bindSettings() {
   });
 }
 
+/* ── firmware ────────────────────────────────────────────────────
+ *
+ * Reports, never flashes. See the note at the top of fwupd.rs for why that
+ * line is where it is.
+ *
+ * The scan is not part of the poll: it spawns fwupdmgr twice and the first
+ * call after boot starts the fwupd daemon. It runs when this tab is first
+ * opened, and whenever it is asked for.
+ */
+
+let firmwareScanned = false;
+
+async function scanFirmware(force) {
+  if (firmwareScanned && !force) return;
+  firmwareScanned = true;
+
+  const list = $("#fw-list");
+  $("#fw-note").textContent = "scanning…";
+  list.replaceChildren();
+
+  let fw;
+  try {
+    fw = await invoke("firmware");
+  } catch (e) {
+    $("#fw-note").textContent = String(e);
+    return;
+  }
+
+  if (!fw.available) {
+    $("#fw-note").textContent = "";
+    const row = document.createElement("p");
+    row.className = "hint";
+    row.textContent =
+      fw.error ?? "fwupd is not available on this machine.";
+    list.append(row);
+    $("#fw-apply").hidden = true;
+    return;
+  }
+
+  for (const dev of fw.devices) {
+    const row = document.createElement("div");
+    row.className = "fw-row" + (dev.update ? " has-update" : "");
+
+    const name = document.createElement("span");
+    name.className = "fw-row__name";
+    name.textContent = dev.name;
+    row.append(name);
+
+    if (dev.needs_reboot && dev.update) {
+      const flag = document.createElement("span");
+      flag.className = "fw-row__flag";
+      flag.textContent = "needs reboot";
+      row.append(flag);
+    }
+
+    const ver = document.createElement("span");
+    ver.className = "fw-row__ver";
+    ver.textContent = dev.version ?? "—";
+    row.append(ver);
+
+    if (dev.update) {
+      const arrow = document.createElement("span");
+      arrow.className = "fw-row__new";
+      arrow.textContent = `→ ${dev.update}`;
+      row.append(arrow);
+    }
+    list.append(row);
+  }
+
+  const waiting = fw.devices.filter((d) => d.update).length;
+  $("#fw-note").textContent = waiting
+    ? `${waiting} update${waiting > 1 ? "s" : ""} waiting`
+    : `${fw.devices.length} devices, nothing waiting`;
+  $("#fw-apply").hidden = !waiting;
+}
+
+function bindFirmware() {
+  $("#btn-fw-scan").addEventListener("click", () => scanFirmware(true));
+
+  $("#btn-fw-refresh").addEventListener("click", async () => {
+    $("#fw-note").textContent = "asking LVFS…";
+    try {
+      await invoke("firmware_refresh");
+      toast("update metadata refreshed");
+    } catch (e) {
+      toast(String(e), true);
+    }
+    await scanFirmware(true);
+  });
+
+  $("#btn-fw-copy").addEventListener("click", () =>
+    copyText($("#fw-command").textContent, "command"));
+
+  // Scanned when the Settings tab is opened rather than at startup: there is
+  // no reason to start the fwupd daemon for someone who only wanted to look
+  // at a fan curve. The window can also REOPEN on this tab, which is not a
+  // click, so that case is covered too.
+  $$('[data-view="settings"]').forEach((tab) =>
+    tab.addEventListener("click", () => scanFirmware(false)));
+  if ($('.view[data-view="settings"]')?.classList.contains("is-active")) {
+    scanFirmware(false);
+  }
+}
+
 async function refresh() {
   try {
     state = await invoke("get_state");
@@ -1436,6 +1574,7 @@ bindCurveEditor();
 bindApps();
 bindGraphics();
 bindSettings();
+bindFirmware();
 loadSettings();
 renderVersions();
 refresh();

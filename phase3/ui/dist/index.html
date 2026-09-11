@@ -456,6 +456,32 @@
           </div>
 
           <div class="card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Firmware</h2>
+              <span class="panel-head__note" id="fw-note"></span>
+            </div>
+            <p class="hint">
+              What <code>fwupd</code> can see on this machine, and what it has a
+              newer version for. Nothing here flashes anything: firmware is the
+              one thing that cannot be undone from a shell, and the checks that
+              make flashing safe — mains power, battery level, the right reboot
+              method — belong to <code>fwupdmgr</code>, which already does them.
+            </p>
+            <div class="btn-row">
+              <button class="btn" id="btn-fw-scan">Scan</button>
+              <button class="btn" id="btn-fw-refresh">Check online</button>
+            </div>
+            <div id="fw-list" class="fw-list"></div>
+            <div id="fw-apply" hidden>
+              <p class="hint">To install what is waiting, in a terminal:</p>
+              <div class="copy-row">
+                <code id="fw-command">fwupdmgr update</code>
+                <button class="btn btn--sm" id="btn-fw-copy">Copy</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
             <div class="panel-head"><h2 class="panel-head__title">Diagnostics</h2></div>
             <p class="hint">
               The state of the machine, the daemon and the modules as one block of

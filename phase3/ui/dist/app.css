@@ -11,6 +11,13 @@
  */
 
 :root {
+  /* WebKitGTK draws form controls with the SYSTEM theme unless it is told
+   * what kind of surface it is drawing on. Without this a <select> comes up
+   * as a white box with white text on a light desktop theme - which is what
+   * it did. It also darkens the option popup, which CSS cannot reach at all
+   * because the platform draws it. */
+  color-scheme: dark;
+
   --bg-app:      #0a0a0a;
   --bg-sidebar:  #121212;
   --bg-card:     #181818;
@@ -630,13 +637,6 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 
 /* ── settings ────────────────────────────────────────────────── */
 
-.kv--tight select {
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-md); color: var(--text);
-  font: inherit; font-size: 12px; padding: 5px 8px;
-}
-.kv--tight select:focus { outline: 1px solid var(--omen-red); }
-
 /* A checkbox that reads as a switch. The input stays in the DOM and keeps
  * its keyboard behaviour; only its appearance is replaced. */
 .switch { display: inline-flex; cursor: pointer; }
@@ -665,3 +665,70 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
   white-space: pre;
 }
 .ver-stale { color: var(--omen-red); }
+
+
+/* ── form controls ───────────────────────────────────────────────
+ *
+ * One rule for every control in the app. They were styled twice before, in
+ * the two places that happened to need one, and both relied on the engine
+ * drawing a select the way it draws a div - which WebKitGTK does not. The
+ * native appearance has to be turned off explicitly, and then the arrow is
+ * ours to draw: an inline SVG as a data URI, which the CSP allows under
+ * img-src.
+ */
+
+.field, .app-add input, .app-add select, .kv select {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  min-height: 30px;
+}
+
+.app-add select, .kv select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23c8c8c8' stroke-width='1.5' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  cursor: pointer;
+}
+
+/* The popup itself is drawn by the platform; color-scheme on :root is what
+ * makes it dark. These keep the entries readable where the engine does
+ * honour them. */
+.app-add select option, .kv select option {
+  background: var(--bg-card);
+  color: var(--text);
+}
+
+.app-add input:focus, .app-add select:focus, .kv select:focus {
+  outline: 1px solid var(--omen-red);
+  outline-offset: -1px;
+}
+.app-add select:hover, .kv select:hover { border-color: var(--text-muted); }
+
+.app-add input::placeholder { color: var(--text-muted); }
+
+/* A disabled control should look unavailable rather than merely quiet. */
+.app-add select:disabled, .kv select:disabled { opacity: .5; cursor: default; }
+
+/* ── firmware ────────────────────────────────────────────────── */
+
+.fw-list { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; }
+.fw-list:empty { display: none; }
+
+.fw-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 7px 10px; border-radius: var(--radius-md);
+  background: var(--bg-elevated); border: 1px solid var(--border);
+}
+.fw-row.has-update { border-color: var(--omen-red); }
+.fw-row__name { font-size: 12px; }
+.fw-row__ver { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.fw-row__new { font-family: var(--mono); font-size: 11px; color: var(--omen-red); }
+.fw-row__flag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
