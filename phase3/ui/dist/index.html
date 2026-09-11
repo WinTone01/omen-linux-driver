@@ -175,6 +175,13 @@
         <!-- ── Performance Control ────────────────────────────── -->
         <section class="view" data-view="performance" role="tabpanel">
           <div class="panel-head"><h2 class="panel-head__title">Performance mode</h2></div>
+          <p class="hint hint--lede">
+            Two handlers act on this machine. <code>amd-pmf</code> sets the CPU's
+            energy preference and its frequency ceiling; <code>hp-wmi</code>
+            writes the firmware's own thermal profile, which is what the EC uses
+            to decide how hard to work the fans. Changing it here drives both, and
+            the desktop's power widget picks the change up within a few seconds.
+          </p>
           <div class="power-grid" id="profile-cards"></div>
 
           <div class="card">

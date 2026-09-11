@@ -390,17 +390,25 @@ function fmtUptime(secs) {
   return h > 0 ? `${h} h ${m} min` : `${m} min ${secs % 60} s`;
 }
 
+/* Measured on this machine, on battery, in both orders and with enough
+ * settling time - a first attempt with two seconds produced "balanced is the
+ * same as low-power", which is wrong. */
 const PROFILE_INFO = {
   "low-power": {
-    blurb: "Lowest power draw and the quietest fans. Best on battery.",
+    blurb:
+      "Caps the CPU at 2.0 GHz. A real limit rather than a preference, for " +
+      "stretching the battery.",
     icon: "M12 3v9m0 9a8 8 0 0 1-5.7-13.7M12 21a8 8 0 0 0 5.7-13.7",
   },
   balanced: {
-    blurb: "The default. HPCM = 48 on the firmware side.",
+    blurb:
+      "Full 5.09 GHz boost, but reluctant about it. Firmware profile 0x30.",
     icon: "M3 12h4l3-7 4 14 3-7h4",
   },
   performance: {
-    blurb: "Raises the power limit and the fan ceiling. HPCM = 49.",
+    blurb:
+      "Same 5.09 GHz ceiling, reached sooner and held longer. Firmware " +
+      "profile 0x31.",
     icon: "M13 2 4 14h6l-1 8 9-12h-6l1-8Z",
   },
 };

@@ -549,3 +549,7 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
   color: var(--text-muted);
   font-family: var(--mono);
 }
+
+/* The explanation above the profile cards, which needs more room than a
+ * footnote under a control. */
+.hint--lede { margin: 0 0 16px; max-width: 78ch; }
