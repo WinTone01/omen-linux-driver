@@ -227,11 +227,12 @@ Zones are numbered left to right: `zone0` leftmost, `zone1` WASD, `zone2`
 centre-right, `zone3` numpad. The hardware slots are **not** in that order; the
 module translates — see the protocol document.
 
-> **Turning the backlight on is not the driver's job.** Writing `LRGB`/`LBRT`
-> does **not** switch the lighting on. The colours land in the registers and
-> read back correctly, but if the keyboard is dark it stays dark. The master
-> switch is internal EC state, driven by **`Fn+F4`**. If you write a colour and
-> see nothing, press that first.
+> **The backlight switch is on/off, and the level is the driver's.** `LM04`/
+> `LM05` look like a 0-100 brightness in the DSDT but are a switch taking two
+> magic values, `0xE4` on and `0x64` off. Writing a level there sends `0x64`
+> for "100" — the off value — which is why setting full brightness used to
+> switch the keyboard off. Every level in between is produced by scaling the
+> colours. See [`docs/rgb-protocol.md`](docs/rgb-protocol.md) §2 and §6.
 
 The module uses only the lighting command group (`0x020009`), so it runs
 alongside `hp-wmi` — no `blacklist hp_wmi` needed. Protocol:

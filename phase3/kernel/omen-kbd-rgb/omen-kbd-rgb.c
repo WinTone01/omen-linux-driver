@@ -43,8 +43,24 @@ enum lighting_query {
  */
 #define ZONE_DATA_OFFSET	0x19
 #define STATE_SIZE		128
-/* The dead assignment in LM04 (Local1 = 0x64) says the scale is 0-100. */
+/* Software brightness, applied by scaling the colours. */
 #define BRIGHTNESS_MAX		100
+
+/*
+ * LM04/LM05 are an on/off switch, not a level.
+ *
+ * The dead assignment in LM04 (Local1 = 0x64) made it look like a 0-100
+ * scale, and writing a level there is what kept switching the keyboard off:
+ * "brightness 100" sent 0x64, which is the OFF value. Every mysterious
+ * blackout today came from that.
+ *
+ * The two magic values are from hp-omen-extra.c in the omen-space project,
+ * which had this right; they also explain the earlier measurements, where
+ * LM04 returned 0x64 with the keyboard dark and the raw register read 0xE4
+ * while it was lit.
+ */
+#define LIGHTING_ON		0xE4
+#define LIGHTING_OFF		0x64
 
 /*
  * sysfs zone number -> hardware slot.
@@ -210,34 +226,46 @@ static int omen_write_zones(struct omen_rgb *rgb, u8 global);
  * same conclusion from the other direction: its brightness_get returns its own
  * variable and never asks the hardware.
  */
-static u8 omen_bl_read_hw(void)
+static bool omen_backlight_is_on(void)
 {
-	u8 buf[4] = { 0 };
+	u32 data = 0;
 
-	if (omen_wmi_query(LIGHTING_BRIGHT_GET, buf, 0, sizeof(buf)))
-		return BRIGHTNESS_MAX;
-	return min_t(u8, buf[0], BRIGHTNESS_MAX);
+	if (omen_wmi_query(LIGHTING_BRIGHT_GET, &data, sizeof(data),
+			   sizeof(data)))
+		return false;
+	return data == LIGHTING_ON;
+}
+
+static int omen_backlight_set(bool on)
+{
+	u32 data = on ? LIGHTING_ON : LIGHTING_OFF;
+
+	return omen_wmi_query(LIGHTING_BRIGHT_SET, &data, sizeof(data), 0);
 }
 
 static int omen_bl_set(struct led_classdev *cdev, enum led_brightness value)
 {
 	struct omen_rgb *rgb = dev_get_drvdata(cdev->dev->parent);
 	u8 level = min_t(unsigned int, value, BRIGHTNESS_MAX);
+
 	int ret;
 
 	guard(mutex)(&rgb->lock);
 
 	/*
-	 * LBRT is written even though it does not dim anything here: it is the
-	 * firmware's own field, OMEN Gaming Hub sets it, and keeping it in step
-	 * costs one call. The dimming that the user actually sees comes from
-	 * the rescale below.
+	 * Two separate things, which is what took so long to see: the hardware
+	 * switch is on/off only, and the level is ours to apply by scaling the
+	 * colours. So 0 means switch the backlight off, and anything else means
+	 * switch it on and scale to taste.
 	 */
-	ret = omen_wmi_query(LIGHTING_BRIGHT_SET, &level, sizeof(level), 0);
+	ret = omen_backlight_set(level > 0);
 	if (ret)
 		return ret;
 
 	cdev->brightness = level;
+	if (level == 0)
+		return 0;
+
 	return omen_write_zones(rgb, level);
 }
 
@@ -414,13 +442,7 @@ static DEVICE_ATTR_RO(lighting_regs);
 static ssize_t backlight_active_show(struct device *dev,
 				     struct device_attribute *attr, char *buf)
 {
-	struct omen_rgb *rgb = dev_get_drvdata(dev);
-
-	if (!rgb->h2ra)
-		return -ENODEV;
-
-	return sysfs_emit(buf, "%d\n",
-			  readb(rgb->h2ra + H2RA_ACTIVE_BRIGHTNESS) ? 1 : 0);
+	return sysfs_emit(buf, "%d\n", omen_backlight_is_on() ? 1 : 0);
 }
 static DEVICE_ATTR_RO(backlight_active);
 
@@ -484,7 +506,11 @@ static int omen_rgb_probe(struct platform_device *pdev)
 	 * Brightness first: the zone colours on the wire are scaled by it, so
 	 * it has to be known before they can be read back as intent.
 	 */
-	rgb->kbd_bl.brightness = omen_bl_read_hw();
+	/*
+	 * The hardware only remembers on/off, so the level is ours: full
+	 * brightness when it is lit, zero when it is not.
+	 */
+	rgb->kbd_bl.brightness = omen_backlight_is_on() ? BRIGHTNESS_MAX : 0;
 
 	ret = omen_zone_read_initial(rgb, rgb->kbd_bl.brightness);
 	if (ret) {
@@ -517,9 +543,10 @@ static int omen_rgb_probe(struct platform_device *pdev)
 	 * actually tracks it rather than from the brightness setting, which
 	 * stays at whatever it was told even while the lighting is off.
 	 */
-	if (rgb->h2ra && !readb(rgb->h2ra + H2RA_ACTIVE_BRIGHTNESS))
+	if (rgb->kbd_bl.brightness == 0)
 		dev_info(&pdev->dev,
-			 "the keyboard backlight is off, so colours written now will not be visible; press Fn+F4\n");
+			 "the keyboard backlight is off; turn it on with: echo %d > /sys/class/leds/%s/brightness\n",
+			 BRIGHTNESS_MAX, rgb->kbd_bl.name);
 
 	ret = devm_led_classdev_register(&pdev->dev, &rgb->kbd_bl);
 	if (ret)

@@ -452,10 +452,8 @@ function renderLeds(s) {
   } else if (s.leds.backlight_off) {
     banner.hidden = false;
     banner.innerHTML =
-      "<strong>The keyboard backlight is off, so nothing here will be " +
-      "visible.</strong> Colours and brightness are still written and read " +
-      "back correctly - they just do not light anything. Press " +
-      "<kbd>Fn</kbd>+<kbd>F4</kbd> to turn the backlight on.";
+      "<strong>The keyboard backlight is off, so nothing here is visible.</strong> " +
+      "Move the brightness slider above zero to switch it on.";
   } else {
     banner.hidden = true;
   }
