@@ -236,11 +236,13 @@ const MODE_HELP = {
     "disable thermal protection.",
   max: "Fans at full power (WMI 0x27).",
   auto:
-    "Advanced: hands the fans to the EC and stops managing them. On this machine " +
-    "the EC does not take them - measured, the fans sat at 0 RPM while the CPU " +
-    "climbed 78 to 85 C in twelve seconds under load. omend forces full power if " +
-    "that happens and puts you back on Automatic. Useful for comparing against " +
-    "stock behaviour, not for daily use.",
+    "Advanced: hands the fans to the EC and stops managing them. The handover " +
+    "is not immediate - there is a watchdog, and the firmware can take up to two " +
+    "minutes to pick them up. Measured here, the fans sat at 0 RPM while the CPU " +
+    "climbed 78 to 85 C in twelve seconds under load, so two minutes is longer " +
+    "than it takes to overheat. omend forces full power if that happens and puts " +
+    "you back on Automatic. For comparing against stock behaviour, not for " +
+    "daily use.",
 };
 
 $$("#fan-modes button").forEach((b) =>

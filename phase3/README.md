@@ -19,6 +19,44 @@ the lower part of the curve to the EC and only takes over when it wants
 **more** than the EC is providing. Idle silence is preserved rather than
 traded away.
 
+## This project never writes the EC, and on this board that is not optional
+
+Everything that changes fan behaviour here goes through `hp-wmi`'s hwmon
+interface, where the kernel clamps the values. The EC is only ever **read**,
+for the dGPU temperature, which is why the packaging ships
+`options ec_sys write_support=0`.
+
+That was a caution when it was written. It turns out to be a requirement.
+The omen-space project keeps a list of machines where direct EC writes are
+blocked outright:
+
+```rust
+const UNSAFE_MODELS: &[&str] = &["16t-ah0", "16-ah0", "16-ap0", ...];
+const UNSAFE_BOARDS: &[&str] = &["8c58", "8d24"];
+
+warn!("UNSAFE MODEL DETECTED! Legacy EC writes will be blocked to
+       prevent Caps Lock panic.");
+```
+
+**Both this board (8D24) and this model family (16-ap0xxx) are on it.** A
+Caps Lock panic is HP firmware's hardware-fault signal — a blinking Caps Lock
+LED and a machine that needs a full power cycle. Their `write_byte` returns
+false before touching anything on these boards.
+
+So the answer to "why does EC default not cool, and how does the other
+project fix it" is that it does not. Its EC-handover path writes `0x62`
+(BIOS control), `0x63` (a 120-second watchdog), `0xF4` and the fan setpoints
+— and every one of those writes is refused on 8D24. On this machine their
+`ec` mode is `pwm1_enable = 2` plus a notification saying the handover can
+take up to two minutes, which is exactly what ours does, minus the stall
+detector that forces full power when the fans stop while hot.
+
+If the handover is ever worth making work here, the route is the firmware's
+own WMI method (`0x10` in group `0x20008`, which owns EC `0x62` bit 0) rather
+than poking the register directly — the vendor software does it that way, and
+a firmware-mediated write is not the same risk as a raw one. It has not been
+tried.
+
 ## Living with power-profiles-daemon
 
 KDE's power profile switcher, and GNOME's, go through
