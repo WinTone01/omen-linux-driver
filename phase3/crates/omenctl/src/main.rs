@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use anyhow::{bail, Result};
 use omen_core::config::Config;
 use omen_core::fan::Fan;
-use omen_core::ipc::{ControlMode, Request, Response};
+use omen_core::ipc::{ControlMode, CurveSpec, Request, Response};
 use omen_core::profile::PlatformProfile;
 use omen_core::sysfs;
 use omen_core::thermal::Thermal;
@@ -26,6 +26,10 @@ omenctl - fan and thermal control tool for the OMEN 16-ap0xxx
 USAGE:
     omenctl status                 Current state (reads sysfs if no daemon)
     omenctl curve [-c PATH]        Show the active fan curve
+    omenctl curve set <POINTS>     Replace it, e.g. 45:0,50:1800,70:2400,90:3300
+                                   (temperature:RPM pairs; rpm 0 = let the EC
+                                   decide, only valid at the bottom)
+    omenctl curve reset            Back to the built-in OMEN Gaming Hub table
 
     omenctl set curve              Automatic: the curve drives the fan (default)
     omenctl set manual <RPM>       Fixed target
@@ -301,7 +305,57 @@ fn status() -> Result<()> {
     Ok(())
 }
 
+/// `45:0,50:1800,70:2400` -> points.
+///
+/// Whitespace around the separators is allowed because the obvious way to
+/// type this is with spaces after the commas, and rejecting that would be
+/// pedantry.
+fn parse_points(spec: &str) -> Result<Vec<omen_core::curve::Point>> {
+    let mut points = Vec::new();
+    for field in spec.split(',').map(str::trim).filter(|f| !f.is_empty()) {
+        let (temp, rpm) = field
+            .split_once(':')
+            .ok_or_else(|| anyhow::anyhow!("{field:?} is not a temperature:RPM pair"))?;
+        points.push(omen_core::curve::Point {
+            temp_c: temp
+                .trim()
+                .parse()
+                .map_err(|_| anyhow::anyhow!("{temp:?} is not a temperature"))?,
+            rpm: rpm
+                .trim()
+                .parse()
+                .map_err(|_| anyhow::anyhow!("{rpm:?} is not an RPM value"))?,
+        });
+    }
+    if points.len() < 2 {
+        bail!("a curve needs at least two points");
+    }
+    Ok(points)
+}
+
+fn set_curve(args: &[String]) -> Result<()> {
+    let spec = args
+        .get(2)
+        .ok_or_else(|| anyhow::anyhow!("expected points, e.g. 45:0,50:1800,70:2400,90:3300"))?;
+    let points = parse_points(spec)?;
+
+    // Rejected here as well as in the daemon, so a typo gives an error that
+    // names the problem rather than a socket round-trip that does.
+    omen_core::curve::Curve::new(points.clone())?;
+
+    client::report(client::send(&Request::SetCurve(CurveSpec {
+        points,
+        interpolation: Default::default(),
+    }))?)
+}
+
 fn curve(args: &[String]) -> Result<()> {
+    match args.get(1).map(String::as_str) {
+        Some("set") => return set_curve(args),
+        Some("reset") => return client::report(client::send(&Request::ResetCurve)?),
+        _ => {}
+    }
+
     let path = match args.iter().position(|a| a == "-c" || a == "--config") {
         Some(i) => args
             .get(i + 1)

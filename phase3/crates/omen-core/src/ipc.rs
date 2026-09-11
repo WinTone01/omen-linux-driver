@@ -67,6 +67,16 @@ impl std::fmt::Display for ControlMode {
     }
 }
 
+/// A curve as it travels over the wire: the points plus how to read between
+/// them. Same shape as the `[fan]` section of the config file, so an editor
+/// round-trips without a translation layer in the middle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurveSpec {
+    pub points: Vec<crate::curve::Point>,
+    #[serde(default)]
+    pub interpolation: crate::curve::Interpolation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Request {
@@ -76,6 +86,15 @@ pub enum Request {
     SetMode(ControlMode),
     /// Change the platform profile (balanced / performance / low-power).
     SetProfile { profile: String },
+    /// Replace the fan curve.
+    ///
+    /// Validated, written to the config file and then re-read, rather than
+    /// swapped into the running governor directly. The file stays the single
+    /// source of truth, so what survives a restart is exactly what the editor
+    /// showed - there is no "applied but not saved" state to explain.
+    SetCurve(CurveSpec),
+    /// Go back to the built-in curve (OMEN Gaming Hub's table).
+    ResetCurve,
     /// Re-read the config from disk.
     Reload,
 }
@@ -109,6 +128,10 @@ pub struct Snapshot {
     #[serde(default)]
     pub safety_reason: Option<String>,
     pub temps: Vec<(String, f32)>,
+    /// The curve currently in effect, so an editor can start from what is
+    /// running rather than from the file it hopes is being used.
+    #[serde(default)]
+    pub curve: Option<CurveSpec>,
     /// Discrete GPU runtime power state, when there is a dGPU.
     #[serde(default)]
     pub gpu: Option<crate::gpu::GpuPower>,

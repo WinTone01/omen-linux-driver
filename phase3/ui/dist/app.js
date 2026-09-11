@@ -62,6 +62,10 @@ const mockState = {
   ],
 };
 
+/* The built-in table, kept so the mock backend's "reset" has something to go
+ * back to. The real one lives in omen-core. */
+const DEFAULT_CURVE = structuredClone(mockState.curve);
+
 async function mockInvoke(cmd, args) {
   switch (cmd) {
     case "get_state":
@@ -73,6 +77,13 @@ async function mockInvoke(cmd, args) {
         : args.mode.mode === "curve" ? 2100
         : null;
       return `mode: ${args.mode.mode}`;
+    case "set_curve":
+      mockState.curve = args.points;
+      mockState.interpolation = args.interpolation;
+      return `curve saved (${args.points.length} points)`;
+    case "reset_curve":
+      mockState.curve = structuredClone(DEFAULT_CURVE);
+      return "curve saved (10 points), built-in";
     case "set_profile":
       mockState.daemon.profile = args.profile;
       return `profile ${args.profile}`;
@@ -620,6 +631,216 @@ function drawCurve(points, interpolation, nowTemp, nowRpm) {
   marker.append(label);
 }
 
+/* ── curve editor ────────────────────────────────────────────────
+ *
+ * The draft is a separate array, never the live state: while it exists the
+ * poll keeps updating everything else, and a tick arriving mid-drag must not
+ * pull the point out from under the pointer.
+ *
+ * Validation here mirrors the daemon's rules rather than replacing them. The
+ * daemon still checks - it is the only thing that can, since it knows the
+ * critical cutout - but a dragged point that would be rejected should be
+ * impossible to express, not rejected after the fact.
+ */
+
+const CURVE_EDIT_MAX_C = 95;   // stay below the critical cutout (97 C)
+const CURVE_TEMP_STEP = 1;
+const CURVE_RPM_STEP = 100;    // the EC's own resolution
+const CURVE_MIN_RPM = 1800;    // below this the fan does not turn
+
+let draft = null;
+/* Index of the point under the pointer, so its label is always shown. */
+let dragging = null;
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+function curveEditing() {
+  return draft !== null;
+}
+
+function startEdit() {
+  draft = structuredClone(state?.curve ?? []).map((p) => ({ ...p }));
+  if (draft.length < 2) {
+    toast("no curve to edit", true);
+    draft = null;
+    return;
+  }
+  renderEditor();
+}
+
+function endEdit() {
+  draft = null;
+  renderEditor();
+  refresh();
+}
+
+function renderEditor() {
+  const editing = curveEditing();
+  $("#btn-curve-edit").hidden = editing;
+  for (const id of ["#btn-curve-reset", "#btn-curve-cancel", "#btn-curve-save"]) {
+    $(id).hidden = !editing;
+  }
+  $("#curve-edit-hint").hidden = !editing;
+  $("#curve-chart").classList.toggle("is-editing", editing);
+  $("#curve-line").classList.toggle("is-draft", editing);
+  if (editing) drawCurve(draft, state?.interpolation, null, null);
+  drawHandles();
+}
+
+/* An RPM of 0 is not a speed, it is "hand the fans to the EC", and the daemon
+ * only accepts it at the bottom of the curve. So the lowest point may be
+ * dragged down into it, and no other point may. */
+function snapRpm(raw, index) {
+  const rounded = Math.round(raw / CURVE_RPM_STEP) * CURVE_RPM_STEP;
+  if (index === 0 && rounded < CURVE_MIN_RPM / 2) return 0;
+  return clamp(rounded, index === 0 && rounded < CURVE_MIN_RPM ? 0 : CURVE_MIN_RPM, FAN_MAX);
+}
+
+/* The fan may not slow down as the machine gets hotter, so a point is bounded
+ * by its neighbours rather than free. Same for temperature: points keep their
+ * order, which is what makes the drag feel like editing a table. */
+function moveDraftPoint(i, temp, rpm) {
+  const prev = draft[i - 1], next = draft[i + 1];
+  const p = draft[i];
+
+  p.temp_c = Math.round(
+    clamp(temp,
+      prev ? prev.temp_c + CURVE_TEMP_STEP : CURVE_MIN_C,
+      next ? next.temp_c - CURVE_TEMP_STEP : CURVE_EDIT_MAX_C)
+    / CURVE_TEMP_STEP) * CURVE_TEMP_STEP;
+
+  let r = snapRpm(rpm, i);
+  // A neighbour sitting in the automatic region (0) is not a floor - it is a
+  // mode, and anything above it is a real speed.
+  if (prev && prev.rpm > 0) r = Math.max(r, prev.rpm);
+  if (next && next.rpm > 0) r = Math.min(r, next.rpm);
+  p.rpm = r;
+}
+
+function drawHandles() {
+  const g = $("#curve-handles");
+  g.replaceChildren();
+  if (!curveEditing()) return;
+
+  const W = 600, H = 190;
+  const x = (c) => ((c - CURVE_MIN_C) / (CURVE_MAX_C - CURVE_MIN_C)) * W;
+  const y = (rpm) => H - (rpm / FAN_MAX) * (H - 10) - 5;
+
+  // The default table has ten points at 5 C spacing; labelling every one of
+  // them produces a line of overlapping text that reads as noise. Label a
+  // point only when there is room, and always label the one being dragged.
+  let lastLabelX = -Infinity;
+
+  draft.forEach((p, i) => {
+    const cx = x(p.temp_c), cy = y(p.rpm);
+    const hit = el("circle", { cx, cy, r: 12, class: "handle-hit" });
+    hit.dataset.index = i;
+    g.append(hit, el("circle", { cx, cy, r: 4, class: "handle-dot" }));
+
+    if (i !== dragging && cx - lastLabelX < 58) return;
+    lastLabelX = cx;
+    const label = el("text", {
+      x: clamp(cx, 16, W - 16), y: clamp(cy - 12, 10, H - 4), "text-anchor": "middle",
+    });
+    label.textContent = p.rpm === 0 ? `${p.temp_c}° EC` : `${p.temp_c}° ${p.rpm}`;
+    g.append(label);
+  });
+}
+
+/* Pointer position -> chart coordinates. Read through the SVG's own matrix so
+ * it stays correct whatever the window is scaled to. */
+function chartPoint(ev) {
+  const svg = $("#curve-chart");
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX;
+  pt.y = ev.clientY;
+  const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+  return {
+    temp_c: CURVE_MIN_C + (p.x / 600) * (CURVE_MAX_C - CURVE_MIN_C),
+    rpm: ((190 - 5 - p.y) / (190 - 10)) * FAN_MAX,
+  };
+}
+
+function bindCurveEditor() {
+  const svg = $("#curve-chart");
+  const handles = $("#curve-handles");
+
+  $("#btn-curve-edit").addEventListener("click", startEdit);
+  $("#btn-curve-cancel").addEventListener("click", endEdit);
+
+  $("#btn-curve-save").addEventListener("click", () => {
+    const points = draft;
+    draft = null;
+    act(() => invoke("set_curve", { points, interpolation: state?.interpolation ?? "step" }),
+        "curve saved").then(renderEditor);
+  });
+
+  $("#btn-curve-reset").addEventListener("click", () => {
+    draft = null;
+    act(() => invoke("reset_curve"), "back to the built-in curve").then(renderEditor);
+  });
+
+  handles.addEventListener("pointerdown", (ev) => {
+    const hit = ev.target.closest("circle.handle-hit");
+    if (!hit || ev.button !== 0) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const i = Number(hit.dataset.index);
+    hit.setPointerCapture(ev.pointerId);
+    handles.classList.add("is-dragging");
+    dragging = i;
+    drawHandles();
+
+    const move = (e) => {
+      const at = chartPoint(e);
+      moveDraftPoint(i, at.temp_c, at.rpm);
+      drawCurve(draft, state?.interpolation, null, null);
+      drawHandles();
+    };
+    const up = () => {
+      dragging = null;
+      drawHandles();
+      handles.classList.remove("is-dragging");
+      handles.removeEventListener("pointermove", move);
+      handles.removeEventListener("pointerup", up);
+      handles.removeEventListener("pointercancel", up);
+    };
+    handles.addEventListener("pointermove", move);
+    handles.addEventListener("pointerup", up);
+    handles.addEventListener("pointercancel", up);
+  });
+
+  // Right-click removes. Two points is the minimum a curve can have.
+  handles.addEventListener("contextmenu", (ev) => {
+    const hit = ev.target.closest("circle.handle-hit");
+    if (!curveEditing() || !hit) return;
+    ev.preventDefault();
+    if (draft.length <= 2) {
+      toast("a curve needs at least two points", true);
+      return;
+    }
+    draft.splice(Number(hit.dataset.index), 1);
+    drawCurve(draft, state?.interpolation, null, null);
+    drawHandles();
+  });
+
+  // Click on empty chart adds a point where the curve already is, so adding
+  // one never changes the behaviour by itself - it only gives you something
+  // to drag.
+  svg.addEventListener("click", (ev) => {
+    if (!curveEditing() || ev.target.closest("circle.handle-hit")) return;
+    const at = chartPoint(ev);
+    const temp = Math.round(clamp(at.temp_c, CURVE_MIN_C, CURVE_EDIT_MAX_C));
+    if (draft.some((p) => Math.abs(p.temp_c - temp) < CURVE_TEMP_STEP)) return;
+
+    const below = draft.filter((p) => p.temp_c < temp).pop();
+    draft.push({ temp_c: temp, rpm: below ? below.rpm : draft[0].rpm });
+    draft.sort((a, b) => a.temp_c - b.temp_c);
+    drawCurve(draft, state?.interpolation, null, null);
+    drawHandles();
+  });
+}
+
 async function refresh() {
   try {
     state = await invoke("get_state");
@@ -633,7 +854,11 @@ async function refresh() {
 
   const d = state.daemon;
   pushHistory(d?.driver_temp_c, d?.fan1_rpm);
-  drawCurve(state.curve, state.interpolation, d?.driver_temp_c, d?.target_rpm);
+  // While the editor is open the chart belongs to the draft. Redrawing the
+  // saved curve here would undo a drag every two seconds.
+  if (!curveEditing()) {
+    drawCurve(state.curve, state.interpolation, d?.driver_temp_c, d?.target_rpm);
+  }
   $("#curve-note").textContent =
     state.interpolation === "linear"
       ? "linear between points"
@@ -642,5 +867,6 @@ async function refresh() {
 
 buildKeycaps();
 buildZonePickers();
+bindCurveEditor();
 refresh();
 setInterval(() => { if (Date.now() > holdUntil) refresh(); }, POLL_MS);

@@ -16,6 +16,15 @@ use crate::fan::{DEFAULT_MAX_RPM, DEFAULT_MIN_RPM};
 
 pub const DEFAULT_PATH: &str = "/etc/omen/omend.toml";
 
+/// Written at the top of a saved file, because the first question on finding
+/// your comments gone is "what did that".
+const SAVED_HEADER: &str = "\
+# Written by omend. Hand edits are fine - run 'omenctl reload' afterwards -
+# but saving a curve from omenctl or the GUI rewrites this file and drops any
+# comments you add.
+
+";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -185,7 +194,7 @@ impl Config {
         PathBuf::from(DEFAULT_PATH)
     }
 
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.fan.interval_secs == 0 {
             return Err(Error::Curve("interval_secs cannot be 0".into()));
         }
@@ -233,6 +242,40 @@ impl Config {
         } else {
             Curve::with_interpolation(self.fan.curve.clone(), self.fan.interpolation)
         }
+    }
+
+    /// Writes the configuration back out.
+    ///
+    /// Via a temporary file in the same directory and a rename, so a crash or
+    /// a full disk halfway through leaves the previous configuration intact
+    /// rather than a truncated one the daemon would refuse to start with.
+    ///
+    /// Comments in the file are lost - this serialises the parsed struct, it
+    /// does not edit the text. That is the price of letting a GUI own the
+    /// curve, and the reason the shipped file says so at the top.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+
+        let body = toml::to_string_pretty(self)
+            .map_err(|e| Error::Curve(format!("could not serialise the configuration: {e}")))?;
+        let text = format!("{SAVED_HEADER}{body}");
+
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(dir).map_err(|source| Error::Write {
+            path: dir.to_owned(),
+            source,
+        })?;
+
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, text.as_bytes()).map_err(|source| Error::Write {
+            path: tmp.clone(),
+            source,
+        })?;
+        std::fs::rename(&tmp, path).map_err(|source| Error::Write {
+            path: path.to_owned(),
+            source,
+        })?;
+        Ok(())
     }
 
     pub fn interval(&self) -> Duration {

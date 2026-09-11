@@ -25,7 +25,7 @@ use omen_core::config::Config;
 use omen_core::curve::Governor;
 use omen_core::fan::Fan;
 use omen_core::gpu;
-use omen_core::ipc::{ControlMode, Snapshot};
+use omen_core::ipc::{ControlMode, CurveSpec, Snapshot};
 use omen_core::profile::PlatformProfile;
 use omen_core::thermal::Thermal;
 
@@ -196,7 +196,7 @@ fn run(args: Args) -> Result<()> {
     // changing the mode and watching what would happen is exactly what
     // dry-run is for. Use OMEND_SOCKET to avoid clashing with a real daemon.
     if !args.once {
-        server::spawn(shared.clone())?;
+        server::spawn(shared.clone(), args.config.clone())?;
     }
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -569,6 +569,10 @@ impl Runtime {
                 .into_iter()
                 .filter_map(|(l, v)| v.ok().map(|c| (l, c)))
                 .collect(),
+            curve: Some(CurveSpec {
+                points: self.governor.curve().points().to_vec(),
+                interpolation: self.governor.curve().interpolation(),
+            }),
             gpu: self.gpu.get(),
             uptime_secs: self.started.elapsed().as_secs(),
         }

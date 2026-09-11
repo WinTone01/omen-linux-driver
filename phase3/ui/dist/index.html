@@ -210,15 +210,26 @@
             <div class="panel-head">
               <h2 class="panel-head__title">Curve</h2>
               <span class="panel-head__note" id="curve-note"></span>
+              <div class="curve-tools">
+                <button class="btn btn--sm" id="btn-curve-edit">Edit</button>
+                <button class="btn btn--sm" id="btn-curve-reset" hidden>Built-in</button>
+                <button class="btn btn--sm" id="btn-curve-cancel" hidden>Cancel</button>
+                <button class="btn btn--sm btn--accent" id="btn-curve-save" hidden>Save</button>
+              </div>
             </div>
             <svg class="chart chart--curve" id="curve-chart" viewBox="0 0 600 190">
               <g class="chart-grid" id="curve-grid"></g>
               <path class="chart-line chart-line--curve" id="curve-line" d=""/>
               <g id="curve-now"></g>
+              <g id="curve-handles"></g>
             </svg>
             <div class="chart-scale">
               <span>40 °C</span><span>70 °C</span><span>100 °C</span>
             </div>
+            <p class="hint" id="curve-edit-hint" hidden>
+              Drag a point to move it. Click an empty part of the chart to add one,
+              right-click a point to remove it. Nothing changes until you save.
+            </p>
           </div>
 
           <div class="card" id="manual-card">

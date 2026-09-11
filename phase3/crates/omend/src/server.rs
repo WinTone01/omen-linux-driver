@@ -6,12 +6,14 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use log::{debug, error, info, warn};
 
-use omen_core::ipc::{check_socket_path, socket_path, Request, Response};
+use omen_core::config::Config;
+use omen_core::curve;
+use omen_core::ipc::{check_socket_path, socket_path, CurveSpec, Request, Response};
 use omen_core::profile::PlatformProfile;
 
 use crate::shared::Shared;
@@ -20,7 +22,7 @@ use crate::shared::Shared;
 const APPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Creates the socket and moves the listener onto a background thread.
-pub fn spawn(shared: Shared) -> Result<()> {
+pub fn spawn(shared: Shared, config_path: PathBuf) -> Result<()> {
     let owned = socket_path();
     let path: &Path = &owned;
     check_socket_path(path).map_err(anyhow::Error::msg)?;
@@ -74,7 +76,7 @@ pub fn spawn(shared: Shared) -> Result<()> {
             for stream in listener.incoming() {
                 match stream {
                     Ok(s) => {
-                        if let Err(e) = handle(s, &shared) {
+                        if let Err(e) = handle(s, &shared, &config_path) {
                             debug!("client error: {e}");
                         }
                     }
@@ -102,7 +104,7 @@ fn omen_group_gid() -> Option<u32> {
     })
 }
 
-fn handle(stream: UnixStream, shared: &Shared) -> Result<()> {
+fn handle(stream: UnixStream, shared: &Shared, config_path: &Path) -> Result<()> {
     let reader = BufReader::new(stream.try_clone()?);
     let mut writer = stream;
 
@@ -112,7 +114,7 @@ fn handle(stream: UnixStream, shared: &Shared) -> Result<()> {
             continue;
         }
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(req) => dispatch(req, shared),
+            Ok(req) => dispatch(req, shared, config_path),
             Err(e) => Response::Error {
                 message: format!("could not parse the request: {e}"),
             },
@@ -125,7 +127,7 @@ fn handle(stream: UnixStream, shared: &Shared) -> Result<()> {
     Ok(())
 }
 
-fn dispatch(req: Request, shared: &Shared) -> Response {
+fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
     match req {
         Request::Status => Response::Ok(Box::new(shared.snapshot())),
 
@@ -178,11 +180,77 @@ fn dispatch(req: Request, shared: &Shared) -> Response {
             }
         }
 
+        Request::SetCurve(spec) => {
+            info!(
+                "request: curve -> {} points, {:?}",
+                spec.points.len(),
+                spec.interpolation
+            );
+            write_curve(config_path, shared, Some(spec))
+        }
+
+        Request::ResetCurve => {
+            info!("request: curve -> built-in default");
+            write_curve(config_path, shared, None)
+        }
+
         Request::Reload => {
             shared.request_reload();
             Response::Done {
                 message: "the configuration will be re-read".into(),
             }
         }
+    }
+}
+
+/// Validates a curve, writes it to the config file and asks the loop to
+/// re-read it.
+///
+/// Validation happens against the WHOLE configuration, not the points alone:
+/// a curve whose top point sits above the critical cutout is individually
+/// well formed and still wrong, and that is exactly the mistake an editor
+/// with a draggable top point invites. Config::validate already knows this,
+/// so there is no second copy of the rule here.
+///
+/// `None` means "back to the built-in curve" - written as an empty list,
+/// which is how the config file spells that.
+fn write_curve(config_path: &Path, shared: &Shared, spec: Option<CurveSpec>) -> Response {
+    let mut cfg = match Config::load(config_path) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            return Response::Error {
+                message: format!("the current configuration could not be read: {e}"),
+            }
+        }
+    };
+
+    match &spec {
+        Some(spec) => {
+            cfg.fan.curve = spec.points.clone();
+            cfg.fan.interpolation = spec.interpolation;
+        }
+        None => cfg.fan.curve.clear(),
+    }
+
+    if let Err(e) = cfg.save(config_path) {
+        return Response::Error {
+            message: e.to_string(),
+        };
+    }
+
+    // Only now does it take effect: the loop owns the governor, and the loop
+    // is the only thread that touches the fan.
+    shared.request_reload();
+
+    let points = match &spec {
+        Some(spec) => spec.points.len(),
+        None => curve::default_curve().points().len(),
+    };
+    Response::Done {
+        message: format!(
+            "curve saved to {} ({points} points){}",
+            config_path.display(),
+            if spec.is_none() { ", built-in" } else { "" }
+        ),
     }
 }

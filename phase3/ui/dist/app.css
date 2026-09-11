@@ -553,3 +553,23 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 /* The explanation above the profile cards, which needs more room than a
  * footnote under a control. */
 .hint--lede { margin: 0 0 16px; max-width: 78ch; }
+
+/* ── curve editor ────────────────────────────────────────────── */
+
+.curve-tools { margin-left: auto; display: flex; gap: 6px; }
+.btn--sm { padding: 4px 10px; font-size: 11px; }
+.btn--accent { background: var(--omen-red); border-color: var(--omen-red); color: #fff; }
+.btn--accent:hover { filter: brightness(1.15); }
+
+/* The hit target is deliberately larger than the dot: dragging a 4px circle
+ * with a trackpad is a test of patience, not a control. */
+#curve-handles circle.handle-hit { fill: transparent; cursor: grab; }
+#curve-handles circle.handle-dot {
+  fill: #101010; stroke: var(--omen-red); stroke-width: 2; pointer-events: none;
+}
+#curve-handles.is-dragging circle.handle-hit { cursor: grabbing; }
+#curve-handles text {
+  fill: var(--text-dim); font-size: 9px; font-family: var(--mono); pointer-events: none;
+}
+.chart--curve.is-editing { cursor: crosshair; }
+.chart-line--curve.is-draft { stroke-dasharray: 5 3; }

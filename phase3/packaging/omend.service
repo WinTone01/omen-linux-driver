@@ -38,9 +38,12 @@ LockPersonality=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 CapabilityBoundingSet=
-# /sys is mounted read-only by default; open the two paths we write to.
+# /sys is mounted read-only by default; open the paths we write to. /etc/omen
+# is writable because saving a curve from omenctl or the GUI rewrites the
+# config file - the daemon then re-reads it, so the file is the only place a
+# curve lives.
 ProtectSystem=strict
-ReadWritePaths=/sys/class/hwmon /sys/devices
+ReadWritePaths=/sys/class/hwmon /sys/devices /etc/omen
 
 # The socket goes here; systemd creates the directory and removes it on stop.
 # Better than making all of /run writable. The directory is 0755 and access is

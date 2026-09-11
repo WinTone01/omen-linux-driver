@@ -17,7 +17,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -61,7 +61,7 @@ struct UiState {
     interpolation: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct CurvePoint {
     temp_c: f32,
     rpm: u32,
@@ -220,11 +220,25 @@ fn daemon_hint(e: &client::ClientError) -> Option<String> {
 fn get_state() -> UiState {
     let (daemon, daemon_error, daemon_hint) = snapshot();
 
+    // The daemon reports the curve it is actually running; the file is the
+    // fallback for when it is not up. Preferring the daemon matters after an
+    // edit: the file is written first and re-read a moment later, and during
+    // that moment only the daemon knows which of the two is in force.
+    //
     // A broken config file must not blank the whole panel, so a failure here
     // just means no chart.
-    let curve = omen_core::config::Config::load(&omen_core::config::Config::default_path())
-        .ok()
-        .and_then(|c| c.curve().ok());
+    let curve = daemon
+        .as_ref()
+        .and_then(|d| d.curve.as_ref())
+        .and_then(|spec| {
+            omen_core::curve::Curve::with_interpolation(spec.points.clone(), spec.interpolation)
+                .ok()
+        })
+        .or_else(|| {
+            omen_core::config::Config::load(&omen_core::config::Config::default_path())
+                .ok()
+                .and_then(|c| c.curve().ok())
+        });
 
     let (leds, leds_error, leds_writable) = match Leds::discover() {
         Ok(l) => (Some(l.state()), None, l.writable()),
@@ -285,6 +299,32 @@ fn set_profile(profile: String) -> Result<String, String> {
 #[tauri::command]
 fn reload_config() -> Result<String, String> {
     talk(Request::Reload)
+}
+
+/// Saves a curve. The daemon validates it, writes the config file and re-reads
+/// it - the UI never touches /etc itself, the same way it never touches the
+/// fan itself.
+#[tauri::command]
+fn set_curve(points: Vec<CurvePoint>, interpolation: String) -> Result<String, String> {
+    talk(Request::SetCurve(omen_core::ipc::CurveSpec {
+        points: points
+            .into_iter()
+            .map(|p| omen_core::curve::Point {
+                temp_c: p.temp_c,
+                rpm: p.rpm,
+            })
+            .collect(),
+        interpolation: if interpolation == "linear" {
+            omen_core::curve::Interpolation::Linear
+        } else {
+            omen_core::curve::Interpolation::Step
+        },
+    }))
+}
+
+#[tauri::command]
+fn reset_curve() -> Result<String, String> {
+    talk(Request::ResetCurve)
 }
 
 #[tauri::command]
@@ -390,6 +430,8 @@ fn main() {
             set_mode,
             set_profile,
             reload_config,
+            set_curve,
+            reset_curve,
             set_zone,
             set_all_zones,
             set_brightness,
