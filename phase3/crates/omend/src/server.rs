@@ -222,6 +222,55 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             }
         }
 
+        Request::SetAppProfiles { apps } => {
+            info!("request: {} application profile(s)", apps.len());
+            let mut cfg = match Config::load(config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("the current configuration could not be read: {e}"),
+                    }
+                }
+            };
+            cfg.apps = apps;
+            if let Err(e) = cfg.save(config_path) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+            shared.request_reload();
+            Response::Done {
+                message: format!("{} application profile(s) saved", cfg.apps.len()),
+            }
+        }
+
+        Request::SetDgpuPower(want) => {
+            info!("request: dGPU runtime power -> {want}");
+            let mut cfg = match Config::load(config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("the current configuration could not be read: {e}"),
+                    }
+                }
+            };
+            cfg.graphics.dgpu_power = want;
+            if let Err(e) = cfg.save(config_path) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+            shared.request_reload();
+            Response::Done {
+                message: match want {
+                    omen_core::gpu::DgpuPower::Auto => {
+                        "the discrete GPU may suspend when idle".into()
+                    }
+                    omen_core::gpu::DgpuPower::On => "the discrete GPU is kept awake".into(),
+                },
+            }
+        }
+
         Request::Reload => {
             shared.request_reload();
             Response::Done {

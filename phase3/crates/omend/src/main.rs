@@ -9,6 +9,7 @@
 //! fan-stop at 45 C, 2400 RPM at 58 C). So we leave the lower part of the
 //! curve to it and only take over when we want more.
 
+mod appwatch;
 mod guard;
 mod lighting;
 mod server;
@@ -180,7 +181,7 @@ fn run(args: Args) -> Result<()> {
     }
 
     let hot_above_c = cfg.safety.stall_temp_c;
-    let mut rt = Runtime::new(fan.clone(), thermal, cfg, read_only)?;
+    let mut rt = Runtime::new(fan.clone(), thermal, cfg, read_only, &args.config)?;
     rt.log_curve();
 
     let mut keeper = AutoRestore::new(
@@ -298,6 +299,10 @@ struct Runtime {
     /// loop can hand it to the lighting thread. The thread is not reachable
     /// from here, and it should not be - it is not part of fan control.
     lighting_changed: bool,
+    apps: appwatch::AppWatch,
+    config_path: std::path::PathBuf,
+    /// When the process list was last scanned.
+    apps_scanned: Instant,
     /// When the current setpoint was last written, for the keep-alive.
     applied_at: Instant,
     gpu: gpu::Watch,
@@ -305,7 +310,13 @@ struct Runtime {
 }
 
 impl Runtime {
-    fn new(fan: Fan, thermal: Thermal, cfg: Config, read_only: bool) -> Result<Self> {
+    fn new(
+        fan: Fan,
+        thermal: Thermal,
+        cfg: Config,
+        read_only: bool,
+        config_path: &std::path::Path,
+    ) -> Result<Self> {
         let governor = Governor::new(
             cfg.curve()?,
             cfg.fan.hysteresis_c,
@@ -323,6 +334,11 @@ impl Runtime {
             applied: Applied::Unknown,
             read_only,
             lighting_changed: false,
+            apps: appwatch::AppWatch::new(),
+            config_path: config_path.to_owned(),
+            // Scan on the first tick rather than one interval in: a daemon
+            // starting while a game is already open should notice it.
+            apps_scanned: Instant::now() - Duration::from_secs(3600),
             applied_at: Instant::now(),
             gpu: gpu::Watch::new(),
             started: Instant::now(),
@@ -369,6 +385,9 @@ impl Runtime {
             }
         };
 
+        self.scan_apps();
+        self.apply_gpu_power();
+
         if let Some((label, celsius)) = &temp {
             if self.guard(label, *celsius) {
                 self.drive(label, *celsius);
@@ -377,6 +396,48 @@ impl Runtime {
 
         shared.publish(self.snapshot(temp));
         shared.finish_tick();
+    }
+
+    /// Looks for a configured application, and applies or restores its
+    /// profile. The watcher asks for a fan mode; the loop is still the only
+    /// thing that sets one.
+    /// Keeps the dGPU's power policy where the configuration says.
+    ///
+    /// Re-asserted rather than set once: udev rules, driver reloads and
+    /// resume can all put it back, and a setting that silently stops applying
+    /// is worse than one that was never offered.
+    fn apply_gpu_power(&mut self) {
+        if self.read_only {
+            return;
+        }
+        let want = self.cfg.graphics.dgpu_power;
+        let Some(gpu) = self.gpu.get() else {
+            return;
+        };
+        if gpu.control == want.as_str() {
+            return;
+        }
+        match omen_core::gpu::set_power(want) {
+            Ok(()) => info!("dGPU runtime power: {} -> {want}", gpu.control),
+            Err(e) => warn!("could not set the dGPU power policy to {want}: {e}"),
+        }
+        self.gpu.invalidate();
+    }
+
+    fn scan_apps(&mut self) {
+        if self.cfg.apps.is_empty() || self.apps_scanned.elapsed() < self.cfg.app_scan_interval() {
+            return;
+        }
+        self.apps_scanned = Instant::now();
+
+        let actions = self.apps.poll(&self.cfg.apps, self.mode);
+        if let Some(mode) = actions.mode {
+            if mode != self.mode {
+                self.mode = mode;
+                self.governor.reset();
+                self.applied = Applied::Unknown;
+            }
+        }
     }
 
     fn handle_requests(&mut self, shared: &Shared, config_path: &std::path::Path) {
@@ -646,6 +707,9 @@ impl Runtime {
                 points: self.governor.curve().points().to_vec(),
                 interpolation: self.governor.curve().interpolation(),
             }),
+            config_path: self.config_path.to_str().map(str::to_owned),
+            apps: self.cfg.apps.clone(),
+            active_app: self.apps.active().map(str::to_owned),
             effect: Some(self.cfg.lighting.spec()),
             gpu: self.gpu.get(),
             uptime_secs: self.started.elapsed().as_secs(),

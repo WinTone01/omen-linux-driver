@@ -98,6 +98,13 @@ pub enum Request {
     /// Set the keyboard lighting effect. Saved and re-read the same way a
     /// curve is, so it survives a restart.
     SetEffect(crate::anim::EffectSpec),
+    /// Replace the list of per-application profiles.
+    ///
+    /// A struct variant rather than a newtype: serde's internally-tagged
+    /// representation cannot put a sequence directly under a tag.
+    SetAppProfiles { apps: Vec<crate::apps::AppProfile> },
+    /// Discrete GPU power policy: whether it may suspend when idle.
+    SetDgpuPower(crate::gpu::DgpuPower),
     /// Re-read the config from disk.
     Reload,
 }
@@ -131,6 +138,17 @@ pub struct Snapshot {
     #[serde(default)]
     pub safety_reason: Option<String>,
     pub temps: Vec<(String, f32)>,
+    /// The file the daemon was started with. Clients that edit the
+    /// configuration need to edit the same one it is reading, which is not
+    /// necessarily the default path.
+    #[serde(default)]
+    pub config_path: Option<String>,
+    /// The configured per-application profiles.
+    #[serde(default)]
+    pub apps: Vec<crate::apps::AppProfile>,
+    /// The application profile in force, if one is.
+    #[serde(default)]
+    pub active_app: Option<String>,
     /// The keyboard effect the daemon is drawing, if any.
     #[serde(default)]
     pub effect: Option<crate::anim::EffectSpec>,

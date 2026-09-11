@@ -185,6 +185,61 @@
           </p>
           <div class="power-grid" id="profile-cards"></div>
 
+          <div class="card" id="gfx-card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Graphics</h2>
+              <span class="panel-head__note" id="gfx-note"></span>
+            </div>
+            <p class="hint" id="gfx-layout"></p>
+            <div class="seg-4 seg-4--two" id="gfx-power">
+              <button data-power="auto">Let it sleep</button>
+              <button data-power="on">Keep it awake</button>
+            </div>
+            <dl class="kv kv--tight">
+              <dt>Runtime state</dt><dd id="gfx-state">—</dd>
+              <dt>Time suspended</dt><dd id="gfx-suspended">—</dd>
+              <dt>Holding it awake</dt><dd id="gfx-holders">—</dd>
+            </dl>
+            <p class="hint">
+              There is no graphics mux on this board, so there is no panel to
+              switch: the screen is wired to the integrated GPU and the NVIDIA
+              card drives HDMI and anything you offload to it. To run a program
+              on it, put this in front of the command — in Steam, before
+              <code>%command%</code>:
+            </p>
+            <div class="copy-row">
+              <code id="gfx-offload">__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia</code>
+              <button class="btn btn--sm" id="btn-gfx-copy">Copy</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Application profiles</h2>
+              <span class="panel-head__note" id="apps-note"></span>
+            </div>
+            <p class="hint">
+              While one of these programs is running, the machine switches to the
+              settings you give it and goes back to what it was doing when the
+              program exits. The first entry that is running wins.
+            </p>
+            <div id="apps-list" class="app-list"></div>
+            <div class="app-add">
+              <input type="text" id="app-process" placeholder="process name, e.g. cs2" spellcheck="false">
+              <select id="app-profile"></select>
+              <select id="app-fan">
+                <option value="">fan: leave alone</option>
+                <option value="curve">fan: curve</option>
+                <option value="max">fan: max</option>
+                <option value="2400">fan: 2400 RPM</option>
+                <option value="3000">fan: 3000 RPM</option>
+                <option value="3600">fan: 3600 RPM</option>
+                <option value="4200">fan: 4200 RPM</option>
+              </select>
+              <button class="btn btn--sm" id="btn-app-add">Add</button>
+            </div>
+          </div>
+
           <div class="card">
             <div class="panel-head"><h2 class="panel-head__title">Configuration</h2></div>
             <p class="hint">

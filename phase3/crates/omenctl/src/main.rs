@@ -45,6 +45,18 @@ USAGE:
                                    spectrum. Speed is 1-10; the colour applies
                                    to breathing. Persists across reboots.
 
+    omenctl app                    List the per-application profiles
+    omenctl app add <PROCESS> [PROFILE] [FAN]
+                                   e.g. omenctl app add cs2 performance 3000
+                                   PROFILE is a platform profile, FAN is
+                                   curve / max / auto / an RPM number
+    omenctl app remove <PROCESS>   Drop one
+
+    omenctl gpu [auto|on]          Discrete GPU: may it suspend when idle?
+                                   Without an argument, shows what is holding
+                                   it awake. This board has no mux, so there
+                                   is no panel to switch - see the note below.
+
     omenctl profile <NAME>         balanced / performance / low-power
     omenctl reload                 Make the daemon re-read its configuration
 
@@ -62,6 +74,8 @@ fn main() -> ExitCode {
         "curve" => curve(&args),
         "set" => set_mode(&args),
         "effect" => set_effect(&args),
+        "app" => app_profiles(&args),
+        "gpu" => gpu_power(&args),
         "profile" => set_profile(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
         "-h" | "--help" | "help" => {
@@ -174,6 +188,143 @@ fn set_profile(args: &[String]) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("a profile name is required"))?
         .clone();
     client::report(client::send(&Request::SetProfile { profile })?)
+}
+
+/// The per-application profiles, as the daemon has them. Read from the daemon
+/// rather than the file so the list shown is the list in force.
+fn app_snapshot() -> Result<Box<omen_core::ipc::Snapshot>> {
+    match client::send(&Request::Status)? {
+        Response::Ok(snap) => Ok(snap),
+        Response::Error { message } => bail!("{message}"),
+        Response::Done { message } => bail!("unexpected reply: {message}"),
+    }
+}
+
+/// `curve` / `max` / `auto` / a bare RPM number.
+fn parse_fan(raw: &str) -> Result<ControlMode> {
+    Ok(match raw {
+        "curve" => ControlMode::Curve,
+        "max" => ControlMode::Max,
+        "auto" => ControlMode::Auto,
+        other => ControlMode::Manual {
+            rpm: other.parse().map_err(|_| {
+                anyhow::anyhow!("{other:?} is not a fan mode (curve / max / auto / an RPM number)")
+            })?,
+        },
+    })
+}
+
+fn app_profiles(args: &[String]) -> Result<()> {
+    let snap = app_snapshot()?;
+
+    // Edits are built on the config FILE, not on the snapshot. The daemon
+    // writes the file and re-reads it a moment later, so a snapshot taken
+    // right after a previous edit can still be one change behind - and a
+    // read-modify-write against a stale list silently resurrects an entry
+    // that was just removed.
+    let mut apps = match args.get(1).map(String::as_str) {
+        Some("add") | Some("remove") => {
+            // The daemon says which file it is reading; it is not always the
+            // default one.
+            let path = snap
+                .config_path
+                .as_deref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(Config::default_path);
+            Config::load(&path)
+                .map(|c| c.apps)
+                .unwrap_or_else(|_| snap.apps.clone())
+        }
+        _ => snap.apps.clone(),
+    };
+
+    match args.get(1).map(String::as_str) {
+        None | Some("list") => {
+            if apps.is_empty() {
+                println!("no application profiles");
+                println!("  add one with: omenctl app add <process> [profile] [fan]");
+                return Ok(());
+            }
+            println!("application profiles  (first running entry wins)\n");
+            for app in &apps {
+                let active = snap.active_app.as_deref() == Some(app.process.as_str());
+                println!(
+                    "  {}{:<24} {}",
+                    if active { "* " } else { "  " },
+                    app.process,
+                    app.summary()
+                );
+            }
+            if snap.active_app.is_none() {
+                println!("\n  none of them are running");
+            }
+            Ok(())
+        }
+
+        Some("add") => {
+            let process = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("a process name is required"))?
+                .clone();
+            let mut entry = omen_core::apps::AppProfile {
+                process: process.clone(),
+                profile: None,
+                fan: None,
+            };
+            // Profile and fan are both optional and either may come first,
+            // so they are told apart by shape - a fan mode is a number or one
+            // of three words, everything else is a platform profile.
+            for arg in &args[3..] {
+                match parse_fan(arg) {
+                    Ok(mode) => entry.fan = Some(mode),
+                    Err(_) => entry.profile = Some(arg.clone()),
+                }
+            }
+            if entry.profile.is_none() && entry.fan.is_none() {
+                bail!("give a profile, a fan mode, or both - otherwise there is nothing to apply");
+            }
+
+            apps.retain(|a| !a.process.eq_ignore_ascii_case(&process));
+            apps.push(entry);
+            client::report(client::send(&Request::SetAppProfiles { apps })?)
+        }
+
+        Some("remove") => {
+            let process = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("a process name is required"))?;
+            let before = apps.len();
+            apps.retain(|a| !a.process.eq_ignore_ascii_case(process));
+            if apps.len() == before {
+                bail!("no application profile for {process:?}");
+            }
+            client::report(client::send(&Request::SetAppProfiles { apps })?)
+        }
+
+        Some(other) => bail!("unknown subcommand: {other} (list / add / remove)"),
+    }
+}
+
+fn gpu_power(args: &[String]) -> Result<()> {
+    match args.get(1) {
+        None => {
+            print_gpu(app_snapshot().ok().and_then(|s| s.gpu.clone()));
+            println!();
+            println!("  This machine has no graphics mux: the panel is wired to the integrated");
+            println!("  GPU (the NVIDIA card has only an HDMI connector) and the DSDT does not");
+            println!("  mention one. To run a program on the discrete GPU, offload it:");
+            println!();
+            println!("    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia <program>");
+            println!();
+            println!("  In Steam, put that in the game's launch options before %command%.");
+            Ok(())
+        }
+        Some(arg) => {
+            let want = omen_core::gpu::DgpuPower::parse(arg)
+                .ok_or_else(|| anyhow::anyhow!("unknown setting: {arg} (auto / on)"))?;
+            client::report(client::send(&Request::SetDgpuPower(want))?)
+        }
+    }
 }
 
 fn field(name: &str, value: impl std::fmt::Display) {

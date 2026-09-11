@@ -11,9 +11,11 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::anim::{Effect, EffectSpec};
+use crate::apps::AppProfile;
 use crate::curve::{self, Curve, Interpolation, Point};
 use crate::error::{Error, Result};
 use crate::fan::{DEFAULT_MAX_RPM, DEFAULT_MIN_RPM};
+use crate::gpu::DgpuPower;
 
 pub const DEFAULT_PATH: &str = "/etc/omen/omend.toml";
 
@@ -35,6 +37,51 @@ pub struct Config {
     pub safety: SafetyConfig,
     #[serde(default)]
     pub lighting: LightingConfig,
+
+    /// Per-application profiles, in priority order: the first entry whose
+    /// process is running wins.
+    #[serde(default, rename = "app")]
+    pub apps: Vec<AppProfile>,
+
+    #[serde(default)]
+    pub automation: AutomationConfig,
+
+    #[serde(default)]
+    pub graphics: GraphicsConfig,
+}
+
+/// Discrete GPU power. Not a graphics switch - this board has no mux; see
+/// gpu::DgpuPower.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphicsConfig {
+    #[serde(default)]
+    pub dgpu_power: DgpuPower,
+}
+
+/// Settings for the things omend does on its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationConfig {
+    /// How often the process list is checked, in seconds.
+    ///
+    /// Every check walks /proc. Five seconds is quick enough that a game is
+    /// on its loading screen when the profile lands, and slow enough that the
+    /// walk is nothing.
+    #[serde(default = "default_app_scan")]
+    pub app_scan_secs: u64,
+}
+
+impl Default for AutomationConfig {
+    fn default() -> Self {
+        Self {
+            app_scan_secs: default_app_scan(),
+        }
+    }
+}
+
+fn default_app_scan() -> u64 {
+    5
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -291,6 +338,16 @@ impl Config {
                 self.fan.min_rpm, self.fan.max_rpm
             )));
         }
+        for app in &self.apps {
+            if app.process.trim().is_empty() {
+                return Err(Error::Curve(
+                    "an application profile has an empty process name".into(),
+                ));
+            }
+        }
+        if self.automation.app_scan_secs == 0 {
+            return Err(Error::Curve("app_scan_secs cannot be 0".into()));
+        }
         if self.lighting.fps == 0 || self.lighting.fps > 60 {
             return Err(Error::Curve(format!(
                 "lighting fps must be between 1 and 60, got {}",
@@ -374,6 +431,10 @@ impl Config {
 
     pub fn min_dwell(&self) -> Duration {
         Duration::from_secs(self.fan.min_dwell_secs)
+    }
+
+    pub fn app_scan_interval(&self) -> Duration {
+        Duration::from_secs(self.automation.app_scan_secs)
     }
 
     pub fn stall_grace(&self) -> Duration {

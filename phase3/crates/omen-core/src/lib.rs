@@ -11,6 +11,7 @@
 //! says so.
 
 pub mod anim;
+pub mod apps;
 pub mod config;
 pub mod curve;
 pub mod error;

@@ -335,6 +335,23 @@ fn set_effect(effect: String, speed: u8, color: omen_core::leds::Rgb) -> Result<
     }))
 }
 
+/// Per-application profiles. The list is replaced wholesale rather than
+/// patched, because its order is meaningful - the first running entry wins -
+/// and an add/remove API would have to invent a way to express that anyway.
+/// Whether the discrete GPU may suspend when idle. Not a graphics switch -
+/// this board has no mux.
+#[tauri::command]
+fn set_dgpu_power(power: String) -> Result<String, String> {
+    let want = omen_core::gpu::DgpuPower::parse(&power)
+        .ok_or_else(|| format!("unknown setting: {power}"))?;
+    talk(Request::SetDgpuPower(want))
+}
+
+#[tauri::command]
+fn set_app_profiles(apps: Vec<omen_core::apps::AppProfile>) -> Result<String, String> {
+    talk(Request::SetAppProfiles { apps })
+}
+
 #[tauri::command]
 fn reset_curve() -> Result<String, String> {
     talk(Request::ResetCurve)
@@ -446,6 +463,8 @@ fn main() {
             set_curve,
             reset_curve,
             set_effect,
+            set_app_profiles,
+            set_dgpu_power,
             set_zone,
             set_all_zones,
             set_brightness,

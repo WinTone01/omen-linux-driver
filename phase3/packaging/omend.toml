@@ -120,3 +120,43 @@ color = [232, 17, 35]
 # zone write is a WMI call; ten is smooth enough for four zones spread across a
 # keyboard and leaves the firmware alone the rest of the time.
 fps = 10
+
+[graphics]
+# Whether the discrete GPU may suspend when nothing is using it.
+#
+# This is not a graphics switch: this board has no mux. The panel is wired to
+# the integrated GPU - the NVIDIA card has only an HDMI connector, there is no
+# gpu_mux_mode, and the DSDT does not mention a mux - so there is nothing to
+# switch the screen to. Programs run on the integrated GPU unless they ask for
+# the other one:
+#
+#   __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia <program>
+#
+# "auto" lets it sleep, which is what a laptop wants. "on" pins it awake and
+# costs several watts at idle; useful for ruling the GPU out when chasing a
+# resume problem, not for daily use.
+dgpu_power = "auto"
+
+[automation]
+# How often the process list is checked for the application profiles below.
+app_scan_secs = 5
+
+# Per-application profiles. While one of these programs is running the machine
+# switches to the settings given here, and goes back to what it was doing when
+# the program exits - to what it was, not to a fixed default. Nothing is
+# restored if the settings were changed while the program was running: that is
+# a more recent decision than ours.
+#
+# The first entry whose process is running wins, so order is priority. Process
+# names are matched case-insensitively against /proc/<pid>/comm (which the
+# kernel truncates to 15 characters) and the executable's own name.
+#
+# [[app]]
+# process = "cs2"
+# profile = "performance"
+# fan = { mode = "manual", rpm = 3000 }
+#
+# [[app]]
+# process = "steam"
+# profile = "balanced"
+# fan = { mode = "curve" }

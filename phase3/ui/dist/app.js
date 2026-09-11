@@ -33,6 +33,8 @@ const mockState = {
     safety_fallback: false,
     uptime_secs: 4230,
     temps: [["cpu/Tctl", 72.4], ["igpu/edge", 54.0], ["board/temp1", 46.0]],
+    apps: [{ process: "cs2", profile: "performance", fan: { mode: "manual", rpm: 3000 } }],
+    active_app: null,
     gpu: {
       address: "0000:04:00.0", control: "auto", status: "active",
       suspended_ms: 0, holders: [{ pid: 1688, name: "quickshell" }],
@@ -78,6 +80,14 @@ async function mockInvoke(cmd, args) {
         : args.mode.mode === "curve" ? 2100
         : null;
       return `mode: ${args.mode.mode}`;
+    case "set_dgpu_power":
+      mockState.daemon.gpu.control = args.power;
+      return args.power === "auto"
+        ? "the discrete GPU may suspend when idle"
+        : "the discrete GPU is kept awake";
+    case "set_app_profiles":
+      mockState.daemon.apps = args.apps;
+      return `${args.apps.length} application profile(s) saved`;
     case "set_effect":
       mockState.effect = { effect: args.effect, speed: args.speed, color: args.color };
       return args.effect === "none" ? "lighting effects off" : `lighting: ${args.effect}`;
@@ -991,6 +1001,184 @@ function bindCurveEditor() {
   });
 }
 
+/* ── application profiles ────────────────────────────────────────
+ *
+ * The list is replaced wholesale on every edit rather than patched. Its order
+ * is meaningful - the first running entry wins - so an add/remove API would
+ * have to express ordering anyway, and "send the list you want" cannot get
+ * out of step with what is displayed.
+ */
+
+function fanLabel(fan) {
+  if (!fan) return "fan unchanged";
+  if (fan.mode === "manual") return `fan ${fan.rpm} RPM`;
+  return `fan ${fan.mode}`;
+}
+
+function appSummary(app) {
+  const parts = [];
+  if (app.profile) parts.push(app.profile);
+  if (app.fan) parts.push(fanLabel(app.fan));
+  return parts.join(" · ") || "nothing to apply";
+}
+
+function saveApps(apps, message) {
+  act(() => invoke("set_app_profiles", { apps }), message);
+}
+
+function renderApps(s) {
+  const list = $("#apps-list");
+  const apps = s.daemon?.apps ?? [];
+  const active = s.daemon?.active_app ?? null;
+
+  list.replaceChildren();
+  for (const app of apps) {
+    const row = document.createElement("div");
+    row.className = "app-row" + (app.process === active ? " is-active" : "");
+
+    const name = document.createElement("span");
+    name.className = "app-row__name";
+    name.textContent = app.process;
+
+    const what = document.createElement("span");
+    what.className = "app-row__what";
+    what.textContent = appSummary(app);
+
+    const drop = document.createElement("button");
+    drop.className = "app-row__drop";
+    drop.title = `Remove ${app.process}`;
+    drop.textContent = "✕";
+    drop.addEventListener("click", () =>
+      saveApps(apps.filter((a) => a.process !== app.process), `${app.process} removed`));
+
+    row.append(name);
+    if (app.process === active) {
+      const badge = document.createElement("span");
+      badge.className = "app-row__badge";
+      badge.textContent = "running";
+      row.append(badge);
+    }
+    row.append(what, drop);
+    list.append(row);
+  }
+
+  $("#apps-note").textContent = active ? `${active} is running` : "";
+
+  // The profile choices come from the machine, so this cannot offer one the
+  // firmware does not have.
+  const sel = $("#app-profile");
+  if (sel.dataset.built !== String(s.profile_choices?.length ?? 0)) {
+    sel.dataset.built = String(s.profile_choices?.length ?? 0);
+    sel.replaceChildren();
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "profile: leave alone";
+    sel.append(none);
+    for (const name of s.profile_choices ?? []) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = `profile: ${name}`;
+      sel.append(opt);
+    }
+  }
+}
+
+function bindApps() {
+  const add = () => {
+    const process = $("#app-process").value.trim();
+    if (!process) {
+      toast("a process name is required", true);
+      return;
+    }
+    const profile = $("#app-profile").value || null;
+    const fanRaw = $("#app-fan").value;
+    if (!profile && !fanRaw) {
+      toast("pick a profile, a fan mode, or both - otherwise there is nothing to apply", true);
+      return;
+    }
+    const fan =
+      !fanRaw ? null
+      : /^\d+$/.test(fanRaw) ? { mode: "manual", rpm: Number(fanRaw) }
+      : { mode: fanRaw };
+
+    const apps = (state?.daemon?.apps ?? []).filter(
+      (a) => a.process.toLowerCase() !== process.toLowerCase());
+    apps.push({ process, profile, fan });
+    $("#app-process").value = "";
+    saveApps(apps, `${process} added`);
+  };
+
+  $("#btn-app-add").addEventListener("click", add);
+  $("#app-process").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") add();
+  });
+}
+
+/* ── graphics ────────────────────────────────────────────────────
+ *
+ * There is nothing to switch on this board - no mux, the panel is wired to
+ * the integrated GPU - so this panel does the two things that are real:
+ * report what the discrete GPU is doing and who is stopping it sleeping, and
+ * let its runtime power policy be set.
+ */
+
+function renderGraphics(s) {
+  const gpu = s.daemon?.gpu ?? null;
+  const card = $("#gfx-card");
+  if (!card) return;
+  card.hidden = !gpu;
+  if (!gpu) return;
+
+  $("#gfx-layout").textContent =
+    `NVIDIA card at ${gpu.address}, alongside the integrated GPU. ` +
+    "Hybrid: programs run on the integrated GPU unless they ask for the other one.";
+
+  $$("#gfx-power button").forEach((b) =>
+    b.classList.toggle("is-active", b.dataset.power === gpu.control));
+
+  $("#gfx-state").textContent =
+    gpu.status === "suspended" ? "suspended (asleep)" : gpu.status;
+  $("#gfx-state").className = "is-term";
+
+  $("#gfx-suspended").textContent =
+    gpu.suspended_ms > 0
+      ? `${(gpu.suspended_ms / 60000).toFixed(0)} min`
+      : gpu.control === "on" ? "never — you asked for that" : "never";
+
+  const holders = gpu.holders ?? [];
+  $("#gfx-holders").textContent = holders.length
+    ? holders.map((h) => `${h.name} (${h.pid})`).join(", ")
+    : gpu.status === "suspended" ? "nothing — it is asleep" : "nothing";
+
+  $("#gfx-note").textContent =
+    gpu.control === "auto" && gpu.suspended_ms === 0 && gpu.status !== "suspended"
+      ? "allowed to sleep, but it never has"
+      : "";
+}
+
+function bindGraphics() {
+  $$("#gfx-power button").forEach((b) =>
+    b.addEventListener("click", () =>
+      act(() => invoke("set_dgpu_power", { power: b.dataset.power }))));
+
+  $("#btn-gfx-copy").addEventListener("click", async () => {
+    const text = $("#gfx-offload").textContent.trim();
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("copied");
+    } catch {
+      // Clipboard access can be refused; selecting the text is the fallback
+      // that always works.
+      const range = document.createRange();
+      range.selectNodeContents($("#gfx-offload"));
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      toast("could not copy - the command is selected, press Ctrl+C", true);
+    }
+  });
+}
+
 async function refresh() {
   try {
     state = await invoke("get_state");
@@ -1000,6 +1188,8 @@ async function refresh() {
   }
   renderDaemon(state);
   renderProfiles(state);
+  renderApps(state);
+  renderGraphics(state);
   renderLeds(state);
   renderEffect(state);
 
@@ -1019,5 +1209,7 @@ async function refresh() {
 buildKeycaps();
 buildZonePickers();
 bindCurveEditor();
+bindApps();
+bindGraphics();
 refresh();
 setInterval(() => { if (Date.now() > holdUntil) refresh(); }, POLL_MS);

@@ -47,6 +47,58 @@ impl GpuPower {
     }
 }
 
+/// What the dGPU's runtime power management is allowed to do.
+///
+/// This is not a graphics switch, because this board does not have one: the
+/// panel is wired to the integrated GPU (the NVIDIA card has no eDP
+/// connector, only HDMI), there is no `gpu_mux_mode`, and the DSDT does not
+/// mention a mux at all. What can be chosen is whether the discrete GPU is
+/// allowed to sleep when nothing is using it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DgpuPower {
+    /// Suspend when idle. The default, and what a laptop wants on battery.
+    #[default]
+    Auto,
+    /// Keep it awake. Costs several watts at idle; worth it only to rule the
+    /// GPU out when chasing a wake-up or resume problem.
+    On,
+}
+
+impl DgpuPower {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" | "sleep" | "save" => Some(Self::Auto),
+            "on" | "awake" | "always" => Some(Self::On),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for DgpuPower {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Sets `power/control` on the discrete GPU. Root only.
+pub fn set_power(want: DgpuPower) -> crate::error::Result<()> {
+    let Some(gpu) = discover() else {
+        return Err(crate::Error::Curve("no discrete GPU".into()));
+    };
+    let path = PathBuf::from(PCI_DEVICES)
+        .join(&gpu.address)
+        .join("power/control");
+    std::fs::write(&path, want.as_str()).map_err(|source| crate::Error::Write { path, source })
+}
+
 /// The discrete GPU, if there is one.
 ///
 /// Matched on vendor plus PCI class rather than on the driver name, so it
@@ -170,6 +222,14 @@ impl Watch {
         let fresh = discover();
         *cached = Some((Instant::now(), fresh.clone()));
         fresh
+    }
+}
+
+impl Watch {
+    /// Drops the cached reading, for when we have just changed something and
+    /// the next caller should see it.
+    pub fn invalidate(&self) {
+        *self.cached.borrow_mut() = None;
     }
 }
 
