@@ -48,6 +48,7 @@ const mockState = {
   leds_writable: true,
   profile_choices: ["low-power", "balanced", "performance"],
   interpolation: "step",
+  effect: { effect: "none", speed: 5, color: { r: 232, g: 17, b: 35 } },
   curve: [
     { temp_c: 45, rpm: 0 },
     { temp_c: 50, rpm: 1800 },
@@ -77,6 +78,9 @@ async function mockInvoke(cmd, args) {
         : args.mode.mode === "curve" ? 2100
         : null;
       return `mode: ${args.mode.mode}`;
+    case "set_effect":
+      mockState.effect = { effect: args.effect, speed: args.speed, color: args.color };
+      return args.effect === "none" ? "lighting effects off" : `lighting: ${args.effect}`;
     case "set_curve":
       mockState.curve = args.points;
       mockState.interpolation = args.interpolation;
@@ -295,6 +299,63 @@ $$("[data-preset]").forEach((b) =>
     act(() => invoke("set_all_zones", rgb(b.dataset.preset)), null);
   }),
 );
+
+/* Effects are the daemon's job, not the UI's: they have to keep running when
+ * this window is closed. So the buttons send the effect to omend and the
+ * keyboard keeps doing it afterwards. */
+
+const EFFECT_HINT = {
+  none: "The zones keep the colour you set above.",
+  breathing: "One colour fading in and out. Uses the colour picked above; " +
+             "pick a new one and set breathing again to change it.",
+  wave: "A hue travelling along the four zones.",
+  spectrum: "All four zones on the same hue, cycling through the spectrum.",
+};
+
+function currentEffect() {
+  return state?.daemon?.effect ?? state?.effect ?? { effect: "none", speed: 5 };
+}
+
+function sendEffect(name) {
+  const now = currentEffect();
+  // The base colour for breathing is whatever the zones are showing - which
+  // is what "the colour picked above" means to someone looking at the page.
+  const base = state?.leds?.zones?.[1] ?? now.color ?? { r: 232, g: 17, b: 35 };
+  act(() => invoke("set_effect", {
+    effect: name,
+    speed: Number($("#effect-speed").value),
+    color: name === "breathing" ? base : (now.color ?? base),
+  }));
+}
+
+$$("#effect-modes button").forEach((b) =>
+  b.addEventListener("click", () => sendEffect(b.dataset.effect)),
+);
+
+$("#effect-speed").addEventListener("input", (e) => {
+  $("#effect-speed-out").textContent = e.target.value;
+});
+$("#effect-speed").addEventListener("change", () => {
+  const now = currentEffect();
+  if (now.effect !== "none") sendEffect(now.effect);
+});
+
+function renderEffect(s) {
+  const now = s.daemon?.effect ?? s.effect ?? { effect: "none", speed: 5 };
+  $$("#effect-modes button").forEach((b) =>
+    b.classList.toggle("is-active", b.dataset.effect === now.effect),
+  );
+  if (Date.now() > holdUntil) {
+    $("#effect-speed").value = now.speed ?? 5;
+    $("#effect-speed-out").textContent = String(now.speed ?? 5);
+  }
+  $("#effect-speed-row").hidden = now.effect === "none";
+  $("#effect-hint").textContent = EFFECT_HINT[now.effect] ?? "";
+  // An effect repaints the zones several times a second, so the colour
+  // pickers below are not what the keyboard is showing. Say so.
+  $("#effect-note").textContent =
+    now.effect === "none" ? "" : "the zone colours below are being animated";
+}
 
 $("#bright-range").addEventListener("input", (e) => {
   $("#bright-out").textContent = `${e.target.value}%`;
@@ -851,6 +912,7 @@ async function refresh() {
   renderDaemon(state);
   renderProfiles(state);
   renderLeds(state);
+  renderEffect(state);
 
   const d = state.daemon;
   pushHistory(d?.driver_temp_c, d?.fan1_rpm);

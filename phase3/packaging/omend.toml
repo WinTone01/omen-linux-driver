@@ -92,3 +92,25 @@ stall_temp_c = 75.0
 # How long the fans may read 0 RPM above stall_temp_c before full power is
 # forced. A few seconds covers a fan spinning up while the tachometer lags.
 stall_grace_secs = 6
+
+[lighting]
+# Keyboard animation. Colours are not kept here - they live in the LED class,
+# where the kernel already remembers them and where anything else on the system
+# can set them too. Only the animation belongs to the daemon, because an
+# animation is a thing that has to keep running.
+#
+# none / breathing / wave / spectrum. Turning an effect off puts the zones back
+# to the colours they had before it started.
+effect = "none"
+
+# 1 (slowest, a twelve-second cycle) to 10 (fastest, a second and a half).
+speed = 5
+
+# Base colour for the effects that take one - breathing does, the two hue
+# effects supply their own. OMEN red by default.
+color = [232, 17, 35]
+
+# Frames per second while an effect runs. Each frame writes four zones and each
+# zone write is a WMI call; ten is smooth enough for four zones spread across a
+# keyboard and leaves the firmware alone the rest of the time.
+fps = 10

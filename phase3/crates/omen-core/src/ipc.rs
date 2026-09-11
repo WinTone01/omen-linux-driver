@@ -95,6 +95,9 @@ pub enum Request {
     SetCurve(CurveSpec),
     /// Go back to the built-in curve (OMEN Gaming Hub's table).
     ResetCurve,
+    /// Set the keyboard lighting effect. Saved and re-read the same way a
+    /// curve is, so it survives a restart.
+    SetEffect(crate::anim::EffectSpec),
     /// Re-read the config from disk.
     Reload,
 }
@@ -128,6 +131,9 @@ pub struct Snapshot {
     #[serde(default)]
     pub safety_reason: Option<String>,
     pub temps: Vec<(String, f32)>,
+    /// The keyboard effect the daemon is drawing, if any.
+    #[serde(default)]
+    pub effect: Option<crate::anim::EffectSpec>,
     /// The curve currently in effect, so an editor can start from what is
     /// running rather than from the file it hopes is being used.
     #[serde(default)]

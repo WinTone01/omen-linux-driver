@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::anim::{Effect, EffectSpec};
 use crate::curve::{self, Curve, Interpolation, Point};
 use crate::error::{Error, Result};
 use crate::fan::{DEFAULT_MAX_RPM, DEFAULT_MIN_RPM};
@@ -32,6 +33,8 @@ pub struct Config {
     pub fan: FanConfig,
     #[serde(default)]
     pub safety: SafetyConfig,
+    #[serde(default)]
+    pub lighting: LightingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +153,86 @@ fn default_stall_grace() -> u64 {
     6
 }
 
+/// Keyboard lighting.
+///
+/// Colours are NOT kept here: they live in the LED class, where the kernel
+/// already remembers them and where anything else on the system can set them
+/// too (see leds.rs). Only the animation belongs to us, because an animation
+/// is a thing that has to keep running.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LightingConfig {
+    /// none / breathing / wave / spectrum.
+    #[serde(default)]
+    pub effect: Effect,
+
+    /// 1 (slowest) to 10 (fastest).
+    #[serde(default = "default_speed")]
+    pub speed: u8,
+
+    /// Base colour for the effects that take one, as `[r, g, b]`.
+    #[serde(default = "default_effect_color")]
+    pub color: [u8; 3],
+
+    /// Frames per second while an effect runs.
+    ///
+    /// Each frame writes four zones, and each zone write is a WMI call. Ten
+    /// is smooth enough for four zones spread across a keyboard and leaves
+    /// the firmware alone the rest of the time; there is no point paying for
+    /// sixty.
+    #[serde(default = "default_fps")]
+    pub fps: u8,
+}
+
+impl Default for LightingConfig {
+    fn default() -> Self {
+        let spec = EffectSpec::default();
+        Self {
+            effect: spec.effect,
+            speed: spec.speed,
+            color: default_effect_color(),
+            fps: default_fps(),
+        }
+    }
+}
+
+impl LightingConfig {
+    pub fn spec(&self) -> EffectSpec {
+        EffectSpec {
+            effect: self.effect,
+            speed: self.speed,
+            color: crate::leds::Rgb {
+                r: self.color[0],
+                g: self.color[1],
+                b: self.color[2],
+            },
+        }
+    }
+
+    pub fn set_spec(&mut self, spec: EffectSpec) {
+        self.effect = spec.effect;
+        self.speed = spec.speed;
+        self.color = [spec.color.r, spec.color.g, spec.color.b];
+    }
+
+    pub fn frame_interval(&self) -> Duration {
+        Duration::from_secs_f32(1.0 / self.fps.clamp(1, 60) as f32)
+    }
+}
+
+fn default_fps() -> u8 {
+    10
+}
+
+fn default_speed() -> u8 {
+    EffectSpec::default().speed
+}
+
+fn default_effect_color() -> [u8; 3] {
+    let c = EffectSpec::default().color;
+    [c.r, c.g, c.b]
+}
+
 impl Default for FanConfig {
     fn default() -> Self {
         Self {
@@ -205,6 +288,12 @@ impl Config {
             return Err(Error::Curve(format!(
                 "min_rpm ({}) >= max_rpm ({})",
                 self.fan.min_rpm, self.fan.max_rpm
+            )));
+        }
+        if self.lighting.fps == 0 || self.lighting.fps > 60 {
+            return Err(Error::Curve(format!(
+                "lighting fps must be between 1 and 60, got {}",
+                self.lighting.fps
             )));
         }
         if self.safety.recover_delta_c <= 0.0 {

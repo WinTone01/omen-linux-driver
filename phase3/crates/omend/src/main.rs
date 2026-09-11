@@ -10,6 +10,7 @@
 //! curve to it and only take over when we want more.
 
 mod guard;
+mod lighting;
 mod server;
 mod shared;
 
@@ -199,6 +200,12 @@ fn run(args: Args) -> Result<()> {
         server::spawn(shared.clone(), args.config.clone())?;
     }
 
+    // Effects are a long-running thing, so a single diagnostic pass does not
+    // start one. --dry-run does not either: the flag means "write nothing".
+    let lights = (!args.once && !args.dry_run)
+        .then(|| lighting::Lighting::start(rt.cfg.lighting.clone()))
+        .flatten();
+
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
         signal_hook::flag::register(sig, Arc::clone(&stop))
@@ -207,6 +214,9 @@ fn run(args: Args) -> Result<()> {
 
     loop {
         rt.tick(&shared, &args.config);
+        if let (Some(lights), Some(cfg)) = (lights.as_ref(), rt.take_lighting_change()) {
+            lights.update(cfg);
+        }
 
         if args.once || stop.load(Ordering::Relaxed) {
             break;
@@ -276,6 +286,10 @@ struct Runtime {
     mode: ControlMode,
     applied: Applied,
     read_only: bool,
+    /// Set when a reload brought a new lighting configuration, so the main
+    /// loop can hand it to the lighting thread. The thread is not reachable
+    /// from here, and it should not be - it is not part of fan control.
+    lighting_changed: bool,
     gpu: gpu::Watch,
     started: Instant,
 }
@@ -298,6 +312,7 @@ impl Runtime {
             mode: ControlMode::Curve,
             applied: Applied::Unknown,
             read_only,
+            lighting_changed: false,
             gpu: gpu::Watch::new(),
             started: Instant::now(),
         })
@@ -364,6 +379,9 @@ impl Runtime {
                             cfg.min_dwell(),
                             cfg.fan.step_rpm,
                         );
+                        if cfg.lighting != self.cfg.lighting {
+                            self.lighting_changed = true;
+                        }
                         self.cfg = cfg;
                         self.applied = Applied::Unknown;
                         info!("configuration re-read");
@@ -547,6 +565,10 @@ impl Runtime {
         }
     }
 
+    fn take_lighting_change(&mut self) -> Option<omen_core::config::LightingConfig> {
+        std::mem::take(&mut self.lighting_changed).then(|| self.cfg.lighting.clone())
+    }
+
     fn snapshot(&self, driver: Option<(String, f32)>) -> Snapshot {
         Snapshot {
             mode: Some(self.mode),
@@ -573,6 +595,7 @@ impl Runtime {
                 points: self.governor.curve().points().to_vec(),
                 interpolation: self.governor.curve().interpolation(),
             }),
+            effect: Some(self.cfg.lighting.spec()),
             gpu: self.gpu.get(),
             uptime_secs: self.started.elapsed().as_secs(),
         }

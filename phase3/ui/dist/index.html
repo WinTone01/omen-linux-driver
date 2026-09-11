@@ -293,6 +293,25 @@
           </div>
 
           <div class="card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Effect</h2>
+              <span class="panel-head__note" id="effect-note"></span>
+            </div>
+            <div class="seg-4" id="effect-modes">
+              <button data-effect="none">Static</button>
+              <button data-effect="breathing">Breathing</button>
+              <button data-effect="wave">Wave</button>
+              <button data-effect="spectrum">Spectrum</button>
+            </div>
+            <div class="slider-row" id="effect-speed-row">
+              <span class="mini-label">Speed</span>
+              <input type="range" id="effect-speed" min="1" max="10" step="1" value="5">
+              <output id="effect-speed-out">5</output>
+            </div>
+            <p class="hint" id="effect-hint"></p>
+          </div>
+
+          <div class="card">
             <div class="panel-head"><h2 class="panel-head__title">Brightness</h2></div>
             <div class="slider-row">
               <input type="range" id="bright-range" min="0" max="100" step="5" value="100">

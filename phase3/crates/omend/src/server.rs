@@ -194,6 +194,34 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             write_curve(config_path, shared, None)
         }
 
+        Request::SetEffect(spec) => {
+            info!(
+                "request: lighting -> {} at speed {}",
+                spec.effect, spec.speed
+            );
+            let mut cfg = match Config::load(config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("the current configuration could not be read: {e}"),
+                    }
+                }
+            };
+            cfg.lighting.set_spec(spec);
+            if let Err(e) = cfg.save(config_path) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+            shared.request_reload();
+            Response::Done {
+                message: match spec.effect {
+                    omen_core::anim::Effect::None => "lighting effects off".into(),
+                    other => format!("lighting: {other}"),
+                },
+            }
+        }
+
         Request::Reload => {
             shared.request_reload();
             Response::Done {

@@ -573,3 +573,6 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 }
 .chart--curve.is-editing { cursor: crosshair; }
 .chart-line--curve.is-draft { stroke-dasharray: 5 3; }
+
+/* [hidden] has to beat the flex rules above, or a hidden row still shows. */
+.slider-row[hidden], .hint[hidden] { display: none; }

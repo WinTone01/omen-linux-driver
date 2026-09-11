@@ -13,6 +13,7 @@ mod client;
 use std::process::ExitCode;
 
 use anyhow::{bail, Result};
+use omen_core::anim::{Effect, EffectSpec};
 use omen_core::config::Config;
 use omen_core::fan::Fan;
 use omen_core::ipc::{ControlMode, CurveSpec, Request, Response};
@@ -39,6 +40,11 @@ USAGE:
                                    not take them - for comparing against stock
                                    behaviour, not for daily use.
 
+    omenctl effect <NAME> [SPEED] [#RRGGBB]
+                                   Keyboard lighting: none / breathing / wave /
+                                   spectrum. Speed is 1-10; the colour applies
+                                   to breathing. Persists across reboots.
+
     omenctl profile <NAME>         balanced / performance / low-power
     omenctl reload                 Make the daemon re-read its configuration
 
@@ -55,6 +61,7 @@ fn main() -> ExitCode {
         "status" => status(),
         "curve" => curve(&args),
         "set" => set_mode(&args),
+        "effect" => set_effect(&args),
         "profile" => set_profile(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
         "-h" | "--help" | "help" => {
@@ -105,6 +112,60 @@ fn set_mode(args: &[String]) -> Result<()> {
         None => bail!("a mode is required: curve / auto / manual <RPM> / max"),
     };
     client::report(client::send(&Request::SetMode(mode))?)
+}
+
+/// The effect the daemon is running, if it is running and will say.
+fn current_effect() -> Option<EffectSpec> {
+    match client::send(&Request::Status) {
+        Ok(Response::Ok(snap)) => snap.effect,
+        _ => None,
+    }
+}
+
+/// `#e81123` or `e81123`.
+fn parse_hex(raw: &str) -> Result<omen_core::leds::Rgb> {
+    let hex = raw.trim_start_matches('#');
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("{raw:?} is not a colour - expected something like #e81123");
+    }
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap();
+    Ok(omen_core::leds::Rgb {
+        r: byte(0),
+        g: byte(2),
+        b: byte(4),
+    })
+}
+
+fn set_effect(args: &[String]) -> Result<()> {
+    let name = args.get(1).ok_or_else(|| {
+        anyhow::anyhow!("an effect is required: none / breathing / wave / spectrum")
+    })?;
+    let effect = Effect::parse(name).ok_or_else(|| {
+        anyhow::anyhow!("unknown effect: {name} (none / breathing / wave / spectrum)")
+    })?;
+
+    // Unspecified fields keep whatever the daemon is already using. Turning
+    // effects off and back on should not quietly reset the colour you chose,
+    // and `omenctl effect wave` should not reset the speed.
+    let mut spec = EffectSpec {
+        effect,
+        ..current_effect().unwrap_or_default()
+    };
+    for arg in &args[2..] {
+        if arg.starts_with('#') || arg.len() == 6 && arg.chars().all(|c| c.is_ascii_hexdigit()) {
+            spec.color = parse_hex(arg)?;
+        } else {
+            let speed: u8 = arg
+                .parse()
+                .map_err(|_| anyhow::anyhow!("{arg:?} is neither a speed (1-10) nor a colour"))?;
+            if !(1..=10).contains(&speed) {
+                bail!("the speed must be between 1 and 10");
+            }
+            spec.speed = speed;
+        }
+    }
+
+    client::report(client::send(&Request::SetEffect(spec))?)
 }
 
 fn set_profile(args: &[String]) -> Result<()> {
