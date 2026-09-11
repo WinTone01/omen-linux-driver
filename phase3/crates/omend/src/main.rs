@@ -242,6 +242,9 @@ fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
+/// How often a setpoint we already hold is written again. See apply().
+const SETPOINT_KEEPALIVE: Duration = Duration::from_secs(10);
+
 /// An active safety override: the fans have been forced to full power and
 /// normal driving is suspended until the temperature comes back down.
 ///
@@ -269,6 +272,11 @@ struct Emergency {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Applied {
     Unknown,
+    /// Fans off, still under our setpoint. The bottom of the curve.
+    Idle,
+    /// Control handed to the EC. Only ever a deliberate user request now -
+    /// the curve does not go here, because the EC does not take its curve
+    /// back and the fans stay stopped while the machine heats up.
     Auto,
     Rpm(u32),
     Max,
@@ -290,6 +298,8 @@ struct Runtime {
     /// loop can hand it to the lighting thread. The thread is not reachable
     /// from here, and it should not be - it is not part of fan control.
     lighting_changed: bool,
+    /// When the current setpoint was last written, for the keep-alive.
+    applied_at: Instant,
     gpu: gpu::Watch,
     started: Instant,
 }
@@ -313,6 +323,7 @@ impl Runtime {
             applied: Applied::Unknown,
             read_only,
             lighting_changed: false,
+            applied_at: Instant::now(),
             gpu: gpu::Watch::new(),
             started: Instant::now(),
         })
@@ -504,7 +515,7 @@ impl Runtime {
                     return;
                 };
                 match target {
-                    None => self.apply(Applied::Auto, &format!("{label} {temp:.1}C")),
+                    None => self.apply(Applied::Idle, &format!("{label} {temp:.1}C")),
                     Some(rpm) => self.apply(Applied::Rpm(rpm), &format!("{label} {temp:.1}C")),
                 }
             }
@@ -515,12 +526,31 @@ impl Runtime {
     }
 
     fn apply(&mut self, want: Applied, why: &str) {
-        if want == self.applied {
-            return;
+        // Re-assert a setpoint we already hold, from time to time.
+        //
+        // We are not the only thing that can change it: the EC has a watchdog
+        // on manual fan control (Phase 1 3.3, EC 0x63), another tool may write
+        // pwm1, and a suspend/resume cycle re-initialises the controller.
+        // Whatever the cause, the state it falls back to is the one that is
+        // dangerous here - fans stopped, nobody driving - so it is worth one
+        // WMI call every ten seconds to know we still mean it. omen-space
+        // rewrites its duty on the same interval, for the same reason.
+        let repeat = want == self.applied;
+        if repeat {
+            let refresh = matches!(want, Applied::Rpm(_) | Applied::Idle)
+                && self.applied_at.elapsed() >= SETPOINT_KEEPALIVE;
+            if !refresh {
+                return;
+            }
         }
+        self.applied_at = Instant::now();
         match want {
             Applied::Rpm(rpm) => {
-                info!("{why} -> {rpm} RPM (pwm {})", self.fan.rpm_to_pwm(rpm));
+                if repeat {
+                    debug!("{why} -> {rpm} RPM (re-asserted)");
+                } else {
+                    info!("{why} -> {rpm} RPM (pwm {})", self.fan.rpm_to_pwm(rpm));
+                }
                 if self.read_only {
                     self.applied = want;
                     return;
@@ -540,6 +570,24 @@ impl Runtime {
                         self.declare_emergency(reason, None, Duration::from_secs(20));
                     }
                 }
+            }
+            Applied::Idle => {
+                if repeat {
+                    debug!("{why} -> fans off (re-asserted)");
+                } else {
+                    info!("{why} -> fans off (setpoint 0, still ours)");
+                }
+                if !self.read_only {
+                    if let Err(e) = self.fan.set_idle() {
+                        // Same reasoning as a failed setpoint write: we no
+                        // longer know what the fan is doing, and the EC will
+                        // not pick it up for us.
+                        let reason = format!("could not stop the fans ({e})");
+                        self.declare_emergency(reason, None, Duration::from_secs(20));
+                        return;
+                    }
+                }
+                self.applied = want;
             }
             Applied::Auto => {
                 info!("{why} -> automatic (control with the EC)");
@@ -577,6 +625,9 @@ impl Runtime {
             driver_temp_c: driver.as_ref().map(|(_, c)| *c),
             target_rpm: match self.applied {
                 Applied::Rpm(rpm) => Some(rpm),
+                // Zero is a real setpoint we are holding, and saying so is
+                // the difference between "quiet" and "nobody is driving".
+                Applied::Idle => Some(0),
                 _ => None,
             },
             fan1_rpm: self.fan.rpm(1).ok(),

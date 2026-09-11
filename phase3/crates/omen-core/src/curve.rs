@@ -2,11 +2,14 @@
 //!
 //! Three design decisions live here:
 //!
-//! 1. **`rpm = 0` does not mean "stop the fans", it means "hand control to
-//!    the EC".** Measured in Phase 2: the EC's own automatic mode stops the
-//!    fans completely at 45 C (fan-stop). Taking manual control at the bottom
-//!    of the curve and forcing 1800 RPM would make the machine LOUDER than it
-//!    is from the factory. So we give control back down there.
+//! 1. **`rpm = 0` means "fans off, setpoint still ours".** The machine is
+//!    silent at idle from the factory - the EC stops the fans completely at
+//!    45 C - and forcing 1800 RPM down there would make it LOUDER than
+//!    stock. But "off" must not be spelled by handing control to the EC:
+//!    once this driver has been in manual mode the EC does not take its own
+//!    curve back, and the fans then stay stopped while the machine heats up.
+//!    So the bottom of the curve is manual mode at pwm 0, which the next
+//!    sample can undo.
 //!
 //! 2. **Setpoints are rounded to the hardware's resolution.** Phase 1 §3.2:
 //!    the EC's fan target (`SRP1`/`SRP2`) is in hundreds of RPM, so the real
@@ -26,14 +29,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-/// A single point on the curve. `rpm = 0` -> hand control to the EC.
+/// A single point on the curve. `rpm = 0` -> fans off (still our setpoint).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Point {
     pub temp_c: f32,
     pub rpm: u32,
 }
 
-/// The desired fan state. `None` = control is with the EC.
+/// The desired fan state. `None` = fans off.
 pub type Target = Option<u32>;
 
 /// How a value between two points is worked out.
@@ -57,8 +60,8 @@ pub enum Interpolation {
 /// real step size.
 pub const EC_STEP_RPM: u32 = 100;
 
-/// Ordering by "how much cooling", for comparisons. The automatic region sits
-/// at the bottom of the curve, so it ranks lowest.
+/// Ordering by "how much cooling", for comparisons. The idle region sits at
+/// the bottom of the curve, so it ranks lowest.
 fn cooling_rank(t: Target) -> u32 {
     t.unwrap_or(0)
 }
@@ -97,12 +100,12 @@ impl Curve {
                     w[0].temp_c, w[1].temp_c, w[0].rpm, w[1].rpm
                 )));
             }
-            // The automatic region may only sit at the bottom of the curve;
-            // a 0 in the middle would imply everything above it is automatic
-            // too, which is not what happens.
+            // The idle region may only sit at the bottom of the curve; a 0
+            // in the middle would mean the fans stop again as the machine
+            // gets hotter, which is not a curve anyone means to draw.
             if w[0].rpm != 0 && w[1].rpm == 0 {
                 return Err(Error::Curve(format!(
-                    "the automatic region (rpm=0) may only be at the bottom of the curve, found one at {} C",
+                    "fans off (rpm=0) is only allowed at the bottom of the curve, found one at {} C",
                     w[1].temp_c
                 )));
             }
@@ -152,8 +155,8 @@ impl Curve {
         for w in self.points.windows(2) {
             let (a, b) = (w[0], w[1]);
             if temp_c >= a.temp_c && temp_c <= b.temp_c {
-                // Interpolating out of the automatic region into the first
-                // real point is meaningless - 0 is a mode, not an RPM value.
+                // Interpolating out of the idle region into the first real
+                // point is meaningless - off is a state, not an RPM value.
                 if a.rpm == 0 {
                     return (b.rpm != 0).then_some(b.rpm);
                 }
@@ -367,7 +370,7 @@ mod tests {
 
     #[test]
     fn leaving_the_automatic_region_does_not_interpolate() {
-        // Linear mode cannot interpolate out of the automatic region - 0 is a
+        // Linear mode cannot interpolate out of the idle region - 0 is a
         // mode, not an RPM value - so the upper point applies throughout.
         let curve = Curve::with_interpolation(
             vec![

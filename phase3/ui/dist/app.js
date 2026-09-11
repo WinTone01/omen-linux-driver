@@ -249,7 +249,7 @@ const MODE_HELP = {
     "Fans follow the curve in /etc/omen/omend.toml by temperature. This is the " +
     "normal mode, and it is the equivalent of what OMEN Gaming Hub calls Auto - " +
     "HP runs its curve in software too. Below the curve's lowest point the fans " +
-    "are left alone, which keeps the machine silent at idle.",
+    "stop, but the setpoint stays ours, so the next sample can spin them back up.",
   manual:
     "A fixed target. The critical cutout still applies - a request here does not " +
     "disable thermal protection.",
@@ -425,9 +425,10 @@ function renderDaemon(s) {
   $("#v-mode").textContent = d.mode ? modeText(d.mode) : "—";
   $("#v-mode").className = "is-term";
   $("#v-target").textContent =
-    d.target_rpm != null ? `${d.target_rpm} RPM`
+    d.target_rpm === 0 ? "fans off (idle)"
+    : d.target_rpm != null ? `${d.target_rpm} RPM`
     : d.mode?.mode === "max" ? "full power"
-    : "automatic (EC)";
+    : "control is with the EC";
   $("#v-driver").textContent =
     d.driver_label && cpu != null ? `${d.driver_label} ${cpu.toFixed(1)} °C` : "—";
   renderGpu(d.gpu);
@@ -754,9 +755,10 @@ function renderEditor() {
   drawHandles();
 }
 
-/* An RPM of 0 is not a speed, it is "hand the fans to the EC", and the daemon
- * only accepts it at the bottom of the curve. So the lowest point may be
- * dragged down into it, and no other point may. */
+/* An RPM of 0 is not a speed, it is "fans off" - the daemon holds the
+ * setpoint at zero rather than handing the fans to the EC - and it is only
+ * allowed at the bottom of the curve. So the lowest point may be dragged down
+ * into it, and no other point may. */
 function snapRpm(raw, index) {
   const rounded = Math.round(raw / CURVE_RPM_STEP) * CURVE_RPM_STEP;
   if (index === 0 && rounded < CURVE_MIN_RPM / 2) return 0;
@@ -777,8 +779,8 @@ function moveDraftPoint(i, temp, rpm) {
     / CURVE_TEMP_STEP) * CURVE_TEMP_STEP;
 
   let r = snapRpm(rpm, i);
-  // A neighbour sitting in the automatic region (0) is not a floor - it is a
-  // mode, and anything above it is a real speed.
+  // A neighbour sitting in the idle region (0) is not a floor - it is off,
+  // and anything above it is a real speed.
   if (prev && prev.rpm > 0) r = Math.max(r, prev.rpm);
   if (next && next.rpm > 0) r = Math.min(r, next.rpm);
   p.rpm = r;
@@ -809,7 +811,7 @@ function drawHandles() {
     const label = el("text", {
       x: clamp(cx, 16, W - 16), y: clamp(cy - 12, 10, H - 4), "text-anchor": "middle",
     });
-    label.textContent = p.rpm === 0 ? `${p.temp_c}° EC` : `${p.temp_c}° ${p.rpm}`;
+    label.textContent = p.rpm === 0 ? `${p.temp_c}° off` : `${p.temp_c}° ${p.rpm}`;
     g.append(label);
   });
 }

@@ -38,7 +38,13 @@ step_rpm = 100
 # quieter than stock.
 interpolation = "step"
 
-# The fan curve. rpm = 0 -> leave the fans alone at that temperature.
+# The fan curve. rpm = 0 -> fans off at that temperature.
+#
+# "Off" here means omend holds the setpoint at zero in manual mode. It does NOT
+# mean handing control to the EC: once this driver has been in manual mode the
+# EC does not take its own curve back, and the fans then stay stopped while the
+# machine heats up. Holding the setpoint ourselves means the next sample can
+# spin them straight back up. Only allowed at the bottom of the curve.
 #
 # This is OMEN Gaming Hub's own table, reproduced point for point from the
 # profiles.json it ships (Phase 1 §6.3):

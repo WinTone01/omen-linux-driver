@@ -148,6 +148,25 @@ impl Fan {
         Ok(clamped)
     }
 
+    /// Fans off, with the setpoint still ours.
+    ///
+    /// NOT the same as handing control to the EC, and the difference is the
+    /// whole point: `pwm1_enable = 2` writes EC 0x34/0x35 as 0, which is
+    /// supposed to mean "revert to your own curve" - and on this board, once
+    /// the driver has been in manual mode, the EC does not. It leaves the
+    /// fans stopped and keeps them stopped while the machine heats up
+    /// (measured: 78 -> 85 C in twelve seconds with pwm1_enable = 2).
+    ///
+    /// So a quiet machine has to be something we hold rather than something
+    /// we hand over: stay in manual at pwm 0, and the next sample can spin
+    /// the fans back up because control never left. omen-space reached the
+    /// same conclusion on the same hardware family and never leaves manual
+    /// mode either.
+    pub fn set_idle(&self) -> Result<()> {
+        self.set_mode(PwmMode::Manual)?;
+        self.hwmon.write("pwm1", 0)
+    }
+
     /// Hands control back to the EC. Safety rule 1: called on every exit path.
     pub fn restore_auto(&self) -> Result<()> {
         self.set_mode(PwmMode::Auto)

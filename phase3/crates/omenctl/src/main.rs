@@ -28,8 +28,8 @@ USAGE:
     omenctl status                 Current state (reads sysfs if no daemon)
     omenctl curve [-c PATH]        Show the active fan curve
     omenctl curve set <POINTS>     Replace it, e.g. 45:0,50:1800,70:2400,90:3300
-                                   (temperature:RPM pairs; rpm 0 = let the EC
-                                   decide, only valid at the bottom)
+                                   (temperature:RPM pairs; rpm 0 = fans off,
+                                   only valid at the bottom)
     omenctl curve reset            Back to the built-in OMEN Gaming Hub table
 
     omenctl set curve              Automatic: the curve drives the fan (default)
@@ -254,9 +254,12 @@ fn status() -> Result<()> {
         // empty does NOT mean "automatic" - it is empty in max mode too, and
         // there the fans are at full power. The mode has to be read with it.
         match (snap.mode, snap.target_rpm) {
+            // Zero is a setpoint we are holding, not an absent one - see the
+            // bottom of the curve.
+            (_, Some(0)) => field("target", "fans off (idle, setpoint ours)"),
             (_, Some(rpm)) => field("target", format!("{rpm} RPM")),
             (Some(ControlMode::Max), None) => field("target", "full power"),
-            (_, None) => field("target", "automatic (control with the EC)"),
+            (_, None) => field("target", "control is with the EC"),
         }
         field("uptime", format!("{} s", snap.uptime_secs));
         println!();
@@ -439,7 +442,7 @@ fn curve(args: &[String]) -> Result<()> {
     println!("\n  {:>11}  target", "temperature");
     for p in curve.points() {
         let target = if p.rpm == 0 {
-            "automatic (control with the EC)".to_string()
+            "fans off (idle)".to_string()
         } else {
             format!("{} RPM", p.rpm)
         };

@@ -204,8 +204,8 @@ Check with `omenctl status`.
 omenctl status                # daemon + hardware state
 omenctl curve                 # active curve and safety thresholds
 omenctl curve set 45:0,55:1800,75:2400,92:3600
-                              # replace it (temperature:RPM; rpm 0 = leave it
-                              # to the EC, only valid at the bottom)
+                              # replace it (temperature:RPM; rpm 0 = fans off,
+                              # only valid at the bottom)
 omenctl curve reset           # back to the built-in OMEN Gaming Hub table
 
 omenctl set curve             # automatic: the curve drives (default)

@@ -76,7 +76,8 @@ pub struct FanConfig {
     #[serde(default)]
     pub interpolation: Interpolation,
 
-    /// `rpm = 0` -> hand control to the EC at that temperature.
+    /// `rpm = 0` -> fans off at that temperature, with the setpoint still
+    /// ours. NOT the same as handing control to the EC; see fan::set_idle.
     #[serde(default)]
     pub curve: Vec<Point>,
 }
