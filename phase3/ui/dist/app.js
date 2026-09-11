@@ -710,6 +710,8 @@ const CURVE_RPM_STEP = 100;    // the EC's own resolution
 const CURVE_MIN_RPM = 1800;    // below this the fan does not turn
 
 let draft = null;
+let resetArmed = false;
+let resetTimer = null;
 /* Index of the point under the pointer, so its label is always shown. */
 let dragging = null;
 
@@ -738,9 +740,13 @@ function endEdit() {
 function renderEditor() {
   const editing = curveEditing();
   $("#btn-curve-edit").hidden = editing;
-  for (const id of ["#btn-curve-reset", "#btn-curve-cancel", "#btn-curve-save"]) {
+  for (const id of ["#btn-curve-cancel", "#btn-curve-save"]) {
     $(id).hidden = !editing;
   }
+  // Going back to the built-in table is worth offering without having to
+  // enter the editor first - it is the way out of a curve you regret.
+  $("#btn-curve-reset").textContent = resetArmed ? "Sure?" : "Defaults";
+  $("#btn-curve-reset").classList.toggle("is-armed", resetArmed);
   $("#curve-edit-hint").hidden = !editing;
   $("#curve-chart").classList.toggle("is-editing", editing);
   $("#curve-line").classList.toggle("is-draft", editing);
@@ -836,7 +842,19 @@ function bindCurveEditor() {
         "curve saved").then(renderEditor);
   });
 
+  // Two clicks, because one misclick would throw away a curve someone spent
+  // time on. A second button that says "Sure?" is lighter than a dialog and
+  // forgets itself if you walk away.
   $("#btn-curve-reset").addEventListener("click", () => {
+    if (!resetArmed) {
+      resetArmed = true;
+      renderEditor();
+      clearTimeout(resetTimer);
+      resetTimer = setTimeout(() => { resetArmed = false; renderEditor(); }, 4000);
+      return;
+    }
+    clearTimeout(resetTimer);
+    resetArmed = false;
     draft = null;
     act(() => invoke("reset_curve"), "back to the built-in curve").then(renderEditor);
   });

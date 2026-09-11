@@ -576,3 +576,7 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 
 /* [hidden] has to beat the flex rules above, or a hidden row still shows. */
 .slider-row[hidden], .hint[hidden] { display: none; }
+
+/* The armed state of a destructive button: the second click is the one that
+ * does it, so it should not look like the first. */
+.btn--sm.is-armed { background: var(--omen-red); border-color: var(--omen-red); color: #fff; }

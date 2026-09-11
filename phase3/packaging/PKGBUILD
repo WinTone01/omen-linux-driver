@@ -59,8 +59,10 @@ package() {
   install -Dm644 packaging/omen-modprobe.conf "$pkgdir/usr/lib/modprobe.d/omen.conf"
   install -Dm644 packaging/99-omen-leds.rules "$pkgdir/usr/lib/udev/rules.d/99-omen-leds.rules"
 
-  install -Dm644 packaging/omen-control.desktop \
-    "$pkgdir/usr/share/applications/omen-control.desktop"
+  # Named after the app's Wayland app_id so the window is matched to this
+  # entry and gets the logo rather than a generic icon.
+  install -Dm644 packaging/dev.wintone.omen-control.desktop \
+    "$pkgdir/usr/share/applications/dev.wintone.omen-control.desktop"
   install -Dm644 ui/src-tauri/icons/icon.png \
     "$pkgdir/usr/share/icons/hicolor/512x512/apps/omen-control.png"
   install -Dm644 ui/src-tauri/icons/128x128.png \

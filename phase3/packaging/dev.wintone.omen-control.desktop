@@ -1,3 +1,7 @@
+# The file name and StartupWMClass both match the app's Wayland app_id
+# (tauri.conf identifier, with enableGTKAppId). Without that match the window
+# is not associated with this entry and the taskbar, Alt+Tab and the launcher
+# all show a generic icon instead of the logo.
 [Desktop Entry]
 Type=Application
 Name=OMEN Control
@@ -9,4 +13,4 @@ Terminal=false
 Categories=System;Settings;HardwareSettings;
 Keywords=fan;thermal;rgb;keyboard;backlight;omen;
 StartupNotify=true
-StartupWMClass=OMEN Control
+StartupWMClass=dev.wintone.omen-control

@@ -37,7 +37,8 @@ install -Dm644 packaging/omen-sysusers.conf   /usr/lib/sysusers.d/omen.conf
 install -Dm644 packaging/omen-modules.conf    /usr/lib/modules-load.d/omen.conf
 install -Dm644 packaging/omen-modprobe.conf   /usr/lib/modprobe.d/omen.conf
 install -Dm644 packaging/99-omen-leds.rules   /etc/udev/rules.d/99-omen-leds.rules
-install -Dm644 packaging/omen-control.desktop /usr/share/applications/omen-control.desktop
+install -Dm644 packaging/dev.wintone.omen-control.desktop \
+  /usr/share/applications/dev.wintone.omen-control.desktop
 install -Dm644 ui/src-tauri/icons/icon.png    /usr/share/icons/hicolor/512x512/apps/omen-control.png
 install -Dm644 ui/src-tauri/icons/128x128.png /usr/share/icons/hicolor/128x128/apps/omen-control.png
 install -Dm644 ui/src-tauri/icons/32x32.png   /usr/share/icons/hicolor/32x32/apps/omen-control.png
