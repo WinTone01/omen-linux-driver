@@ -10,6 +10,7 @@
 //! it `pwm1` never appears and [`fan::Fan::discover`] returns an error that
 //! says so.
 
+pub mod about;
 pub mod anim;
 pub mod apps;
 pub mod config;

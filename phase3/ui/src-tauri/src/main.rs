@@ -15,6 +15,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod settings;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -56,6 +58,9 @@ struct UiState {
     /// rather than asked of the daemon: the daemon's snapshot carries what it
     /// is doing now, not the table behind it, and the file is world-readable.
     curve: Vec<CurvePoint>,
+    /// Whether a tray icon came up. "Start hidden" is only offered when
+    /// there is somewhere to hide.
+    has_tray: bool,
     /// "step" or "linear" - the chart has to be drawn the way the curve is
     /// actually read, or it would show a ramp where the daemon holds a value.
     interpolation: String,
@@ -267,6 +272,7 @@ fn get_state() -> UiState {
                     .collect()
             })
             .unwrap_or_default(),
+        has_tray: HAS_TRAY.load(Ordering::Relaxed),
         interpolation: match curve.as_ref().map(|c| c.interpolation()) {
             Some(omen_core::curve::Interpolation::Linear) => "linear".into(),
             _ => "step".into(),
@@ -338,6 +344,135 @@ fn set_effect(effect: String, speed: u8, color: omen_core::leds::Rgb) -> Result<
 /// Per-application profiles. The list is replaced wholesale rather than
 /// patched, because its order is meaningful - the first running entry wins -
 /// and an add/remove API would have to invent a way to express that anyway.
+/// A machine setting, not a window one: it changes what happens at the next
+/// boot, for everyone.
+#[tauri::command]
+fn set_startup_profile(profile: Option<String>) -> Result<String, String> {
+    talk(Request::SetStartupProfile { profile })
+}
+
+#[tauri::command]
+fn get_settings() -> settings::Settings {
+    settings::Settings::load()
+}
+
+#[tauri::command]
+fn set_settings(settings: settings::Settings) -> Result<String, String> {
+    settings.save()?;
+    Ok("settings saved".into())
+}
+
+/// Versions of everything, and whether anything running is older than what is
+/// installed. See omen_core::about for why that question is worth asking.
+#[derive(Debug, Serialize)]
+struct VersionInfo {
+    app: String,
+    daemon: Option<String>,
+    daemon_reachable: bool,
+    modules: Vec<omen_core::about::ModuleStatus>,
+}
+
+#[tauri::command]
+fn versions() -> VersionInfo {
+    let (daemon, reachable) = match client::send(&Request::Status) {
+        Ok(Response::Ok(snap)) => (snap.version.clone(), true),
+        Ok(_) => (None, true),
+        Err(_) => (None, false),
+    };
+    VersionInfo {
+        app: omen_core::about::VERSION.to_owned(),
+        daemon,
+        daemon_reachable: reachable,
+        modules: omen_core::about::modules(),
+    }
+}
+
+/// Everything a bug report needs, as text.
+///
+/// Assembled here rather than asking the user to run four commands and paste
+/// the output of each: the useful half of a report is the half people leave
+/// out, and this way the machine's state and the version skew arrive
+/// together.
+#[tauri::command]
+fn diagnostics() -> String {
+    use std::fmt::Write;
+
+    let mut out = String::new();
+    let v = versions();
+
+    let _ = writeln!(out, "omen-control {}", v.app);
+    let _ = writeln!(
+        out,
+        "board        {}",
+        omen_core::sysfs::read_string(std::path::Path::new("/sys/class/dmi/id/board_name"))
+            .unwrap_or_else(|_| "?".into())
+    );
+    let _ = writeln!(
+        out,
+        "product      {}",
+        omen_core::sysfs::read_string(std::path::Path::new("/sys/class/dmi/id/product_name"))
+            .unwrap_or_else(|_| "?".into())
+    );
+    let _ = writeln!(
+        out,
+        "kernel       {}",
+        omen_core::sysfs::read_string(std::path::Path::new("/proc/sys/kernel/osrelease"))
+            .unwrap_or_else(|_| "?".into())
+    );
+    let _ = writeln!(
+        out,
+        "omend        {}",
+        match (&v.daemon, v.daemon_reachable) {
+            (Some(d), _) => d.clone(),
+            (None, true) => "running, version not reported".into(),
+            (None, false) => "not reachable".into(),
+        }
+    );
+    for m in &v.modules {
+        let _ = writeln!(
+            out,
+            "{:<12} {}{}",
+            m.name,
+            if m.loaded { "loaded" } else { "not loaded" },
+            if m.stale() {
+                " (a different build is installed)"
+            } else {
+                ""
+            }
+        );
+    }
+
+    let _ = writeln!(out, "\n--- state ---");
+    match snapshot() {
+        (Some(snap), _, _) => {
+            let _ = writeln!(
+                out,
+                "{}",
+                serde_json::to_string_pretty(&snap).unwrap_or_default()
+            );
+        }
+        (None, err, _) => {
+            let _ = writeln!(out, "no daemon: {}", err.unwrap_or_default());
+        }
+    }
+
+    let _ = writeln!(out, "--- leds ---");
+    match Leds::discover() {
+        Ok(leds) => {
+            let _ = writeln!(
+                out,
+                "{}",
+                serde_json::to_string_pretty(&leds.state()).unwrap_or_default()
+            );
+        }
+        Err(e) => {
+            let _ = writeln!(out, "none: {e}");
+        }
+    }
+
+    out
+}
+
 /// Whether the discrete GPU may suspend when idle. Not a graphics switch -
 /// this board has no mux.
 #[tauri::command]
@@ -442,6 +577,15 @@ fn main() {
                      Install libappindicator-gtk3 for one."
                 ),
             }
+
+            // Starting hidden is only offered when there is a tray to be
+            // hidden into; without one the user would have a running process
+            // and no way back to it.
+            if HAS_TRAY.load(Ordering::Relaxed) && settings::Settings::load().start_hidden {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -465,6 +609,11 @@ fn main() {
             set_effect,
             set_app_profiles,
             set_dgpu_power,
+            set_startup_profile,
+            get_settings,
+            set_settings,
+            versions,
+            diagnostics,
             set_zone,
             set_all_zones,
             set_brightness,

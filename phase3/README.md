@@ -221,6 +221,9 @@ omenctl app remove cs2
 omenctl gpu                   # discrete GPU state, and what holds it awake
 omenctl gpu on                # stop it suspending (costs battery)
 omenctl profile performance   # balanced / performance / low-power
+omenctl profile startup balanced
+                              # which profile to start the machine on
+omenctl version               # what is running vs what is installed
 omenctl reload                # re-read the config
 
 omend --dry-run --once        # show what it would do, writing nothing

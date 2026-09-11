@@ -271,6 +271,51 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             }
         }
 
+        Request::SetStartupProfile { profile } => {
+            let mut cfg = match Config::load(config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("the current configuration could not be read: {e}"),
+                    }
+                }
+            };
+            // Checked against the machine's own list: a profile the firmware
+            // does not have would only fail at the next boot, where nobody is
+            // watching.
+            if let Some(want) = &profile {
+                match PlatformProfile::discover() {
+                    Some(pp) if pp.choices().contains(want) => {}
+                    Some(pp) => {
+                        return Response::Error {
+                            message: format!(
+                                "invalid profile {want:?}; choices: {}",
+                                pp.choices().join(" ")
+                            ),
+                        }
+                    }
+                    None => {
+                        return Response::Error {
+                            message: "no platform_profile".into(),
+                        }
+                    }
+                }
+            }
+            cfg.automation.startup_profile = profile.clone();
+            if let Err(e) = cfg.save(config_path) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+            shared.request_reload();
+            Response::Done {
+                message: match profile {
+                    Some(p) => format!("{p} will be selected at startup"),
+                    None => "the startup profile will be left to the firmware".into(),
+                },
+            }
+        }
+
         Request::Reload => {
             shared.request_reload();
             Response::Done {

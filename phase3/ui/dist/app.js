@@ -49,6 +49,7 @@ const mockState = {
   leds_error: null,
   leds_writable: true,
   profile_choices: ["low-power", "balanced", "performance"],
+  has_tray: true,
   interpolation: "step",
   effect: { effect: "none", speed: 5, color: { r: 232, g: 17, b: 35 } },
   curve: [
@@ -69,6 +70,8 @@ const mockState = {
  * back to. The real one lives in omen-core. */
 const DEFAULT_CURVE = structuredClone(mockState.curve);
 
+let mockSettings = { poll_ms: 2000, alerts: true, autostart: false, start_hidden: false };
+
 async function mockInvoke(cmd, args) {
   switch (cmd) {
     case "get_state":
@@ -80,6 +83,27 @@ async function mockInvoke(cmd, args) {
         : args.mode.mode === "curve" ? 2100
         : null;
       return `mode: ${args.mode.mode}`;
+    case "set_startup_profile":
+      mockState.daemon.startup_profile = args.profile;
+      return args.profile ? `${args.profile} will be selected at startup`
+                          : "the startup profile will be left to the firmware";
+    case "get_settings":
+      return structuredClone(mockSettings);
+    case "set_settings":
+      mockSettings = structuredClone(args.settings);
+      return "settings saved";
+    case "versions":
+      return {
+        app: "0.1.0", daemon: "0.1.0", daemon_reachable: true,
+        modules: [
+          { name: "omen_kbd_rgb", loaded: true, version: "0.1.0",
+            loaded_srcversion: "A", installed_srcversion: "A" },
+          { name: "hp_wmi", loaded: true, version: null,
+            loaded_srcversion: "B", installed_srcversion: "C" },
+        ],
+      };
+    case "diagnostics":
+      return "omen-control 0.1.0\nboard        8D24\n(mock)\n";
     case "set_dgpu_power":
       mockState.daemon.gpu.control = args.power;
       return args.power === "auto"
@@ -119,7 +143,11 @@ async function mockInvoke(cmd, args) {
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
-const POLL_MS = 2000;
+/* The poll interval is a user setting; this is the default until it loads.
+ * pollTimer is rearmed whenever it changes rather than checked inside the
+ * callback, so a slow poll really does mean fewer wake-ups. */
+let POLL_MS = 2000;
+let pollTimer = null;
 const ZONES = ["Left", "WASD", "Centre", "Numpad"];
 
 let state = null;
@@ -1179,6 +1207,199 @@ function bindGraphics() {
   });
 }
 
+/* ── settings ────────────────────────────────────────────────────
+ *
+ * Two kinds of setting, deliberately not mixed. The ones in this section
+ * belong to the person using the window and live in their own config
+ * directory; anything that changes what the machine does goes to the daemon
+ * and is written to /etc, where every user and the boot sequence see it.
+ */
+
+let settings = null;
+
+async function loadSettings() {
+  try {
+    settings = await invoke("get_settings");
+  } catch {
+    settings = { poll_ms: 2000, alerts: true, autostart: false, start_hidden: false };
+  }
+  POLL_MS = settings.poll_ms;
+  startPolling();
+  renderSettings();
+}
+
+function renderSettings() {
+  if (!settings) return;
+  $("#set-poll").value = String(settings.poll_ms);
+  $("#set-alerts").checked = !!settings.alerts;
+  $("#set-autostart").checked = !!settings.autostart;
+  $("#set-hidden").checked = !!settings.start_hidden;
+}
+
+async function saveSettings(patch) {
+  settings = { ...settings, ...patch };
+  if (patch.poll_ms) {
+    POLL_MS = patch.poll_ms;
+    startPolling();
+  }
+  try {
+    await invoke("set_settings", { settings });
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+
+/* The startup profile is a machine setting, so it goes into the daemon's
+ * config like everything else that outlives this window. */
+/* Starting hidden needs somewhere to hide. Without a tray icon the option is
+ * a trap - a running program with no window and no way back - so it is
+ * disabled and the reason is given. */
+function renderTrayDependent(s) {
+  const box = $("#set-hidden");
+  const has = s.has_tray !== false;
+  box.disabled = !has;
+  $("#set-hidden-note").hidden = has;
+}
+
+function renderStartupProfile(s) {
+  const sel = $("#set-startup-profile");
+  if (!sel) return;
+  const choices = s.profile_choices ?? [];
+  const current = s.daemon?.startup_profile ?? "";
+  if (sel.dataset.built !== String(choices.length)) {
+    sel.dataset.built = String(choices.length);
+    sel.replaceChildren();
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "leave it as the firmware remembers";
+    sel.append(none);
+    for (const name of choices) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      sel.append(opt);
+    }
+  }
+  if (document.activeElement !== sel) sel.value = current;
+}
+
+/* ── versions ──────────────────────────────────────────────── */
+
+const CATCH_UP = {
+  omend: "sudo systemctl restart omend",
+  hp_wmi: "sudo modprobe -r hp_wmi && sudo modprobe hp_wmi",
+  omen_kbd_rgb: "sudo modprobe -r omen-kbd-rgb && sudo modprobe omen-kbd-rgb",
+};
+
+async function renderVersions() {
+  let v;
+  try {
+    v = await invoke("versions");
+  } catch {
+    return;
+  }
+
+  const list = $("#ver-list");
+  const commands = [];
+  const rows = [];
+
+  const daemonText =
+    !v.daemon_reachable ? "not reachable"
+    : v.daemon === null ? "running, but too old to report its version"
+    : v.daemon === v.app ? `${v.daemon} (running)`
+    : `${v.daemon} (running) — this window is ${v.app}`;
+  const daemonStale = v.daemon_reachable && v.daemon !== v.app;
+  if (daemonStale) commands.push(CATCH_UP.omend);
+  rows.push(["omend", daemonText, daemonStale]);
+
+  for (const m of v.modules) {
+    const stale =
+      m.loaded && m.loaded_srcversion && m.installed_srcversion &&
+      m.loaded_srcversion !== m.installed_srcversion;
+    if (stale && CATCH_UP[m.name]) commands.push(CATCH_UP[m.name]);
+    rows.push([
+      m.name,
+      !m.loaded ? "not loaded"
+      : stale ? `${m.version ?? "loaded"} — a different build is installed`
+      : (m.version ?? "loaded"),
+      stale,
+    ]);
+  }
+
+  list.replaceChildren();
+  for (const [name, text, stale] of rows) {
+    const dt = document.createElement("dt");
+    dt.textContent = name;
+    const dd = document.createElement("dd");
+    dd.textContent = text;
+    dd.className = stale ? "ver-stale" : "is-term";
+    list.append(dt, dd);
+  }
+
+  $("#footer-ver").textContent = v.app;
+  $("#ver-catchup").hidden = commands.length === 0;
+  $("#ver-commands").textContent = commands.join(" && ");
+  $("#ver-note").textContent = commands.length
+    ? "something installed is newer than what is running"
+    : "";
+}
+
+async function copyText(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`${what} copied`);
+  } catch {
+    toast("could not reach the clipboard", true);
+  }
+}
+
+/* A desktop notification when the fans are forced to full, because that is
+ * the one event worth interrupting someone for - and only on the edge, not
+ * for every poll while it lasts. */
+let lastFallback = false;
+
+function maybeAlert(s) {
+  const now = !!s.daemon?.safety_fallback;
+  if (now && !lastFallback && settings?.alerts) {
+    const reason = s.daemon?.safety_reason ?? "the temperature went too high";
+    if (window.Notification?.permission === "granted") {
+      new Notification("OMEN Control: fans forced to full power", { body: reason });
+    }
+    toast(`fans forced to full power - ${reason}`, true);
+  }
+  lastFallback = now;
+}
+
+function bindSettings() {
+  $("#set-poll").addEventListener("change", (e) =>
+    saveSettings({ poll_ms: Number(e.target.value) }));
+  $("#set-alerts").addEventListener("change", (e) => {
+    saveSettings({ alerts: e.target.checked });
+    if (e.target.checked) window.Notification?.requestPermission?.();
+  });
+  $("#set-autostart").addEventListener("change", (e) =>
+    saveSettings({ autostart: e.target.checked }));
+  $("#set-hidden").addEventListener("change", (e) =>
+    saveSettings({ start_hidden: e.target.checked }));
+
+  $("#set-startup-profile").addEventListener("change", (e) =>
+    act(() => invoke("set_startup_profile", { profile: e.target.value || null })));
+
+  $("#btn-ver-copy").addEventListener("click", () =>
+    copyText($("#ver-commands").textContent, "commands"));
+
+  $("#btn-diag-copy").addEventListener("click", async () => {
+    const text = await invoke("diagnostics");
+    await copyText(text, "report");
+  });
+  $("#btn-diag-show").addEventListener("click", async () => {
+    const out = $("#diag-out");
+    if (!out.hidden) { out.hidden = true; return; }
+    out.textContent = await invoke("diagnostics");
+    out.hidden = false;
+  });
+}
+
 async function refresh() {
   try {
     state = await invoke("get_state");
@@ -1190,6 +1411,9 @@ async function refresh() {
   renderProfiles(state);
   renderApps(state);
   renderGraphics(state);
+  renderStartupProfile(state);
+  renderTrayDependent(state);
+  maybeAlert(state);
   renderLeds(state);
   renderEffect(state);
 
@@ -1211,5 +1435,12 @@ buildZonePickers();
 bindCurveEditor();
 bindApps();
 bindGraphics();
+bindSettings();
+loadSettings();
+renderVersions();
 refresh();
-setInterval(() => { if (Date.now() > holdUntil) refresh(); }, POLL_MS);
+function startPolling() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(() => { if (Date.now() > holdUntil) refresh(); }, POLL_MS);
+}
+startPolling();

@@ -138,6 +138,15 @@ fps = 10
 dgpu_power = "auto"
 
 [automation]
+# Which performance profile to select when the daemon starts.
+#
+# The firmware remembers the last one across a reboot, which is usually what
+# you want and occasionally not: a machine left on performance for one evening
+# stays there. Naming one here makes the starting point explicit. Commented
+# out means "leave it to the firmware".
+#
+# startup_profile = "balanced"
+
 # How often the process list is checked for the application profiles below.
 app_scan_secs = 5
 

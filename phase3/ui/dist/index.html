@@ -62,6 +62,7 @@
           <button class="device-link"           data-view="performance" role="tab">Performance Control</button>
           <button class="device-link"           data-view="fan"         role="tab">Fan Control</button>
           <button class="device-link"           data-view="lighting"    role="tab">Lighting</button>
+          <button class="device-link"           data-view="settings"    role="tab">Settings</button>
         </nav>
       </div>
       <div class="sidebar__footer">
@@ -79,6 +80,7 @@
         <button class="main-tab"           data-view="performance" role="tab">Performance Control</button>
         <button class="main-tab"           data-view="fan"         role="tab">Fan Control</button>
         <button class="main-tab"           data-view="lighting"    role="tab">Lighting</button>
+        <button class="main-tab"           data-view="settings"    role="tab">Settings</button>
       </div>
 
       <div class="main-scroll">
@@ -380,9 +382,96 @@
           </div>
         </section>
 
+        <!-- ── Settings ───────────────────────────────────────── -->
+        <section class="view" data-view="settings" role="tabpanel">
+          <div class="card">
+            <div class="panel-head"><h2 class="panel-head__title">This window</h2></div>
+            <p class="hint">
+              These are yours, not the machine's: they live in your own config
+              directory and change nothing for other users. The fan curve, the
+              safety thresholds and the application profiles are machine-wide and
+              live in <code>/etc/omen/omend.toml</code>.
+            </p>
+            <dl class="kv kv--tight">
+              <dt>Refresh every</dt>
+              <dd>
+                <select id="set-poll">
+                  <option value="1000">1 second</option>
+                  <option value="2000">2 seconds</option>
+                  <option value="5000">5 seconds</option>
+                  <option value="10000">10 seconds</option>
+                </select>
+              </dd>
+              <dt>Warn me when the fans are forced to full</dt>
+              <dd><label class="switch"><input type="checkbox" id="set-alerts"><span></span></label></dd>
+              <dt>Start with the session</dt>
+              <dd><label class="switch"><input type="checkbox" id="set-autostart"><span></span></label></dd>
+              <dt>Start hidden in the tray</dt>
+              <dd><label class="switch"><input type="checkbox" id="set-hidden"><span></span></label></dd>
+            </dl>
+            <p class="hint" id="set-hidden-note" hidden>
+              There is no tray icon in this session, so starting hidden would leave
+              you with a running program and no way back to it. Install
+              <code>libappindicator-gtk3</code> and reopen the app.
+            </p>
+          </div>
+
+          <div class="card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Machine defaults</h2>
+            </div>
+            <p class="hint">
+              The firmware remembers the last performance profile across a reboot.
+              Naming one here makes the starting point explicit instead — useful if
+              an evening on Performance should not become the new normal.
+            </p>
+            <dl class="kv kv--tight">
+              <dt>Profile at startup</dt>
+              <dd><select id="set-startup-profile"></select></dd>
+            </dl>
+          </div>
+
+          <div class="card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Versions</h2>
+              <span class="panel-head__note" id="ver-note"></span>
+            </div>
+            <p class="hint">
+              Everything here is built and upgraded together, and then keeps running
+              whatever was loaded before the upgrade. This is where you find out that
+              the fix you installed is not the code you are running.
+            </p>
+            <dl class="kv kv--tight" id="ver-list"></dl>
+            <div id="ver-catchup" hidden>
+              <p class="hint">Installed but not running. To catch up:</p>
+              <div class="copy-row">
+                <code id="ver-commands"></code>
+                <button class="btn btn--sm" id="btn-ver-copy">Copy</button>
+              </div>
+              <p class="hint">
+                A reboot does all of it, and is the safer answer while the keyboard is
+                lit or the fans are under load.
+              </p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="panel-head"><h2 class="panel-head__title">Diagnostics</h2></div>
+            <p class="hint">
+              The state of the machine, the daemon and the modules as one block of
+              text — the half of a bug report that usually gets left out.
+            </p>
+            <div class="btn-row">
+              <button class="btn" id="btn-diag-copy">Copy report</button>
+              <button class="btn" id="btn-diag-show">Show</button>
+            </div>
+            <pre class="diag" id="diag-out" hidden></pre>
+          </div>
+        </section>
+
       </div>
 
-      <footer class="main-footer"><span class="main-footer__ver">0.1.0</span></footer>
+      <footer class="main-footer"><span class="main-footer__ver" id="footer-ver">0.1.0</span></footer>
     </main>
   </div>
 </div>

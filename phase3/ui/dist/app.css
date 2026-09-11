@@ -627,3 +627,41 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 }
 /* The command is long and must not push the card wider than the window. */
 .copy-row code { flex: 1; overflow-x: auto; white-space: nowrap; font-size: 11px; }
+
+/* ── settings ────────────────────────────────────────────────── */
+
+.kv--tight select {
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-md); color: var(--text);
+  font: inherit; font-size: 12px; padding: 5px 8px;
+}
+.kv--tight select:focus { outline: 1px solid var(--omen-red); }
+
+/* A checkbox that reads as a switch. The input stays in the DOM and keeps
+ * its keyboard behaviour; only its appearance is replaced. */
+.switch { display: inline-flex; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch span {
+  width: 34px; height: 18px; border-radius: 9px;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  position: relative; transition: background .15s, border-color .15s;
+}
+.switch span::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--text-muted); transition: transform .15s, background .15s;
+}
+.switch input:checked + span { background: var(--omen-red-dark); border-color: var(--omen-red); }
+.switch input:checked + span::after { transform: translateX(16px); background: #fff; }
+.switch input:focus-visible + span { outline: 2px solid var(--omen-red); outline-offset: 2px; }
+
+.btn-row { display: flex; gap: 8px; }
+
+.diag {
+  margin-top: 12px; max-height: 320px; overflow: auto;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-md); padding: 10px;
+  font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+  white-space: pre;
+}
+.ver-stale { color: var(--omen-red); }

@@ -183,6 +183,7 @@ fn run(args: Args) -> Result<()> {
     let hot_above_c = cfg.safety.stall_temp_c;
     let mut rt = Runtime::new(fan.clone(), thermal, cfg, read_only, &args.config)?;
     rt.log_curve();
+    rt.apply_startup_profile();
 
     let mut keeper = AutoRestore::new(
         fan,
@@ -401,6 +402,31 @@ impl Runtime {
     /// Looks for a configured application, and applies or restores its
     /// profile. The watcher asks for a fan mode; the loop is still the only
     /// thing that sets one.
+    /// Selects the configured starting profile, once, at startup.
+    ///
+    /// Only at startup: doing it on every reload would fight the user every
+    /// time the configuration is re-read, and fight the application profiles
+    /// every time one of them ends.
+    fn apply_startup_profile(&self) {
+        let Some(want) = self.cfg.automation.startup_profile.clone() else {
+            return;
+        };
+        if self.read_only {
+            return;
+        }
+        match PlatformProfile::discover() {
+            Some(pp) if pp.choices().contains(&want) => match pp.set(&want) {
+                Ok(()) => info!("startup profile: {want}"),
+                Err(e) => warn!("could not select the {want} profile at startup: {e}"),
+            },
+            Some(pp) => warn!(
+                "startup_profile {want:?} is not one of {}",
+                pp.choices().join(" ")
+            ),
+            None => warn!("startup_profile is set but there is no platform_profile"),
+        }
+    }
+
     /// Keeps the dGPU's power policy where the configuration says.
     ///
     /// Re-asserted rather than set once: udev rules, driver reloads and
@@ -707,7 +733,9 @@ impl Runtime {
                 points: self.governor.curve().points().to_vec(),
                 interpolation: self.governor.curve().interpolation(),
             }),
+            version: Some(omen_core::about::VERSION.to_owned()),
             config_path: self.config_path.to_str().map(str::to_owned),
+            startup_profile: self.cfg.automation.startup_profile.clone(),
             apps: self.cfg.apps.clone(),
             active_app: self.apps.active().map(str::to_owned),
             effect: Some(self.cfg.lighting.spec()),

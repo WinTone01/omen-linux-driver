@@ -105,6 +105,9 @@ pub enum Request {
     SetAppProfiles { apps: Vec<crate::apps::AppProfile> },
     /// Discrete GPU power policy: whether it may suspend when idle.
     SetDgpuPower(crate::gpu::DgpuPower),
+    /// Which platform profile to select when the daemon starts. `None`
+    /// leaves it to whatever the firmware remembers.
+    SetStartupProfile { profile: Option<String> },
     /// Re-read the config from disk.
     Reload,
 }
@@ -138,11 +141,19 @@ pub struct Snapshot {
     #[serde(default)]
     pub safety_reason: Option<String>,
     pub temps: Vec<(String, f32)>,
+    /// The daemon's own version, so a client can notice it is talking to a
+    /// build older than the one installed - which after an upgrade means the
+    /// service has not been restarted.
+    #[serde(default)]
+    pub version: Option<String>,
     /// The file the daemon was started with. Clients that edit the
     /// configuration need to edit the same one it is reading, which is not
     /// necessarily the default path.
     #[serde(default)]
     pub config_path: Option<String>,
+    /// The profile selected at startup, if one is configured.
+    #[serde(default)]
+    pub startup_profile: Option<String>,
     /// The configured per-application profiles.
     #[serde(default)]
     pub apps: Vec<crate::apps::AppProfile>,

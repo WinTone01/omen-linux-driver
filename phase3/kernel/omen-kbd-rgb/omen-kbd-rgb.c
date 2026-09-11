@@ -605,4 +605,8 @@ module_exit(omen_rgb_exit);
 MODULE_DESCRIPTION("HP OMEN 16-ap0xxx (8D24) 4-zone RGB keyboard");
 MODULE_AUTHOR("WinTone");
 MODULE_LICENSE("GPL");
+/* So the loaded module can be compared with the installed one - see
+ * omenctl version. srcversion answers "is this the same build", the version
+ * answers "which release". */
+MODULE_VERSION("0.1.0");
 MODULE_ALIAS("wmi:" HPWMI_BIOS_GUID);

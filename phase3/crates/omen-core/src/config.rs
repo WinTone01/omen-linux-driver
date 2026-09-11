@@ -63,6 +63,15 @@ pub struct GraphicsConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AutomationConfig {
+    /// Platform profile to select when the daemon starts.
+    ///
+    /// The firmware remembers the last profile across a reboot, which is
+    /// usually what you want and occasionally not: a machine that was left on
+    /// performance for one evening stays there. Naming one here makes the
+    /// starting point explicit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_profile: Option<String>,
+
     /// How often the process list is checked, in seconds.
     ///
     /// Every check walks /proc. Five seconds is quick enough that a game is
@@ -75,6 +84,7 @@ pub struct AutomationConfig {
 impl Default for AutomationConfig {
     fn default() -> Self {
         Self {
+            startup_profile: None,
             app_scan_secs: default_app_scan(),
         }
     }

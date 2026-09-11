@@ -58,7 +58,12 @@ USAGE:
                                    is no panel to switch - see the note below.
 
     omenctl profile <NAME>         balanced / performance / low-power
+    omenctl profile startup <NAME|none>
+                                   Which profile to select when the daemon
+                                   starts. 'none' leaves it to the firmware.
     omenctl reload                 Make the daemon re-read its configuration
+    omenctl version                Versions, and whether anything running is
+                                   older than what is installed
 
 Control commands go to omend over a socket; the daemon is the only thing that
 writes to the fan. Run with sudo if you get a permission error.
@@ -78,6 +83,7 @@ fn main() -> ExitCode {
         "gpu" => gpu_power(&args),
         "profile" => set_profile(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
+        "version" | "--version" | "-V" => versions(),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -183,6 +189,14 @@ fn set_effect(args: &[String]) -> Result<()> {
 }
 
 fn set_profile(args: &[String]) -> Result<()> {
+    if args.get(1).map(String::as_str) == Some("startup") {
+        let want = args
+            .get(2)
+            .ok_or_else(|| anyhow::anyhow!("a profile name is required, or 'none'"))?;
+        let profile = (want != "none").then(|| want.clone());
+        return client::report(client::send(&Request::SetStartupProfile { profile })?);
+    }
+
     let profile = args
         .get(1)
         .ok_or_else(|| anyhow::anyhow!("a profile name is required"))?
@@ -303,6 +317,73 @@ fn app_profiles(args: &[String]) -> Result<()> {
 
         Some(other) => bail!("unknown subcommand: {other} (list / add / remove)"),
     }
+}
+
+/// Versions of everything, and what is out of date with respect to what.
+///
+/// The reason this is a command rather than a line in `status`: after an
+/// upgrade the daemon keeps running the old binary and the old kernel module
+/// stays loaded, and the resulting bug reports are against code that is no
+/// longer on disk.
+fn versions() -> Result<()> {
+    use omen_core::about;
+
+    let mut stale = Vec::new();
+
+    println!("omen-control {}\n", about::VERSION);
+
+    // Reachable-but-silent is its own answer, and the most likely one here:
+    // a daemon old enough not to report a version at all is by definition
+    // older than the tool asking.
+    match client::send(&Request::Status) {
+        Ok(Response::Ok(snap)) => match snap.version.as_deref() {
+            Some(v) if v == about::VERSION => field("omend", format!("{v} (running)")),
+            Some(v) => {
+                field(
+                    "omend",
+                    format!("{v} (running) - this tool is {}", about::VERSION),
+                );
+                stale.push("sudo systemctl restart omend");
+            }
+            None => {
+                field("omend", "running, but too old to report its version");
+                stale.push("sudo systemctl restart omend");
+            }
+        },
+        Ok(_) | Err(_) => field("omend", "not reachable"),
+    }
+
+    for m in about::modules() {
+        if !m.loaded {
+            field(&m.name, "not loaded");
+            continue;
+        }
+        let version = m.version.clone().unwrap_or_else(|| "loaded".into());
+        if m.stale() {
+            field(
+                &m.name,
+                format!("{version} - a different build is installed"),
+            );
+            stale.push(match m.name.as_str() {
+                "hp_wmi" => "sudo modprobe -r hp_wmi && sudo modprobe hp_wmi",
+                _ => "sudo modprobe -r omen-kbd-rgb && sudo modprobe omen-kbd-rgb",
+            });
+        } else {
+            field(&m.name, version);
+        }
+    }
+
+    if stale.is_empty() {
+        println!("\nEverything running is the version that is installed.");
+    } else {
+        println!("\nSomething installed is newer than what is running. To catch up:\n");
+        for cmd in &stale {
+            println!("    {cmd}");
+        }
+        println!("\n  A reboot does all of it, and is the safe answer if the keyboard is lit");
+        println!("  or the fans are under load.");
+    }
+    Ok(())
 }
 
 fn gpu_power(args: &[String]) -> Result<()> {
