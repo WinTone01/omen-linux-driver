@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="phase3/ui/src-tauri/icons/icon.png" width="112" alt="">
+
 # OMEN Control
 
 **Fans, thermals, RGB and graphics switching for the HP OMEN 16-ap0xxx on Linux —
@@ -20,28 +22,6 @@ Everything here was measured on one machine and is written down with its
 evidence. Where the hardware refused to do something, that is recorded too —
 this project has been wrong in public twice, and both corrections are in the
 git history.
-
-A fan curve service, a 4-zone RGB driver, a graphics mux switch, per-application
-and per-power-source automation, a diagnosis that names what to do, and a window
-that looks like the one this machine came with. All of it on the kernel's own
-interfaces — `hwmon`, `platform_profile`, `leds-multicolor` — so nothing else on
-the system has to know it exists.
-
-The interesting half is what the hardware turned out to do:
-
-| Measured on this machine | |
-|---|---|
-| Fan unit | hundreds of RPM — a slider at 3800 RPM sent `0x2E` payload `38,41` |
-| HP's curve | 45 °C fans off · 50–65 °C 1800 · 70–85 °C 2400 · 90 °C 3300, read as steps rather than a ramp |
-| Handing the fans back to the EC | **it does not take them.** 0 RPM while the CPU went 78 → 85 °C in twelve seconds |
-| Thermal profile | EC `0x95` read back as 48 on Linux — the Windows measurement, confirmed through a different path |
-| Graphics mux | the firmware declares UMA, hybrid and discrete (`GM28` byte 7 = `0x07`) on a board where the runtime view shows no mux at all |
-| Keyboard brightness | an on/off switch (`0xE4`/`0x64`), not a level — writing "100" turned the keyboard off |
-| RGB zone order | the hardware's slots are `{2, 3, 1, 0}` against the physical left-to-right order |
-| Discrete GPU | it is `renderD128`, the *first* render node, which is why programs land on it without asking |
-
-Every line of that is in the phase documents, with the capture or the ASL
-it came from.
 
 ## The window
 
