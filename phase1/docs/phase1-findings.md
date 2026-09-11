@@ -334,7 +334,71 @@ Other 4-byte payloads such as `0,1,1,87` and `0,0,1,87` also appear; since
 several commands share the 4-byte shape and the log does not print the command
 ID, they could not be attributed.
 
-## 7. Open items
+## 7. The graphics mux (added 2026-09-11)
+
+This was missed on the first pass and found later, which is worth recording as
+much as the finding itself: **the interface is numeric**, so searching the DSDT
+for the word "mux" returns nothing, and the runtime view of a mux machine in
+hybrid mode is indistinguishable from a machine that has none — the panel is
+wired to the integrated GPU and the NVIDIA card enumerates only HDMI.
+
+The firmware answers the question directly.
+
+### 7.1 System design data — `GM28` (COMD `0x00020008`, CMDT `0x28`)
+
+`GM28` returns a 64-byte buffer, and byte 7 is a bitmask of the mux modes this
+machine supports. The DSDT computes it statically, so the answer can be read
+without calling anything:
+
+```asl
+Local1 = Zero
+Local1 |= One        // BIT(0) - UMA
+Local1 |= 0x02       // BIT(1) - hybrid
+Local1 |= 0x04       // BIT(2) - discrete
+DerefOf (Local0 [0x02]) [0x07] = Local1      // = 0x07
+```
+
+| Bit | Mode |
+|---|---|
+| 0 | UMA — integrated only |
+| 1 | Hybrid |
+| 2 | Discrete |
+| 3 | Optimus (advanced, dynamic) — **not set on 8D24** |
+
+Bit 3 being clear is the difference between a *static* mux, which is what this
+board has, and Advanced Optimus. The mode is chosen and applied at the next
+POST; nothing switches while the machine is running.
+
+Byte 3 of the same buffer is the thermal-profile version, and byte 4 another
+capability mask.
+
+### 7.2 Reading and writing the mode — CMDT `0x52`
+
+Unlike the fan commands, this one is not in the gaming group: it is a plain
+BIOS read/write, dispatched in `HWMC.asl` as
+
+| COMD | CMDT | Method | Meaning |
+|---|---|---|---|
+| `0x00000001` | `0x52` | `GDSS` | read the current mode |
+| `0x00000002` | `0x52` | `SDSS` | set it |
+
+Both are pass-throughs to the BIOS SMI handler (`WSMI`), which is why the DSDT
+alone does not say whether the machine has a mux — every HP command number is
+dispatched generically. Byte 0 of the 4-byte payload is the mode, and the top
+bit of the value read back is a BIOS status flag rather than part of it.
+
+The mode numbering is the index, not the mask: `0` hybrid, `1` discrete,
+`2` optimus, `3` UMA.
+
+> Sending `0x52` to a machine that does not support it has produced ACPI faults
+> and kernel panics on other models. `omen-kbd-rgb` reads the design data first
+> and does not create the sysfs attributes at all unless a mode is declared.
+
+Implementation: `phase3/kernel/omen-kbd-rgb/omen-kbd-rgb.c`, exposed as
+`/sys/devices/platform/omen-kbd-rgb/gpu_mux_{mode,supported}`. Confirmed on the
+machine — the firmware answers `uma hybrid discrete`, current `hybrid`.
+
+## 8. Open items
 
 1. **The SSDTs are missing.** Windows' `GetSystemFirmwareTable` API returns
    only the first of 28 SSDTs with the same signature; the other 27 could not be

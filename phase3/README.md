@@ -198,6 +198,21 @@ means.
 
 Check with `omenctl status`.
 
+## The discrete GPU is the first render node
+
+Worth knowing before wondering why programs use it: on this machine
+`/dev/dri/renderD128` is the NVIDIA card and `renderD129` is the integrated
+one. A program that opens "a render node" without choosing, or that enumerates
+all of them to see what is available, lands on the discrete GPU and keeps it
+awake for as long as it runs — with no intention of rendering anything there.
+
+Measured: Firefox's decoder process and a Qt shell each held `renderD128` and
+`/dev/nvidia0` while everything else on the system sat on `renderD129`.
+
+`omenctl gpu` names the holders and the files each one has open, and prints
+the environment that leaves a program with no NVIDIA driver to find. That is
+stronger than `DRI_PRIME`, which the proprietary driver ignores.
+
 ## Usage
 
 The window follows the desktop's language where it has a translation (English
