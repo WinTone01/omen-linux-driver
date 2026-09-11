@@ -20,6 +20,10 @@ use crate::error::{Error, Result};
 use crate::sysfs;
 
 const LED_DIR: &str = "/sys/class/leds";
+/// The driver reports whether the keyboard is actually lit here. Colours and
+/// brightness read back correctly even while the backlight is off, so this is
+/// the only honest answer to "will anything be visible".
+const BACKLIGHT_ACTIVE: &str = "/sys/devices/platform/omen-kbd-rgb/backlight_active";
 const GLOBAL_LED: &str = "omen::kbd_backlight";
 const ZONE_PREFIX: &str = "omen:rgb:kbd_backlight_zone";
 pub const ZONE_COUNT: usize = 4;
@@ -40,9 +44,9 @@ pub struct LedState {
     /// Global brightness, 0-100. `None` when the LED is absent.
     pub brightness: Option<u8>,
     pub zones: Vec<Rgb>,
-    /// Set when the keyboard is dark. Writing colours will show nothing
-    /// until it is on, and only Fn+F4 can do that (see docs/rgb-protocol.md
-    /// §5) - the UI needs to be able to say so.
+    /// Set when the keyboard is dark. Writing colours will show nothing until
+    /// it is on, and only Fn+F4 can do that (see docs/rgb-protocol.md §5) -
+    /// the UI needs to be able to say so.
     pub backlight_off: bool,
 }
 
@@ -125,13 +129,26 @@ impl Leds {
         })
     }
 
+    /// Whether the keyboard is actually lit.
+    ///
+    /// Asks the driver first, which reads the byte that tracks it. Only if
+    /// that is unavailable does it fall back to "brightness is zero", which
+    /// is a poor proxy: the backlight can be off with brightness set to 100,
+    /// and that is exactly the case that made a working driver look broken.
+    fn backlight_off(&self, brightness: Option<u8>) -> bool {
+        match sysfs::read_string(Path::new(BACKLIGHT_ACTIVE)) {
+            Ok(v) => v.trim() == "0",
+            Err(_) => brightness == Some(0),
+        }
+    }
+
     pub fn state(&self) -> LedState {
         let brightness = self.brightness();
         LedState {
             zones: (0..ZONE_COUNT)
                 .map(|i| self.zone(i).unwrap_or(Rgb { r: 0, g: 0, b: 0 }))
                 .collect(),
-            backlight_off: brightness == Some(0),
+            backlight_off: self.backlight_off(brightness),
             brightness,
         }
     }

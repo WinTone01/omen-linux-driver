@@ -452,9 +452,10 @@ function renderLeds(s) {
   } else if (s.leds.backlight_off) {
     banner.hidden = false;
     banner.innerHTML =
-      "<strong>The keyboard backlight is off.</strong> Colours will be written " +
-      "but nothing will light up. The master switch is internal EC state — " +
-      "press <kbd>Fn</kbd>+<kbd>F4</kbd>.";
+      "<strong>The keyboard backlight is off, so nothing here will be " +
+      "visible.</strong> Colours and brightness are still written and read " +
+      "back correctly - they just do not light anything. Press " +
+      "<kbd>Fn</kbd>+<kbd>F4</kbd> to turn the backlight on.";
   } else {
     banner.hidden = true;
   }

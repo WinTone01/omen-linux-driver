@@ -84,6 +84,9 @@ struct bios_return {
 
 struct omen_rgb {
 	struct device *dev;
+	/* The lighting block of the memory-mapped extended EC RAM, or NULL if
+	 * it could not be mapped - everything else still works without it. */
+	void __iomem *h2ra;
 	/* Keeps the read-modify-write sequence indivisible. */
 	struct mutex lock;
 	struct led_classdev kbd_bl;
@@ -189,6 +192,10 @@ out_free:
 	return ret;
 }
 
+/* Defined below, next to the zone handling it belongs to; brightness needs it
+ * because dimming is applied by rewriting the colours. */
+static int omen_write_zones(struct omen_rgb *rgb, u8 global);
+
 /* --- brightness (LBRT) --- */
 
 static enum led_brightness omen_bl_get(struct led_classdev *cdev)
@@ -202,51 +209,89 @@ static enum led_brightness omen_bl_get(struct led_classdev *cdev)
 
 static int omen_bl_set(struct led_classdev *cdev, enum led_brightness value)
 {
+	struct omen_rgb *rgb = dev_get_drvdata(cdev->dev->parent);
 	u8 level = min_t(unsigned int, value, BRIGHTNESS_MAX);
+	int ret;
 
-	return omen_wmi_query(LIGHTING_BRIGHT_SET, &level, sizeof(level), 0);
+	guard(mutex)(&rgb->lock);
+
+	/*
+	 * LBRT is written even though it does not dim anything here: it is the
+	 * firmware's own field, OMEN Gaming Hub sets it, and keeping it in step
+	 * costs one call. The dimming that the user actually sees comes from
+	 * the rescale below.
+	 */
+	ret = omen_wmi_query(LIGHTING_BRIGHT_SET, &level, sizeof(level), 0);
+	if (ret)
+		return ret;
+
+	cdev->brightness = level;
+	return omen_write_zones(rgb, level);
 }
 
 /* --- zone colours (LRGB) --- */
 
 /*
- * The write has to be READ-MODIFY-WRITE. Only 12 of the 128 state bytes are
- * zone colours; what the rest carries is unknown and has to be preserved.
+ * Composes all four zones from their intended colours, scaled by the global
+ * brightness, and writes them in one go.
+ *
+ * The scaling is done here rather than left to LBRT because LBRT does not dim
+ * this keyboard. Writing it succeeds and reads back correctly, and nothing
+ * changes - the same trap as the on/off switch. So brightness is applied the
+ * way the colours themselves are: by scaling what we send.
+ *
+ * The write is READ-MODIFY-WRITE. Only 12 of the 128 state bytes are zone
+ * colours; what the rest carries is unknown and has to be preserved.
  */
-static int omen_zone_set(struct led_classdev *cdev, enum led_brightness brightness)
+static int omen_write_zones(struct omen_rgb *rgb, u8 global)
 {
-	struct led_classdev_mc *mc = lcdev_to_mccdev(cdev);
-	struct omen_rgb *rgb = dev_get_drvdata(cdev->dev->parent);
-	int index = mc - rgb->zone;
 	u8 state[STATE_SIZE];
-	u8 *slot;
-	int ret;
-
-	if (index < 0 || index >= ZONE_COUNT)
-		return -EINVAL;
-
-	led_mc_calc_color_components(mc, brightness);
-
-	guard(mutex)(&rgb->lock);
+	int ret, i, c;
 
 	ret = omen_wmi_query(LIGHTING_COLOR_GET, state, sizeof(state),
 			     sizeof(state));
 	if (ret)
 		return ret;
 
-	slot = state + ZONE_DATA_OFFSET + zone_slot[index] * COLORS_PER_ZONE;
-	slot[0] = mc->subled_info[0].brightness;	/* R */
-	slot[1] = mc->subled_info[1].brightness;	/* G */
-	slot[2] = mc->subled_info[2].brightness;	/* B */
+	for (i = 0; i < ZONE_COUNT; i++) {
+		struct led_classdev_mc *mc = &rgb->zone[i];
+		u8 *slot = state + ZONE_DATA_OFFSET +
+			   zone_slot[i] * COLORS_PER_ZONE;
+
+		/*
+		 * Scaling always starts from the stored intensity, never from
+		 * what is currently on the wire - otherwise dimming twice in a
+		 * row would compound and the colour would drift towards black.
+		 */
+		led_mc_calc_color_components(mc, mc->led_cdev.brightness);
+		for (c = 0; c < COLORS_PER_ZONE; c++)
+			slot[c] = mc->subled_info[c].brightness * global /
+				  BRIGHTNESS_MAX;
+	}
 
 	return omen_wmi_query(LIGHTING_COLOR_SET, state, sizeof(state),
 			      sizeof(state));
 }
 
+static int omen_zone_set(struct led_classdev *cdev, enum led_brightness brightness)
+{
+	struct led_classdev_mc *mc = lcdev_to_mccdev(cdev);
+	struct omen_rgb *rgb = dev_get_drvdata(cdev->dev->parent);
+	int index = mc - rgb->zone;
+
+	if (index < 0 || index >= ZONE_COUNT)
+		return -EINVAL;
+
+	guard(mutex)(&rgb->lock);
+	/* The class updates this itself, but not necessarily before we run. */
+	mc->led_cdev.brightness = brightness;
+	return omen_write_zones(rgb, rgb->kbd_bl.brightness);
+}
+
 /* Reads the colours out of the hardware at probe and reflects them into the
  * LED class.
  */
-static int omen_zone_read_initial(struct omen_rgb *rgb)
+static int omen_zone_read_initial(struct omen_rgb *rgb, u8 global)
 {
 	u8 state[STATE_SIZE];
 	int ret, i;
@@ -261,8 +306,16 @@ static int omen_zone_read_initial(struct omen_rgb *rgb)
 				 zone_slot[i] * COLORS_PER_ZONE;
 		int c;
 
+		/*
+		 * What is on the wire has already been scaled by the global
+		 * brightness, so undo that to recover the intended colour.
+		 * Without this, reloading the module at 50% would take the
+		 * dimmed values as the intent and halve them again.
+		 */
 		for (c = 0; c < COLORS_PER_ZONE; c++)
-			rgb->subled[i][c].intensity = slot[c];
+			rgb->subled[i][c].intensity =
+				global ? min(255, slot[c] * BRIGHTNESS_MAX / global)
+				       : slot[c];
 
 		/*
 		 * Use the largest component as the zone's brightness: the
@@ -270,11 +323,101 @@ static int omen_zone_read_initial(struct omen_rgb *rgb)
 		 * intensity * brightness / max, so writing back what we just
 		 * read leaves the colour unchanged.
 		 */
-		rgb->zone[i].led_cdev.brightness =
-			max3(slot[0], slot[1], slot[2]);
+		rgb->zone[i].led_cdev.brightness = max3(
+			rgb->subled[i][0].intensity, rgb->subled[i][1].intensity,
+			rgb->subled[i][2].intensity);
 	}
 	return 0;
 }
+
+/*
+ * Read-only window onto the lighting block of the memory-mapped extended EC
+ * RAM (Phase 1 §4.1: EC register N lives at 0xFE700000 + 0x300 + N).
+ *
+ * Why this exists: turning the backlight on is not something the driver can
+ * do. Writing LRGB and LBRT succeeds and reads back correctly, but if the
+ * keyboard is dark it stays dark, and only Fn+F4 brings it up. The switch is
+ * not in the standard EC window - KBBL was ruled out, it reads the same
+ * either way - and the WMI lighting group has no on/off at all. What is left
+ * are the five unnamed bits at 0xEE0, just below LCMC, which sit in this
+ * region and cannot be reached from userspace.
+ *
+ * Reading is all this does. Dump it with the backlight off, then on, and the
+ * byte that differs is the switch.
+ */
+#define H2RA_BASE	0xFE700000
+#define H2RA_LIGHTING	0xEE0
+#define H2RA_DUMP_LEN	32
+
+/*
+ * Offset of the byte that says whether the backlight is actually lit, within
+ * the window above.
+ *
+ * Found by dumping this block with the backlight off and then on, and
+ * diffing: everything matched except this byte, which read 0x00 while dark
+ * and 0x64 (100 - exactly the brightness we had set) once Fn+F4 brought the
+ * lights up. The colours read 0xff throughout, which is why writing them
+ * always looked like it had worked.
+ *
+ * The DSDT does not declare it: the field list defines one byte at 0xEE0 and
+ * then jumps straight to 0xEE3, leaving 0xEE1 and 0xEE2 unnamed. That is why
+ * three earlier searches - the standard EC window, the WMI lighting group and
+ * EC 0x40-0x4F - all came up empty.
+ *
+ * It holds the brightness in EFFECT, not the brightness requested: with the
+ * backlight off it reads 0 even though LBRT had been set to 100. So it
+ * answers "is the keyboard lit", which is the question the driver could not
+ * answer before.
+ */
+#define H2RA_ACTIVE_BRIGHTNESS	(0xEE1 - H2RA_LIGHTING)
+
+static ssize_t lighting_regs_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct omen_rgb *rgb = dev_get_drvdata(dev);
+	int i, n = 0;
+
+	if (!rgb->h2ra)
+		return -ENODEV;
+
+	for (i = 0; i < H2RA_DUMP_LEN; i++) {
+		n += sysfs_emit_at(buf, n, "%02x", readb(rgb->h2ra + i));
+		n += sysfs_emit_at(buf, n, (i % 16 == 15) ? "\n" : " ");
+	}
+	return n;
+}
+static DEVICE_ATTR_RO(lighting_regs);
+
+/*
+ * 1 when the keyboard is actually lit, 0 when it is dark.
+ *
+ * Worth having because everything else lies about it: colours and brightness
+ * are written, read back correctly, and show nothing at all while the
+ * backlight is off. Without this a user writes a colour, sees a dark
+ * keyboard, and concludes the driver is broken.
+ *
+ * Turning it ON is still not ours to do - the switch is Fn+F4 - but at least
+ * the state can be reported.
+ */
+static ssize_t backlight_active_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct omen_rgb *rgb = dev_get_drvdata(dev);
+
+	if (!rgb->h2ra)
+		return -ENODEV;
+
+	return sysfs_emit(buf, "%d\n",
+			  readb(rgb->h2ra + H2RA_ACTIVE_BRIGHTNESS) ? 1 : 0);
+}
+static DEVICE_ATTR_RO(backlight_active);
+
+static struct attribute *omen_rgb_attrs[] = {
+	&dev_attr_lighting_regs.attr,
+	&dev_attr_backlight_active.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(omen_rgb);
 
 static int omen_rgb_probe(struct platform_device *pdev)
 {
@@ -293,6 +436,14 @@ static int omen_rgb_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 	platform_set_drvdata(pdev, rgb);
+
+	/* Mapped once rather than per read: the state is polled. A failure is
+	 * not fatal - only the two diagnostic attributes need it. */
+	rgb->h2ra = devm_ioremap(&pdev->dev, H2RA_BASE + H2RA_LIGHTING,
+				 H2RA_DUMP_LEN);
+	if (!rgb->h2ra)
+		dev_warn(&pdev->dev,
+			 "could not map the extended EC window; backlight state will be unavailable\n");
 
 	for (i = 0; i < ZONE_COUNT; i++) {
 		for (c = 0; c < COLORS_PER_ZONE; c++)
@@ -317,7 +468,13 @@ static int omen_rgb_probe(struct platform_device *pdev)
 		rgb->zone[i].led_cdev.flags |= LED_RETAIN_AT_SHUTDOWN;
 	}
 
-	ret = omen_zone_read_initial(rgb);
+	/*
+	 * Brightness first: the zone colours on the wire are scaled by it, so
+	 * it has to be known before they can be read back as intent.
+	 */
+	rgb->kbd_bl.brightness = omen_bl_get(&rgb->kbd_bl);
+
+	ret = omen_zone_read_initial(rgb, rgb->kbd_bl.brightness);
 	if (ret) {
 		dev_err(&pdev->dev, "could not read the zone colours: %d\n", ret);
 		return ret;
@@ -341,7 +498,6 @@ static int omen_rgb_probe(struct platform_device *pdev)
 	rgb->kbd_bl.brightness_get = omen_bl_get;
 	rgb->kbd_bl.brightness_set_blocking = omen_bl_set;
 	rgb->kbd_bl.flags |= LED_RETAIN_AT_SHUTDOWN;
-	rgb->kbd_bl.brightness = omen_bl_get(&rgb->kbd_bl);
 
 	/*
 	 * If the keyboard is off when the module loads (an older version
@@ -366,6 +522,7 @@ static int omen_rgb_probe(struct platform_device *pdev)
 static struct platform_driver omen_rgb_driver = {
 	.driver = {
 		.name = "omen-kbd-rgb",
+		.dev_groups = omen_rgb_groups,
 	},
 };
 
