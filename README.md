@@ -25,49 +25,12 @@ git history.
 
 ## Install
 
-One line, from anywhere:
-
 ```bash
 git clone https://github.com/WinTone01/omen-linux-driver.git && cd omen-linux-driver && ./install.sh
 ```
 
-<details>
-<summary>Same thing, one step at a time</summary>
-
-<br>
-
-```bash
-git clone https://github.com/WinTone01/omen-linux-driver.git
-cd omen-linux-driver
-./install.sh
-```
-
-Over SSH instead: `git clone git@github.com:WinTone01/omen-linux-driver.git`
-
-</details>
-
-That is the whole thing. It identifies the machine first and refuses to go on
-if it is not an HP OMEN or Victus, checks what is missing before building
-anything, and installs three pieces in the order they depend on each other:
-
-| | Gives you |
-|---|---|
-| `hp-wmi` with the 8D24 entry | `pwm1`, fan tachometers, `platform_profile` |
-| `omen-kbd-rgb` | four RGB zones, `gpu_mux_mode` |
-| `omen-control` | `omend`, `omenctl`, `omen-ui`, the unit and the udev rules |
-
-```console
-$ ./install.sh --check          # nothing is installed, it just looks
-[1/2] This machine
-    vendor   HP
-    model    OMEN Gaming Laptop 16-ap0xxx
-    board    8D24
-  ✓ OMEN 16-ap0xxx (8D24) — the board this was built and verified on
-```
-
-`--no-gui` skips the window, `--yes` answers the prompts, `--uninstall` takes
-it back out. On Arch it goes through `makepkg`, so pacman owns the files;
-elsewhere it builds with `cargo` and DKMS directly.
+It identifies the machine before touching anything, and stops if it is not an
+HP OMEN or Victus. [What it installs, and the flags →](#what-installsh-does)
 
 ## The window
 
@@ -209,6 +172,37 @@ omen-ui --tab graphics         # open the window on one page
 ```
 
 </details>
+
+## What install.sh does
+
+Three pieces, in the order they depend on each other:
+
+| | Gives you |
+|---|---|
+| `hp-wmi` with the 8D24 entry | `pwm1`, fan tachometers, `platform_profile` |
+| `omen-kbd-rgb` | four RGB zones, `gpu_mux_mode` |
+| `omen-control` | `omend`, `omenctl`, `omen-ui`, the unit and the udev rules |
+
+Before any of that it identifies the board, because the EC registers and WMI
+commands here were read out of one machine's firmware. `--check` does only
+that part:
+
+```console
+$ ./install.sh --check          # nothing is installed, it just looks
+[1/2] This machine
+    vendor   HP
+    model    OMEN Gaming Laptop 16-ap0xxx
+    board    8D24
+  ✓ OMEN 16-ap0xxx (8D24) — the board this was built and verified on
+```
+
+Another OMEN or Victus gets a warning and a prompt — the protocol is shared
+across those models. Anything else is refused unless you pass `--force`.
+
+`--no-gui` skips the window, `--yes` answers the prompts, `--uninstall` takes
+it back out. On Arch it goes through `makepkg`, so pacman owns the files;
+elsewhere it builds with `cargo` and DKMS directly. Over SSH, clone with
+`git@github.com:WinTone01/omen-linux-driver.git` instead.
 
 ## What was found
 
