@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=OMEN Control
+GenericName=Fan and Lighting Control
+Comment=Fan curve, thermal profile and RGB keyboard control for the HP OMEN 16-ap0xxx
+Exec=omen-ui
+Icon=omen-control
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+Keywords=fan;thermal;rgb;keyboard;backlight;omen;
+StartupNotify=true
+StartupWMClass=OMEN Control

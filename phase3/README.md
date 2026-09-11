@@ -68,27 +68,43 @@ Two entries are ours, because HP's table does not cover them:
 
 ## Install
 
+### Arch / CachyOS
+
 ```bash
-cargo build --release
-sudo install -Dm755 target/release/omend   /usr/bin/omend
-sudo install -Dm755 target/release/omenctl /usr/bin/omenctl
-sudo install -Dm644 packaging/omend.service /etc/systemd/system/omend.service
-sudo install -Dm644 packaging/omend.toml    /etc/omen/omend.toml
-sudo install -Dm644 packaging/omen-sysusers.conf /usr/lib/sysusers.d/omen.conf
-sudo install -Dm644 packaging/omen-modules.conf  /usr/lib/modules-load.d/omen.conf
-sudo install -Dm644 packaging/omen-modprobe.conf /usr/lib/modprobe.d/omen.conf
-sudo systemd-sysusers
-sudo modprobe ec_sys write_support=0
-sudo systemctl enable --now omend
+cd packaging               && makepkg -si    # omen-control: daemon, CLI, app
+cd ../kernel/omen-kbd-rgb  && makepkg -si    # omen-kbd-rgb-dkms: RGB keyboard
+cd ../../../phase2/scripts && bash build-module.sh --install   # the 8D24 patch
 ```
 
-The config file is optional — without it the built-in defaults are used.
+The 8D24 patch is not a package: `build-module.sh` fetches `hp-wmi.c` from the
+upstream tag matching the running kernel, and a `PKGBUILD` that downloads
+source at build time would be a bad package. It registers itself with DKMS all
+the same, so it survives kernel updates.
 
-To use the control commands without `sudo`, join the `omen` group:
+### Anything else
+
+```bash
+sudo bash install.sh
+```
+
+Builds the workspace and installs the binaries, the unit, the config, the udev
+rule, the desktop entry and the icons. The kernel side is still the two
+commands above.
+
+### The one manual step
 
 ```bash
 sudo usermod -aG omen $USER      # then log out and back in
 ```
+
+A fresh group membership only applies to sessions started **after** it is
+granted, so a window opened from the current session is still refused. This is
+also why the desktop entry matters: launched from the menu it inherits your
+login session's groups, whereas a binary started from a terminal that predates
+the `usermod` does not. If the UI says it is not in the group, that is what it
+means.
+
+Check with `omenctl status`.
 
 ## Usage
 

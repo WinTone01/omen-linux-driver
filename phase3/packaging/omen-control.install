@@ -1,0 +1,36 @@
+post_install() {
+  cat <<'MSG'
+
+  omend is installed but not started. Before enabling it, make sure the
+  hp-wmi 8D24 patch is in place - without it there is no pwm1 and the
+  daemon will not start:
+
+      sudo bash /usr/share/doc/omen-control/../../../phase2/scripts/verify.sh
+
+  Then:
+
+      sudo systemctl enable --now omend
+      sudo usermod -aG omen $USER      # then log out and back in
+
+  The group only takes effect in a new login session, so a window opened
+  from the current one will still be refused by the daemon.
+
+MSG
+}
+
+post_upgrade() {
+  if systemctl is-active --quiet omend; then
+    echo "  restart omend to pick up the new binary: systemctl restart omend"
+  fi
+}
+
+pre_remove() {
+  systemctl disable --now omend >/dev/null 2>&1 || true
+}
+
+post_remove() {
+  cat <<'MSG'
+  The 'omen' group and /etc/omen/omend.toml are left in place. Remove them
+  by hand if you are done with the project.
+MSG
+}

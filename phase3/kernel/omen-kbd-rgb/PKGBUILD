@@ -1,0 +1,33 @@
+# Maintainer: WinTone <mertbay295@gmail.com>
+#
+# The 4-zone RGB keyboard driver, as a DKMS module so it survives kernel
+# updates. Run makepkg from this directory.
+#
+# It uses only the lighting WMI group (0x020009), so it loads alongside
+# in-tree hp-wmi - no blacklist, unlike the drivers it was informed by.
+
+pkgname=omen-kbd-rgb-dkms
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="4-zone RGB keyboard backlight for the HP OMEN 16-ap0xxx (board 8D24)"
+arch=('x86_64')
+url="https://github.com/WinTone01/omen-linux-driver"
+license=('GPL-2.0-only')
+depends=('dkms')
+provides=('omen-kbd-rgb')
+source=()
+
+_src="$startdir"
+
+package() {
+  local dest="$pkgdir/usr/src/omen-kbd-rgb-$pkgver"
+
+  install -Dm644 "$_src/omen-kbd-rgb.c" "$dest/omen-kbd-rgb.c"
+  install -Dm644 "$_src/Kbuild"         "$dest/Kbuild"
+  install -Dm644 "$_src/Makefile"       "$dest/Makefile"
+  install -Dm644 "$_src/dkms.conf"      "$dest/dkms.conf"
+
+  # dkms.conf carries the version, so keep the two in step rather than
+  # letting a stale string produce a package that will not build.
+  sed -i "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"$pkgver\"/" "$dest/dkms.conf"
+}
