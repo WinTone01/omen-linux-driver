@@ -699,41 +699,62 @@ function drawCurve(points, interpolation, nowTemp, nowRpm) {
  * poll keeps updating everything else, and a tick arriving mid-drag must not
  * pull the point out from under the pointer.
  *
- * Validation here mirrors the daemon's rules rather than replacing them. The
- * daemon still checks - it is the only thing that can, since it knows the
- * critical cutout - but a dragged point that would be rejected should be
- * impossible to express, not rejected after the fact.
+ * Two things make a curve editor feel right, and the first version had
+ * neither:
+ *
+ * 1. The handle you grabbed must stay the same DOM node for the whole drag.
+ *    Redrawing the handle layer on every pointermove destroys the element
+ *    holding the pointer capture, and the drag dies after the first few
+ *    pixels. Handles are built once per shape change and only their
+ *    coordinates are updated while dragging.
+ *
+ * 2. A point must be free to move. Clamping it between its neighbours sounds
+ *    safe and is unusable: in HP's own table four points share 1800 RPM, so
+ *    a clamped middle point cannot move vertically at all. Instead the drag
+ *    is free and the neighbours give way - drag a point up and everything to
+ *    its right comes up with it. The curve stays monotonic because the
+ *    editor makes it so, not because it refused to move.
+ *
+ * The daemon still validates; it is the only thing that knows the critical
+ * cutout. But a curve it would reject should be impossible to draw here.
  */
 
 const CURVE_EDIT_MAX_C = 95;   // stay below the critical cutout (97 C)
 const CURVE_TEMP_STEP = 1;
 const CURVE_RPM_STEP = 100;    // the EC's own resolution
 const CURVE_MIN_RPM = 1800;    // below this the fan does not turn
+const CURVE_W = 600, CURVE_H = 190;
 
 let draft = null;
 let resetArmed = false;
 let resetTimer = null;
-/* Index of the point under the pointer, so its label is always shown. */
+/* Index of the point being dragged, so its label is always shown. */
 let dragging = null;
+/* The handle nodes, kept so a drag can move them instead of rebuilding. */
+let handleNodes = [];
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+const curveX = (c) => ((c - CURVE_MIN_C) / (CURVE_MAX_C - CURVE_MIN_C)) * CURVE_W;
+const curveY = (rpm) => CURVE_H - (rpm / FAN_MAX) * (CURVE_H - 10) - 5;
 
 function curveEditing() {
   return draft !== null;
 }
 
 function startEdit() {
-  draft = structuredClone(state?.curve ?? []).map((p) => ({ ...p }));
-  if (draft.length < 2) {
+  const points = state?.curve ?? [];
+  if (points.length < 2) {
     toast("no curve to edit", true);
-    draft = null;
     return;
   }
+  draft = points.map((p) => ({ ...p }));
   renderEditor();
 }
 
 function endEdit() {
   draft = null;
+  dragging = null;
   renderEditor();
   refresh();
 }
@@ -744,15 +765,15 @@ function renderEditor() {
   for (const id of ["#btn-curve-cancel", "#btn-curve-save"]) {
     $(id).hidden = !editing;
   }
+  $("#curve-edit-hint").hidden = !editing;
+  $("#curve-chart").classList.toggle("is-editing", editing);
+  $("#curve-line").classList.toggle("is-draft", editing);
   // Going back to the built-in table is worth offering without having to
   // enter the editor first - it is the way out of a curve you regret.
   $("#btn-curve-reset").textContent = resetArmed ? "Sure?" : "Defaults";
   $("#btn-curve-reset").classList.toggle("is-armed", resetArmed);
-  $("#curve-edit-hint").hidden = !editing;
-  $("#curve-chart").classList.toggle("is-editing", editing);
-  $("#curve-line").classList.toggle("is-draft", editing);
   if (editing) drawCurve(draft, state?.interpolation, null, null);
-  drawHandles();
+  buildHandles();
 }
 
 /* An RPM of 0 is not a speed, it is "fans off" - the daemon holds the
@@ -761,59 +782,101 @@ function renderEditor() {
  * into it, and no other point may. */
 function snapRpm(raw, index) {
   const rounded = Math.round(raw / CURVE_RPM_STEP) * CURVE_RPM_STEP;
-  if (index === 0 && rounded < CURVE_MIN_RPM / 2) return 0;
-  return clamp(rounded, index === 0 && rounded < CURVE_MIN_RPM ? 0 : CURVE_MIN_RPM, FAN_MAX);
+  if (index === 0) {
+    // Half of the minimum is the dead zone where "off" is clearly what was
+    // meant; above it the fan should actually turn.
+    return rounded < CURVE_MIN_RPM / 2 ? 0 : clamp(rounded, CURVE_MIN_RPM, FAN_MAX);
+  }
+  return clamp(rounded, CURVE_MIN_RPM, FAN_MAX);
 }
 
-/* The fan may not slow down as the machine gets hotter, so a point is bounded
- * by its neighbours rather than free. Same for temperature: points keep their
- * order, which is what makes the drag feel like editing a table. */
+/* Move one point, and let the rest of the curve give way.
+ *
+ * Temperature stays between the neighbours - reordering points under the
+ * pointer is disorienting, and that is what dragging past one would do. RPM
+ * is free, and the neighbours are pushed to keep the curve monotonic. */
 function moveDraftPoint(i, temp, rpm) {
-  const prev = draft[i - 1], next = draft[i + 1];
   const p = draft[i];
+  const prev = draft[i - 1], next = draft[i + 1];
 
   p.temp_c = Math.round(
-    clamp(temp,
+    clamp(
+      temp,
       prev ? prev.temp_c + CURVE_TEMP_STEP : CURVE_MIN_C,
-      next ? next.temp_c - CURVE_TEMP_STEP : CURVE_EDIT_MAX_C)
-    / CURVE_TEMP_STEP) * CURVE_TEMP_STEP;
+      next ? next.temp_c - CURVE_TEMP_STEP : CURVE_EDIT_MAX_C,
+    ) / CURVE_TEMP_STEP,
+  ) * CURVE_TEMP_STEP;
 
-  let r = snapRpm(rpm, i);
-  // A neighbour sitting in the idle region (0) is not a floor - it is off,
-  // and anything above it is a real speed.
-  if (prev && prev.rpm > 0) r = Math.max(r, prev.rpm);
-  if (next && next.rpm > 0) r = Math.min(r, next.rpm);
-  p.rpm = r;
+  p.rpm = snapRpm(rpm, i);
+
+  // Everything to the left must be no faster, everything to the right no
+  // slower. A zero at the bottom is "off", not a speed, so it is never
+  // pushed up by this.
+  for (let j = i - 1; j >= 0; j--) {
+    if (draft[j].rpm === 0) break;
+    draft[j].rpm = Math.min(draft[j].rpm, Math.max(p.rpm, CURVE_MIN_RPM));
+  }
+  for (let j = i + 1; j < draft.length; j++) {
+    draft[j].rpm = Math.max(draft[j].rpm, p.rpm);
+  }
 }
 
-function drawHandles() {
+/* Builds the handle layer. Called when the shape changes - a point added or
+ * removed, the editor opened or closed - never during a drag. */
+function buildHandles() {
   const g = $("#curve-handles");
   g.replaceChildren();
+  handleNodes = [];
   if (!curveEditing()) return;
 
-  const W = 600, H = 190;
-  const x = (c) => ((c - CURVE_MIN_C) / (CURVE_MAX_C - CURVE_MIN_C)) * W;
-  const y = (rpm) => H - (rpm / FAN_MAX) * (H - 10) - 5;
+  draft.forEach((p, i) => {
+    const cx = curveX(p.temp_c), cy = curveY(p.rpm);
+    // The hit target is deliberately much larger than the dot: dragging a
+    // 4px circle with a trackpad is a test of patience, not a control.
+    const hit = el("circle", { cx, cy, r: 14, class: "handle-hit" });
+    hit.dataset.index = i;
+    const dot = el("circle", { cx, cy, r: 4.5, class: "handle-dot" });
+    const label = el("text", { "text-anchor": "middle" });
+    g.append(hit, dot, label);
+    handleNodes.push({ hit, dot, label });
+  });
+  positionHandles();
+}
+
+/* Moves the existing handle nodes to where the draft says they are. Cheap
+ * enough to run on every pointermove, and it keeps the grabbed node alive. */
+function positionHandles() {
+  if (!curveEditing() || handleNodes.length !== draft.length) return;
 
   // The default table has ten points at 5 C spacing; labelling every one of
-  // them produces a line of overlapping text that reads as noise. Label a
-  // point only when there is room, and always label the one being dragged.
+  // them is a line of overlapping text that reads as noise. Label a point
+  // only when there is room, and always label the one being dragged.
   let lastLabelX = -Infinity;
 
   draft.forEach((p, i) => {
-    const cx = x(p.temp_c), cy = y(p.rpm);
-    const hit = el("circle", { cx, cy, r: 12, class: "handle-hit" });
-    hit.dataset.index = i;
-    g.append(hit, el("circle", { cx, cy, r: 4, class: "handle-dot" }));
+    const { hit, dot, label } = handleNodes[i];
+    const cx = curveX(p.temp_c), cy = curveY(p.rpm);
+    for (const node of [hit, dot]) {
+      node.setAttribute("cx", cx.toFixed(1));
+      node.setAttribute("cy", cy.toFixed(1));
+    }
+    dot.classList.toggle("is-active", i === dragging);
 
-    if (i !== dragging && cx - lastLabelX < 58) return;
+    const room = cx - lastLabelX >= 58;
+    if (i !== dragging && !room) {
+      label.textContent = "";
+      return;
+    }
     lastLabelX = cx;
-    const label = el("text", {
-      x: clamp(cx, 16, W - 16), y: clamp(cy - 12, 10, H - 4), "text-anchor": "middle",
-    });
+    label.setAttribute("x", clamp(cx, 18, CURVE_W - 18).toFixed(1));
+    label.setAttribute("y", clamp(cy - 13, 10, CURVE_H - 4).toFixed(1));
     label.textContent = p.rpm === 0 ? `${p.temp_c}° off` : `${p.temp_c}° ${p.rpm}`;
-    g.append(label);
   });
+}
+
+function redrawDraft() {
+  drawCurve(draft, state?.interpolation, null, null);
+  positionHandles();
 }
 
 /* Pointer position -> chart coordinates. Read through the SVG's own matrix so
@@ -825,8 +888,8 @@ function chartPoint(ev) {
   pt.y = ev.clientY;
   const p = pt.matrixTransform(svg.getScreenCTM().inverse());
   return {
-    temp_c: CURVE_MIN_C + (p.x / 600) * (CURVE_MAX_C - CURVE_MIN_C),
-    rpm: ((190 - 5 - p.y) / (190 - 10)) * FAN_MAX,
+    temp_c: CURVE_MIN_C + (p.x / CURVE_W) * (CURVE_MAX_C - CURVE_MIN_C),
+    rpm: ((CURVE_H - 5 - p.y) / (CURVE_H - 10)) * FAN_MAX,
   };
 }
 
@@ -840,6 +903,7 @@ function bindCurveEditor() {
   $("#btn-curve-save").addEventListener("click", () => {
     const points = draft;
     draft = null;
+    dragging = null;
     act(() => invoke("set_curve", { points, interpolation: state?.interpolation ?? "step" }),
         "curve saved").then(renderEditor);
   });
@@ -858,37 +922,42 @@ function bindCurveEditor() {
     clearTimeout(resetTimer);
     resetArmed = false;
     draft = null;
+    dragging = null;
     act(() => invoke("reset_curve"), "back to the built-in curve").then(renderEditor);
   });
 
   handles.addEventListener("pointerdown", (ev) => {
     const hit = ev.target.closest("circle.handle-hit");
-    if (!hit || ev.button !== 0) return;
+    if (!hit || ev.button !== 0 || !curveEditing()) return;
     ev.preventDefault();
     ev.stopPropagation();
-    const i = Number(hit.dataset.index);
-    hit.setPointerCapture(ev.pointerId);
+
+    dragging = Number(hit.dataset.index);
     handles.classList.add("is-dragging");
-    dragging = i;
-    drawHandles();
+    // Capture on the node under the pointer, which from here on is not
+    // replaced - see the note at the top of this section.
+    hit.setPointerCapture(ev.pointerId);
+    positionHandles();
 
     const move = (e) => {
+      if (dragging === null) return;
       const at = chartPoint(e);
-      moveDraftPoint(i, at.temp_c, at.rpm);
-      drawCurve(draft, state?.interpolation, null, null);
-      drawHandles();
+      moveDraftPoint(dragging, at.temp_c, at.rpm);
+      redrawDraft();
     };
     const up = () => {
       dragging = null;
-      drawHandles();
       handles.classList.remove("is-dragging");
-      handles.removeEventListener("pointermove", move);
-      handles.removeEventListener("pointerup", up);
-      handles.removeEventListener("pointercancel", up);
+      hit.removeEventListener("pointermove", move);
+      hit.removeEventListener("pointerup", up);
+      hit.removeEventListener("pointercancel", up);
+      positionHandles();
     };
-    handles.addEventListener("pointermove", move);
-    handles.addEventListener("pointerup", up);
-    handles.addEventListener("pointercancel", up);
+    // On the capturing element, so the drag survives the pointer leaving the
+    // chart - releasing outside the window still ends it.
+    hit.addEventListener("pointermove", move);
+    hit.addEventListener("pointerup", up);
+    hit.addEventListener("pointercancel", up);
   });
 
   // Right-click removes. Two points is the minimum a curve can have.
@@ -902,7 +971,7 @@ function bindCurveEditor() {
     }
     draft.splice(Number(hit.dataset.index), 1);
     drawCurve(draft, state?.interpolation, null, null);
-    drawHandles();
+    buildHandles();
   });
 
   // Click on empty chart adds a point where the curve already is, so adding
@@ -915,10 +984,10 @@ function bindCurveEditor() {
     if (draft.some((p) => Math.abs(p.temp_c - temp) < CURVE_TEMP_STEP)) return;
 
     const below = draft.filter((p) => p.temp_c < temp).pop();
-    draft.push({ temp_c: temp, rpm: below ? below.rpm : draft[0].rpm });
+    draft.push({ temp_c: temp, rpm: below ? Math.max(below.rpm, CURVE_MIN_RPM) : draft[0].rpm });
     draft.sort((a, b) => a.temp_c - b.temp_c);
     drawCurve(draft, state?.interpolation, null, null);
-    drawHandles();
+    buildHandles();
   });
 }
 
