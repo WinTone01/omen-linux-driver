@@ -1,31 +1,32 @@
-# Ucuncu taraf binary - ACPICA surumlerinden indirilir
+# Third-party binary — fetched from an ACPICA release
 tools/*.exe
 
-# add-8d24.sh yedekleri
+# add-8d24.sh backups
 *.orig
 
-# verify.sh ciktilari
+# verify.sh output
 verify-*.txt
+!docs/research/verify-before.txt
 
-# build-module.sh calisma dizini
-phase2/build/
+# build-module.sh working directory
+kernel/hp-wmi-8d24/build/
 
-# Rust derleme ciktisi
-phase3/target/
+# Rust build output
+/target/
 
-# Cekirdek modulu derleme ciktisi
-phase3/kernel/**/*.o
-phase3/kernel/**/*.ko
-phase3/kernel/**/*.mod*
-phase3/kernel/**/.*.cmd
-phase3/kernel/**/Module.symvers
-phase3/kernel/**/modules.order
-phase3/kernel/**/.tmp_versions/
+# Kernel module build output
+kernel/**/*.o
+kernel/**/*.ko
+kernel/**/*.mod*
+kernel/**/.*.cmd
+kernel/**/Module.symvers
+kernel/**/modules.order
+kernel/**/.tmp_versions/
 
 # Tauri generated
-phase3/ui/src-tauri/gen/
+ui/src-tauri/gen/
 
-# makepkg ciktisi
-phase3/**/pkg/
-phase3/**/src/*.pkg.tar.*
-phase3/**/*.pkg.tar.*
+# makepkg output
+**/pkg/
+**/src/*.pkg.tar.*
+*.pkg.tar.*

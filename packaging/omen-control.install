@@ -1,0 +1,52 @@
+post_install() {
+  cat <<'MSG'
+
+  omend is installed but not started. Before enabling it, make sure the
+  hp-wmi 8D24 patch is in place - without it there is no pwm1 and the
+  daemon will not start:
+
+      sudo bash /usr/share/doc/omen-control/../../../kernel/hp-wmi-8d24/verify.sh
+
+  Then:
+
+      sudo systemctl enable --now omend
+      sudo usermod -aG omen $USER      # then log out and back in
+
+  The group only takes effect in a new login session, so a window opened
+  from the current one will still be refused by the daemon.
+
+MSG
+}
+
+post_upgrade() {
+  # Restart it rather than print a reminder. The daemon keeps running the old
+  # binary until it is restarted, so without this the fix you just installed
+  # is still not the code that is running - and the reminder is read by
+  # nobody. try-restart does nothing if the service is not running, which is
+  # the correct behaviour for someone who has not enabled it yet.
+  #
+  # The fans are handed back safely on the way out (ExecStopPost) and picked
+  # up again within a tick, so a restart under load is not a gap in cooling.
+  if systemctl is-active --quiet omend; then
+    echo "  restarting omend so the new binary is the one running"
+    systemctl try-restart omend >/dev/null 2>&1 || \
+      echo "  could not restart omend - do it by hand: systemctl restart omend"
+  fi
+
+  # The kernel module is a separate package and cannot be reloaded from here
+  # while the keyboard is lit; say so rather than do it.
+  if [ -d /sys/module/omen_kbd_rgb ]; then
+    echo "  (kernel modules keep the build that is loaded until reboot: omenctl version)"
+  fi
+}
+
+pre_remove() {
+  systemctl disable --now omend >/dev/null 2>&1 || true
+}
+
+post_remove() {
+  cat <<'MSG'
+  The 'omen' group and /etc/omen/omend.toml are left in place. Remove them
+  by hand if you are done with the project.
+MSG
+}

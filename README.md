@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="phase3/ui/src-tauri/icons/icon.png" width="112" alt="">
+<img src="ui/src-tauri/icons/icon.png" width="112" alt="">
 
 # OMEN Control
 
@@ -12,7 +12,7 @@ built by reading the firmware, not by guessing.**
 [![Built with](https://img.shields.io/badge/rust%20%2B%20C-daemon%20%C2%B7%20CLI%20%C2%B7%20GUI%20%C2%B7%20kernel%20module-a855f7)](#layout)
 [![License](https://img.shields.io/badge/license-GPL--2.0--only-lightgrey)](LICENSE)
 
-<img src="phase3/docs/screenshots/vitals.png" width="900" alt="System Vitals: GPU, CPU, RAM and fan gauges above storage and process lists">
+<img src="docs/screenshots/vitals.png" width="900" alt="System Vitals: GPU, CPU, RAM and fan gauges above storage and process lists">
 
 </div>
 
@@ -27,19 +27,19 @@ git history.
 
 <table>
 <tr>
-<td width="50%"><img src="phase3/docs/screenshots/fan.png" alt="Fan Control"><br><b>Fan Control</b><br><sub>The curve, draggable, with presets and a log of every setpoint change.</sub></td>
-<td width="50%"><img src="phase3/docs/screenshots/performance.png" alt="Performance Control"><br><b>Performance Control</b><br><sub>The firmware's thermal profile, and what each mode actually does.</sub></td>
+<td width="50%"><img src="docs/screenshots/fan.png" alt="Fan Control"><br><b>Fan Control</b><br><sub>The curve, draggable, with presets and a log of every setpoint change.</sub></td>
+<td width="50%"><img src="docs/screenshots/performance.png" alt="Performance Control"><br><b>Performance Control</b><br><sub>The firmware's thermal profile, and what each mode actually does.</sub></td>
 </tr>
 <tr>
-<td><img src="phase3/docs/screenshots/graphics.png" alt="Graphics"><br><b>Graphics</b><br><sub>The mux, the discrete GPU's power state, and what is holding it awake.</sub></td>
-<td><img src="phase3/docs/screenshots/automation.png" alt="Game Profiles"><br><b>Game Profiles</b><br><sub>Per-application and per-power-source rules, restored on exit.</sub></td>
+<td><img src="docs/screenshots/graphics.png" alt="Graphics"><br><b>Graphics</b><br><sub>The mux, the discrete GPU's power state, and what is holding it awake.</sub></td>
+<td><img src="docs/screenshots/automation.png" alt="Game Profiles"><br><b>Game Profiles</b><br><sub>Per-application and per-power-source rules, restored on exit.</sub></td>
 </tr>
 <tr>
-<td><img src="phase3/docs/screenshots/lighting.png" alt="Lighting"><br><b>Lighting</b><br><sub>Four zones, a hue strip, effects, and colours that survive a reboot.</sub></td>
-<td><img src="phase3/docs/screenshots/diagnosis.png" alt="Diagnosis"><br><b>Diagnosis</b><br><sub>Named checks with remedies. Also <code>omenctl doctor</code>.</sub></td>
+<td><img src="docs/screenshots/lighting.png" alt="Lighting"><br><b>Lighting</b><br><sub>Four zones, a hue strip, effects, and colours that survive a reboot.</sub></td>
+<td><img src="docs/screenshots/diagnosis.png" alt="Diagnosis"><br><b>Diagnosis</b><br><sub>Named checks with remedies. Also <code>omenctl doctor</code>.</sub></td>
 </tr>
 <tr>
-<td><img src="phase3/docs/screenshots/settings.png" alt="Settings"><br><b>Settings</b><br><sub>Window settings, machine defaults, version skew, firmware through fwupd.</sub></td>
+<td><img src="docs/screenshots/settings.png" alt="Settings"><br><b>Settings</b><br><sub>Window settings, machine defaults, version skew, firmware through fwupd.</sub></td>
 <td valign="top"><br><b>And</b><br><sub>English and Turkish · a tray icon with profile and fan actions ·
 one window however many times you click the icon · it reopens on the page you
 left it on.</sub></td>
@@ -123,31 +123,34 @@ flowchart LR
 
 ## Install
 
-Three pieces: the kernel patch that makes fan control exist at all, the module
-that owns the keyboard and the mux, and the userspace on top.
-
 ```bash
-# 1. The 8D24 entry for hp-wmi — without it there is no pwm1 and nothing works
-bash phase2/scripts/build-module.sh --install
-
-# 2. The RGB + graphics-mux kernel module
-cd phase3/kernel/omen-kbd-rgb && makepkg -sfi
-
-# 3. The daemon, the CLI and the window
-cd phase3/packaging && makepkg -sfi
-
-sudo systemctl enable --now omend
-sudo usermod -aG omen $USER      # then log out and back in
+git clone https://github.com/WinTone01/omen-linux-driver
+cd omen-linux-driver
+./install.sh
 ```
 
-| Installs | Gives you |
-|---|---|
-| `hp-wmi-8d24` (DKMS) | `pwm1`, fan tachometers, `platform_profile` |
-| `omen-kbd-rgb-dkms` | four RGB zones, `gpu_mux_mode` |
-| `omen-control` | `omend`, `omenctl`, `omen-ui`, the systemd unit and udev rules |
+That is the whole thing. It identifies the machine first and refuses to go on
+if it is not an HP OMEN or Victus, checks what is missing before building
+anything, and installs three pieces in the order they depend on each other:
 
-Not on Arch? [`phase3/packaging/install.sh`](phase3/packaging/install.sh)
-installs the same files by hand.
+| | Gives you |
+|---|---|
+| `hp-wmi` with the 8D24 entry | `pwm1`, fan tachometers, `platform_profile` |
+| `omen-kbd-rgb` | four RGB zones, `gpu_mux_mode` |
+| `omen-control` | `omend`, `omenctl`, `omen-ui`, the unit and the udev rules |
+
+```console
+$ ./install.sh --check          # look at the machine and stop
+[1/2] This machine
+    vendor   HP
+    model    OMEN Gaming Laptop 16-ap0xxx
+    board    8D24
+  ✓ OMEN 16-ap0xxx (8D24) — the board this was built and verified on
+```
+
+`--no-gui` skips the window, `--yes` answers the prompts, `--uninstall` takes
+it back out. On Arch it goes through `makepkg`, so pacman owns the files;
+elsewhere it builds with `cargo` and DKMS directly.
 
 ## From the terminal
 
@@ -215,7 +218,7 @@ speaks. The only thing missing was this board's DMI entry.
 | Profile | `0x1A` (EC `0x95`) — `0x30` balanced · `0x31` performance · `0x04` unleashed |
 | Fan unit | hundreds of RPM, 18–48 → 1800–4800 RPM |
 
-→ [`phase1/docs/phase1-findings.md`](phase1/docs/phase1-findings.md), with a
+→ [`docs/research/phase1-findings.md`](docs/research/phase1-findings.md), with a
 source for every claim.
 
 </details>
@@ -229,8 +232,8 @@ The prediction held: a one-line addition to the DMI table (`8D24` →
 `omen_v1_legacy`) made `pwm1` appear, and EC `0x95` read back as **48** —
 confirming the Windows measurement through a completely different path.
 
-→ [`phase2/docs/phase2-plan.md`](phase2/docs/phase2-plan.md) ·
-the patch is [checkpatch-clean](phase2/patches/) and ready to send upstream.
+→ [`docs/research/phase2-plan.md`](docs/research/phase2-plan.md) ·
+the patch is [checkpatch-clean](kernel/hp-wmi-8d24/patches/) and ready to send upstream.
 
 </details>
 
@@ -240,7 +243,7 @@ the patch is [checkpatch-clean](phase2/patches/) and ready to send upstream.
 <br>
 
 The curve service, the RGB module, the window, the automation and the
-diagnosis. → [`phase3/README.md`](phase3/README.md)
+diagnosis. → [`docs/usage.md`](docs/usage.md)
 
 </details>
 
@@ -279,15 +282,18 @@ They are the interesting part, so they are not buried.
 ## Layout
 
 ```
-phase1/   acpi/      17 ACPI tables from the live system + the decompiled DSDT
-          extract/   EC field maps, the WMI dispatcher, GM/LM methods
-          docs/      findings, with a source for every claim
-phase2/   scripts/   verify.sh, add-8d24.sh, build-module.sh
-          patches/   the 8D24 patch, checkpatch-clean
-phase3/   crates/    omen-core, omend (daemon), omenctl (CLI)
-          kernel/    omen-kbd-rgb — 4 RGB zones and the graphics mux
-          ui/        omen-ui, the window
-          packaging/ systemd unit, udev rules, PKGBUILD
+install.sh          one command, with a hardware check in front of it
+crates/             omen-core · omend (the daemon) · omenctl (the CLI)
+ui/                 omen-ui — the window
+kernel/
+  hp-wmi-8d24/      the board entry: patch, build script, verify.sh
+  omen-kbd-rgb/     4 RGB zones and the graphics mux
+packaging/          systemd unit, udev rules, sysusers, PKGBUILD
+docs/
+  usage.md          configuration and the commands in full
+  research/         how the protocol was read, with a source per claim
+  acpi/             17 ACPI tables from the live system + the DSDT
+  screenshots/
 ```
 
 <details>

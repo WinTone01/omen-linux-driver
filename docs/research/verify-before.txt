@@ -1,0 +1,64 @@
+
+[1m== 1. Donanim kimligi ==[0m
+       board_name   : 8D24    (beklenen: 8D24)
+       product_name : OMEN Gaming Laptop 16-ap0xxx
+       bios_version : F.11
+       kernel       : 7.2.4-1-cachyos
+  [32mOK[0m   Hedef makinedesin
+
+[1m== 2. hp-wmi modulu ==[0m
+  [32mOK[0m   hp_wmi yuklu
+  [32mOK[0m   /sys/devices/platform/hp-wmi var
+       icerik: als display dock driver driver_override hddtemp hwmon modalias postcode power subsystem tablet uevent 
+       --- dmesg ---
+       [    8.311009] input: HP WMI hotkeys as /devices/virtual/input/input6
+
+[1m== 3. Platform profil ==[0m
+  [32mOK[0m   platform_profile var
+       secenekler: low-power balanced performance
+       aktif     : low-power
+
+[1m== 4. Fan / hwmon ==[0m
+       ACAD           /sys/class/hwmon/hwmon0
+       acpi_fan       /sys/class/hwmon/hwmon1
+       ucsi_source_psy_USBC000:001 /sys/class/hwmon/hwmon10
+       mt7921_phy0    /sys/class/hwmon/hwmon11
+       acpitz         /sys/class/hwmon/hwmon2
+       BAT0           /sys/class/hwmon/hwmon3
+       nvme           /sys/class/hwmon/hwmon4
+       amdgpu         /sys/class/hwmon/hwmon5
+       k10temp        /sys/class/hwmon/hwmon6
+       hp             /sys/class/hwmon/hwmon7
+  [32mOK[0m   hp-wmi hwmon bulundu: /sys/class/hwmon/hwmon7
+         fan1_input                   = 2103
+         fan2_input                   = 1911
+         pwm1_enable                  = 2
+       spd5118        /sys/class/hwmon/hwmon8
+       spd5118        /sys/class/hwmon/hwmon9
+
+[1m== 5. Derlenmis hp_wmi modulunde kart kayitlari ==[0m
+  [32mOK[0m   modul: /lib/modules/7.2.4-1-cachyos/kernel/drivers/platform/x86/hp/hp-wmi.ko.zst
+       kayitli kartlar: 84DA 84DB 84DC 8572 8573 8574 8575 8600 8601 8602 8603 8604 8605 8606 8607 860A 8746 8747 8748 8749 874A 8786 8787 8788 878A 878B 878C 87B5 886B 886C 88C8 88CB 88D1 88D2 88F4 88F5 88F6 88F7 88F8 88FD 88FE 88FF 8900 8901 8902 8912 8917 8918 8949 894A 89EB 8A15 8A25 8A42 8A44 8A4D 8B2F 8BAB 8BAD 8BBE 8BC2 8BCA 8BCD 8BD4 8BD5 8C58 8C76 8C77 8C78 8C99 8C9C 8D26 8D41 8D87 8DD6 8E35 8E41 
+  [31mYOK[0m  8D24 kayitli degil - yama gerekiyor
+  [32mOK[0m   8D26 (kardes kart) kayitli - cekirdek 16-ap0xxx ailesini taniyor
+       cekirdek 7.2 -> yama bicimi: victus_s_thermal_profile_boards[] + omen_v1_legacy_thermal_params (7.2)
+
+[1m== 6. EC dogrudan okuma (Faz 1 caprazlamasi) ==[0m
+  [32mOK[0m   ACPI EC cihazi var: PNP0C09:00 
+  [32mOK[0m   ec_sys yuklu
+       config: CONFIG_ACPI_EC_DEBUGFS=m
+       /sys/kernel/debug/ec icerigi: ec0 
+  [32mOK[0m   EC erisilebilir: /sys/kernel/debug/ec/ec0/io
+       0x95 HPCM (profil)  = 0   (48=Balanced, 49=Performance, 4=Unleashed)
+       0x34 SRP1 (fan1 hedef) = 255  -> 25500 RPM
+       0x35 SRP2 (fan2 hedef) = 255  -> 25500 RPM
+       0xB0 fan1 takometre = 2103 RPM
+       0xB2 fan2 takometre = 1908 RPM
+  [31mYOK[0m  HPCM beklenmeyen deger (0) - Faz 1 haritasi gozden gecirilmeli
+
+[1m== 7. dGPU guc yonetimi (kapsam disi ama pil omrunun asil sebebi) ==[0m
+       0000:04:00.0  vendor=0x10de  power/control=auto  runtime_status=active
+       vendor 0x10de = NVIDIA. 'on' ise runtime PM kapali demektir (5-10W kayip).
+
+[1mBitti.[0m Ciktinin tamamini kaydet: sudo bash verify.sh 2>&1 | tee verify-out.txt
+

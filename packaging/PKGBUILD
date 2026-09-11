@@ -1,0 +1,83 @@
+# Maintainer: WinTone <mertbay295@gmail.com>
+#
+# Builds from the checkout this file sits in rather than from a released
+# tarball, because there is not one yet. Run makepkg from this directory.
+#
+# The kernel side is packaged separately and on purpose:
+#   omen-kbd-rgb-dkms      ../kernel/omen-kbd-rgb/PKGBUILD
+#   the hp-wmi 8D24 patch  ../../kernel/hp-wmi-8d24/build-module.sh --install
+#
+# Without the 8D24 patch there is no pwm1 and omend refuses to start, which
+# is why it is a hard dependency of the fan side but cannot be expressed here.
+
+pkgname=omen-control
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Fan curve, thermal profile and RGB keyboard control for the HP OMEN 16-ap0xxx (board 8D24)"
+arch=('x86_64')
+url="https://github.com/WinTone01/omen-linux-driver"
+license=('GPL-2.0-only')
+depends=('webkit2gtk-4.1' 'gtk3' 'systemd-libs')
+optdepends=('omen-kbd-rgb-dkms: RGB keyboard control'
+            'libappindicator-gtk3: tray icon')
+makedepends=('cargo')
+backup=('etc/omen/omend.toml')
+install=omen-control.install
+source=()
+
+_root="$startdir/.."
+
+prepare() {
+  cd "$_root"
+  cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+  cd "$_root"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --release --frozen
+}
+
+check() {
+  cd "$_root"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --workspace
+}
+
+package() {
+  cd "$_root"
+
+  install -Dm755 target/release/omend   "$pkgdir/usr/bin/omend"
+  install -Dm755 target/release/omenctl "$pkgdir/usr/bin/omenctl"
+  install -Dm755 target/release/omen-ui "$pkgdir/usr/bin/omen-ui"
+
+  install -Dm644 packaging/omend.service      "$pkgdir/usr/lib/systemd/system/omend.service"
+  install -Dm644 packaging/omend.toml         "$pkgdir/etc/omen/omend.toml"
+  install -Dm644 packaging/omen-sysusers.conf "$pkgdir/usr/lib/sysusers.d/omen.conf"
+  install -Dm644 packaging/omen-modules.conf  "$pkgdir/usr/lib/modules-load.d/omen.conf"
+  install -Dm644 packaging/omen-modprobe.conf "$pkgdir/usr/lib/modprobe.d/omen.conf"
+  install -Dm644 packaging/99-omen-leds.rules "$pkgdir/usr/lib/udev/rules.d/99-omen-leds.rules"
+
+  # Runs on resume; see the script for why ten seconds of self-healing is not
+  # good enough on its own.
+  install -Dm755 packaging/omen-sleep.sh \
+    "$pkgdir/usr/lib/systemd/system-sleep/omen"
+
+  # Named after the app's Wayland app_id so the window is matched to this
+  # entry and gets the logo rather than a generic icon.
+  install -Dm644 packaging/dev.wintone.omen-control.desktop \
+    "$pkgdir/usr/share/applications/dev.wintone.omen-control.desktop"
+  install -Dm644 ui/src-tauri/icons/icon.png \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/omen-control.png"
+  install -Dm644 ui/src-tauri/icons/128x128.png \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/omen-control.png"
+  install -Dm644 ui/src-tauri/icons/32x32.png \
+    "$pkgdir/usr/share/icons/hicolor/32x32/apps/omen-control.png"
+
+  install -Dm644 README.md            "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 docs/usage.md        "$pkgdir/usr/share/doc/$pkgname/usage.md"
+  install -Dm644 docs/research/rgb-protocol.md \
+    "$pkgdir/usr/share/doc/$pkgname/rgb-protocol.md"
+  install -Dm644 ../LICENSE     "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
