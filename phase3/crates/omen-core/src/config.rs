@@ -245,6 +245,27 @@ pub struct LightingConfig {
     #[serde(default = "default_effect_color")]
     pub color: [u8; 3],
 
+    /// Put the zone colours back when the daemon starts.
+    ///
+    /// The LED class does not survive a reboot or a module reload - the
+    /// keyboard comes up in whatever the firmware left - so the only way to
+    /// have the colours you chose is for something to write them again. The
+    /// daemon remembers them below and does it.
+    #[serde(default)]
+    pub restore_on_start: bool,
+
+    /// The colours to restore, remembered automatically while no effect is
+    /// running. Not something to edit by hand; the keyboard is the editor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<[u8; 3]>,
+
+    /// Turn the keyboard backlight off when the machine is on battery.
+    ///
+    /// Worth a real amount on this laptop: the backlight is the only thing
+    /// here that draws power continuously for decoration.
+    #[serde(default)]
+    pub off_on_battery: bool,
+
     /// Frames per second while an effect runs.
     ///
     /// Each frame writes four zones, and each zone write is a WMI call. Ten
@@ -262,6 +283,9 @@ impl Default for LightingConfig {
             effect: spec.effect,
             speed: spec.speed,
             color: default_effect_color(),
+            restore_on_start: false,
+            zones: Vec::new(),
+            off_on_battery: false,
             fps: default_fps(),
         }
     }

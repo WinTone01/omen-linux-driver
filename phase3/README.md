@@ -211,7 +211,9 @@ omenctl curve                 # active curve and safety thresholds
 omenctl curve set 45:0,55:1800,75:2400,92:3600
                               # replace it (temperature:RPM; rpm 0 = fans off,
                               # only valid at the bottom)
+omenctl curve preset quiet    # quiet / default / performance
 omenctl curve reset           # back to the built-in OMEN Gaming Hub table
+omenctl clean 20              # fans at full power for 20s, to clear dust
 
 omenctl set curve             # automatic: the curve drives (default)
 omenctl set manual 2400       # fixed target

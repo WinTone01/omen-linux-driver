@@ -21,10 +21,21 @@ use omen_core::anim::{Effect, EffectSpec};
 use omen_core::config::LightingConfig;
 use omen_core::leds::{Leds, Rgb, ZONE_COUNT};
 
+/// What the daemon can ask the lighting thread to do.
+#[derive(Debug, Clone)]
+pub enum Ask {
+    /// A new configuration - effect, speed, colour, and the settings below.
+    Configure(Box<LightingConfig>),
+    /// Turn the backlight off, or put it back to the brightness it had.
+    /// Used for "off on battery"; the brightness to restore is remembered
+    /// here rather than in the config, because it is a runtime fact.
+    Backlight(bool),
+}
+
 /// Handle to the lighting thread. Dropping it stops the thread and restores
 /// the colours the keyboard had before the effect started.
 pub struct Lighting {
-    tx: Sender<LightingConfig>,
+    tx: Sender<Ask>,
 }
 
 impl Lighting {
@@ -43,12 +54,13 @@ impl Lighting {
             }
         };
 
-        let (tx, rx) = mpsc::channel::<LightingConfig>();
+        let (tx, rx) = mpsc::channel::<Ask>();
         std::thread::Builder::new()
             .name("omend-lighting".into())
             .spawn(move || {
                 let mut cfg = initial;
                 let mut painter = Painter::new(leds);
+                painter.restore_saved(&cfg);
                 painter.begin(&cfg);
 
                 loop {
@@ -64,10 +76,11 @@ impl Lighting {
                     };
 
                     match rx.recv_timeout(wait) {
-                        Ok(next) => {
+                        Ok(Ask::Configure(next)) => {
                             painter.reconfigure(&cfg, &next);
-                            cfg = next;
+                            cfg = *next;
                         }
+                        Ok(Ask::Backlight(on)) => painter.set_backlight(on),
                         Err(RecvTimeoutError::Timeout) => {}
                         // The daemon is going away.
                         Err(RecvTimeoutError::Disconnected) => {
@@ -85,7 +98,24 @@ impl Lighting {
     /// Applies a new lighting configuration. A closed channel means the
     /// thread is gone, which is not worth failing a config reload over.
     pub fn update(&self, cfg: LightingConfig) {
-        let _ = self.tx.send(cfg);
+        let _ = self.tx.send(Ask::Configure(Box::new(cfg)));
+    }
+
+    /// Turns the backlight off or back on, for the battery rule.
+    pub fn backlight(&self, on: bool) {
+        let _ = self.tx.send(Ask::Backlight(on));
+    }
+
+    /// The colours the keyboard is showing, for remembering them. `None`
+    /// while an effect is running - what is on screen then is a frame, not a
+    /// choice.
+    pub fn zones(&self) -> Option<Vec<Rgb>> {
+        let leds = Leds::discover().ok()?;
+        Some(
+            (0..ZONE_COUNT)
+                .map(|i| leds.zone(i).unwrap_or(Rgb { r: 0, g: 0, b: 0 }))
+                .collect(),
+        )
     }
 }
 
@@ -100,6 +130,9 @@ struct Painter {
     /// write is a WMI call; a breathing effect at its dimmest can hold the
     /// same 8-bit value for several frames.
     last: Option<[Rgb; ZONE_COUNT]>,
+    /// Brightness before the backlight was switched off, so turning it back
+    /// on returns to what it was rather than to an arbitrary full.
+    saved_brightness: Option<u8>,
 }
 
 impl Painter {
@@ -109,6 +142,49 @@ impl Painter {
             started: Instant::now(),
             saved: None,
             last: None,
+            saved_brightness: None,
+        }
+    }
+
+    /// Writes the remembered colours, once, at startup.
+    ///
+    /// Before any effect starts, so an effect's own first frame still wins -
+    /// and so the "before" colours it saves are the ones the user chose
+    /// rather than whatever the firmware happened to leave.
+    fn restore_saved(&mut self, cfg: &LightingConfig) {
+        if !cfg.restore_on_start || cfg.zones.is_empty() {
+            return;
+        }
+        for (i, rgb) in cfg.zones.iter().enumerate().take(ZONE_COUNT) {
+            let colour = Rgb {
+                r: rgb[0],
+                g: rgb[1],
+                b: rgb[2],
+            };
+            if let Err(e) = self.leds.set_zone(i, colour) {
+                debug!("could not restore zone {i}: {e}");
+                return;
+            }
+        }
+        info!("keyboard colours restored");
+    }
+
+    /// The backlight switch. Writing 0 turns it off; anything else turns it
+    /// on at that level (the hardware switch is on/off, and the levels are
+    /// produced by scaling the colours - see the driver).
+    fn set_backlight(&mut self, on: bool) {
+        if on {
+            let level = self.saved_brightness.take().unwrap_or(100);
+            if let Err(e) = self.leds.set_brightness(level) {
+                debug!("could not turn the backlight on: {e}");
+            }
+            return;
+        }
+        if self.saved_brightness.is_none() {
+            self.saved_brightness = self.leds.brightness().filter(|b| *b > 0);
+        }
+        if let Err(e) = self.leds.set_brightness(0) {
+            debug!("could not turn the backlight off: {e}");
         }
     }
 

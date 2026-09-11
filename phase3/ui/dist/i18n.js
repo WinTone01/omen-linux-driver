@@ -301,3 +301,19 @@ function applyLanguage(choice) {
   document.documentElement.lang = LANG;
   translatePage();
 }
+
+/* Strings added with the presets, the dust run and the lighting switches. */
+Object.assign(I18N.tr, {
+  "Quiet": "Sessiz",
+  "Performance": "Performans",
+  "Clear the dust": "Tozu temizle",
+  "Runs both fans at full power for a while and then puts everything back. Worth doing with the laptop tilted; it is loud, and it is meant to be.":
+    "İki fanı da bir süre tam güçte çalıştırır, sonra her şeyi eski haline döndürür. Dizüstünü eğik tutarak yapmaya değer; gürültülü, ve öyle olması gerekiyor.",
+  "Run for 20 seconds": "20 saniye çalıştır",
+  "Behaviour": "Davranış",
+  "Put these colours back after a reboot":
+    "Yeniden başlatmadan sonra bu renkleri geri getir",
+  "Turn the backlight off on battery": "Pildeyken arka ışığı kapat",
+  "The LED class does not survive a reboot — the keyboard comes up in whatever the firmware left — so the colours have to be written again by something. The service remembers them while no effect is running.":
+    "LED sınıfı yeniden başlatmayı atlatmıyor — klavye, firmware ne bıraktıysa onunla açılıyor — dolayısıyla renkleri birinin yeniden yazması gerekiyor. Servis, hiçbir efekt çalışmazken onları hatırlıyor.",
+});

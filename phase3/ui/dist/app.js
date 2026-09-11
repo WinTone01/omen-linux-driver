@@ -35,6 +35,9 @@ const mockState = {
     temps: [["cpu/Tctl", 72.4], ["igpu/edge", 54.0], ["board/temp1", 46.0]],
     apps: [{ process: "cs2", profile: "performance", fan: { mode: "manual", rpm: 3000 } }],
     active_app: null,
+    lighting_restore: false,
+    lighting_off_on_battery: false,
+    cleaning_secs_left: null,
     on_ac: true,
     battery_percent: 82,
     power_ac: {},
@@ -158,6 +161,15 @@ async function mockInvoke(cmd, args) {
     case "set_effect":
       mockState.effect = { effect: args.effect, speed: args.speed, color: args.color };
       return args.effect === "none" ? "lighting effects off" : `lighting: ${args.effect}`;
+    case "set_curve_preset":
+      return `curve saved (${args.name})`;
+    case "clean_fans":
+      mockState.daemon.cleaning_secs_left = args.seconds;
+      return `running the fans at full power for ${args.seconds}s, then back to normal`;
+    case "set_lighting_options":
+      mockState.daemon.lighting_restore = args.restoreOnStart;
+      mockState.daemon.lighting_off_on_battery = args.offOnBattery;
+      return "lighting options saved";
     case "set_curve":
       mockState.curve = args.points;
       mockState.interpolation = args.interpolation;
@@ -1844,6 +1856,47 @@ function bindHistory() {
   if ($('.view[data-view="fan"]')?.classList.contains("is-active")) refreshHistory();
 }
 
+/* ── presets, dust, lighting behaviour ───────────────────────────
+ *
+ * The presets send points rather than a name so the daemon has one way in for
+ * a curve: starting from a preset and then dragging it is the same path as
+ * drawing one from scratch.
+ */
+
+function bindExtras() {
+  $$("[data-preset-curve]").forEach((b) =>
+    b.addEventListener("click", () => {
+      // Leaving the editor open on a curve that has just been replaced would
+      // show a draft of the old one.
+      draft = null;
+      act(() => invoke("set_curve_preset", { name: b.dataset.presetCurve }))
+        .then(renderEditor);
+    }));
+
+  $("#btn-clean").addEventListener("click", () =>
+    act(() => invoke("clean_fans", { seconds: 20 })));
+
+  const sendLighting = () =>
+    act(() => invoke("set_lighting_options", {
+      restoreOnStart: $("#light-restore").checked,
+      offOnBattery: $("#light-battery").checked,
+    }), null);
+
+  $("#light-restore").addEventListener("change", sendLighting);
+  $("#light-battery").addEventListener("change", sendLighting);
+}
+
+function renderExtras(s) {
+  const left = s.daemon?.cleaning_secs_left ?? null;
+  $("#btn-clean").disabled = left != null;
+  $("#clean-note").textContent = left != null ? `${left}s` : "";
+
+  if (Date.now() > holdUntil) {
+    $("#light-restore").checked = !!s.daemon?.lighting_restore;
+    $("#light-battery").checked = !!s.daemon?.lighting_off_on_battery;
+  }
+}
+
 async function refresh() {
   try {
     state = await invoke("get_state");
@@ -1856,6 +1909,7 @@ async function refresh() {
   renderApps(state);
   renderGraphics(state);
   renderPowerRules(state);
+  renderExtras(state);
   if ($('.view[data-view="fan"]')?.classList.contains("is-active")) refreshHistory();
   renderStartupProfile(state);
   renderTrayDependent(state);
@@ -1886,6 +1940,7 @@ bindFirmware();
 bindDiagnosis();
 bindPowerRules();
 bindHistory();
+bindExtras();
 loadSettings();
 renderVersions();
 refresh();

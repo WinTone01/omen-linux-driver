@@ -116,6 +116,19 @@ speed = 5
 # effects supply their own. OMEN red by default.
 color = [232, 17, 35]
 
+# Put the zone colours back when the daemon starts.
+#
+# The LED class does not survive a reboot or a module reload - the keyboard
+# comes up in whatever the firmware left - so the only way to have the colours
+# you chose is for something to write them again. With this on, the daemon
+# remembers them (while no effect is running) and restores them at startup.
+restore_on_start = false
+
+# Turn the keyboard backlight off when the machine is on battery. The
+# backlight is the only thing here that draws power continuously for
+# decoration, so this is worth a real amount.
+off_on_battery = false
+
 # Frames per second while an effect runs. Each frame writes four zones and each
 # zone write is a WMI call; ten is smooth enough for four zones spread across a
 # keyboard and leaves the firmware alone the rest of the time.

@@ -383,6 +383,41 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             }
         }
 
+        Request::SetLightingOptions {
+            restore_on_start,
+            off_on_battery,
+        } => {
+            let mut cfg = match Config::load(config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("the current configuration could not be read: {e}"),
+                    }
+                }
+            };
+            cfg.lighting.restore_on_start = restore_on_start;
+            cfg.lighting.off_on_battery = off_on_battery;
+            if let Err(e) = cfg.save(config_path) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+            shared.request_reload();
+            Response::Done {
+                message: "lighting options saved".into(),
+            }
+        }
+
+        Request::CleanFans { seconds } => {
+            let seconds = seconds.clamp(5, 120);
+            shared.request_clean(seconds);
+            Response::Done {
+                message: format!(
+                    "running the fans at full power for {seconds}s, then back to normal"
+                ),
+            }
+        }
+
         Request::Reload => {
             shared.request_reload();
             Response::Done {

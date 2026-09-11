@@ -24,6 +24,8 @@ pub struct Inner {
     pub requested: Option<ControlMode>,
     /// Re-read the configuration.
     pub reload: bool,
+    /// A dust-clearing run, in seconds, waiting to be started by the loop.
+    pub clean_secs: Option<u64>,
     /// The last tick's view; this is what `status` returns.
     pub snapshot: Snapshot,
     /// The decision log. Kept here rather than read from the loop's own copy
@@ -36,7 +38,7 @@ pub struct Inner {
 
 impl Inner {
     fn pending(&self) -> bool {
-        self.requested.is_some() || self.reload
+        self.requested.is_some() || self.reload || self.clean_secs.is_some()
     }
 }
 
@@ -98,6 +100,15 @@ impl Shared {
     /// Takes the pending request and clears it.
     pub fn take_request(&self) -> Option<ControlMode> {
         self.lock().requested.take()
+    }
+
+    pub fn request_clean(&self, seconds: u64) {
+        self.lock().clean_secs = Some(seconds);
+        self.0 .1.notify_all();
+    }
+
+    pub fn take_clean(&self) -> Option<u64> {
+        self.lock().clean_secs.take()
     }
 
     pub fn take_reload(&self) -> bool {

@@ -297,12 +297,91 @@ pub fn default_curve() -> Curve {
     .expect("the built-in default curve must be valid")
 }
 
+/// Named curves, for switching without drawing one.
+///
+/// "default" is HP's own table and is the only one here that claims to be:
+/// the other two are ours, built by moving HP's thresholds rather than by
+/// inventing speeds. Quiet holds the quiet part of the range further up the
+/// scale; Performance starts the ramp earlier and ends higher. Both stay
+/// under the critical cutout, because a preset that cannot be selected is
+/// not a preset.
+pub const PRESETS: &[(&str, &str)] = &[
+    ("quiet", "Stays silent longer, and never goes past 3300 RPM"),
+    ("default", "OMEN Gaming Hub's own table"),
+    ("performance", "Ramps earlier and ends at full speed"),
+];
+
+pub fn preset(name: &str) -> Option<Curve> {
+    let p = |temp_c: f32, rpm: u32| Point { temp_c, rpm };
+
+    let points = match name.trim().to_ascii_lowercase().as_str() {
+        "default" | "hp" | "omen" => return Some(default_curve()),
+
+        // The fans stay off ten degrees further up than stock, and the steps
+        // above that are HP's own, one threshold later. Nothing new is being
+        // claimed about the hardware - only that noise is being traded for
+        // temperature, which is what a quiet preset is.
+        "quiet" | "silent" => vec![
+            p(55.0, 0),
+            p(65.0, 1800),
+            p(75.0, 1800),
+            p(80.0, 2400),
+            p(85.0, 2400),
+            p(90.0, 3300),
+        ],
+
+        // The other direction: never off, and the top of the range is
+        // actually used. 4800 is the maximum the EC accepts (Phase 1 3.2).
+        "performance" | "perf" => vec![
+            p(45.0, 1800),
+            p(55.0, 2400),
+            p(65.0, 3000),
+            p(75.0, 3600),
+            p(85.0, 4200),
+            p(92.0, 4800),
+        ],
+
+        _ => return None,
+    };
+
+    Curve::with_interpolation(points, Interpolation::Step).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn c() -> Curve {
         default_curve()
+    }
+
+    #[test]
+    fn every_preset_is_a_valid_curve() {
+        for (name, _) in PRESETS {
+            let curve = preset(name).unwrap_or_else(|| panic!("{name} is not a curve"));
+            assert!(curve.points().len() >= 2);
+            // Below the critical cutout's default, or the daemon would
+            // refuse to save it and the button would do nothing.
+            let top = curve.points().last().unwrap().temp_c;
+            assert!(top < 97.0, "{name} goes to {top} C");
+        }
+    }
+
+    #[test]
+    fn quiet_is_quieter_than_default_and_performance_is_not() {
+        let quiet = preset("quiet").unwrap();
+        let perf = preset("performance").unwrap();
+        let stock = default_curve();
+        // At a temperature where the stock table has already started the
+        // fans, quiet has not and performance is ahead.
+        assert_eq!(quiet.target(52.0), None);
+        assert!(stock.target(52.0).is_some());
+        assert!(perf.target(52.0) >= stock.target(52.0));
+    }
+
+    #[test]
+    fn an_unknown_preset_is_none() {
+        assert!(preset("loud").is_none());
     }
 
     #[test]

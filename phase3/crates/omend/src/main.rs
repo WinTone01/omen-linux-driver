@@ -216,6 +216,10 @@ fn run(args: Args) -> Result<()> {
         hotkey::spawn();
     }
 
+    // What the backlight rule last asked for, so it is only asked again when
+    // the answer changes.
+    let mut backlight_state: Option<bool> = None;
+
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
         signal_hook::flag::register(sig, Arc::clone(&stop))
@@ -227,6 +231,19 @@ fn run(args: Args) -> Result<()> {
         if let (Some(lights), Some(cfg)) = (lights.as_ref(), rt.take_lighting_change()) {
             lights.update(cfg);
         }
+
+        // The keyboard follows the power source, when asked to. Edge-driven
+        // like the rest of the power rule: someone who turns the backlight
+        // back on while on battery should be able to keep it on.
+        let want_backlight = rt.backlight_wanted();
+        if want_backlight != backlight_state {
+            if let (Some(lights), Some(on)) = (lights.as_ref(), want_backlight) {
+                lights.backlight(on);
+            }
+            backlight_state = want_backlight;
+        }
+
+        rt.remember_zones(lights.as_ref(), &args.config);
 
         if args.once || stop.load(Ordering::Relaxed) {
             break;
@@ -251,6 +268,9 @@ fn run(args: Args) -> Result<()> {
     // `keeper` drops here and returns the fan to automatic.
     Ok(())
 }
+
+/// How often the keyboard's colours are compared with the remembered ones.
+const ZONE_REMEMBER_EVERY: Duration = Duration::from_secs(60);
 
 /// How many decisions are kept for the UI. At one change every few seconds
 /// under a varying load, this is roughly the last hour of interesting
@@ -317,6 +337,11 @@ struct Runtime {
     /// Last known power source, so a rule is applied on the change rather
     /// than on every tick - otherwise it could not be overridden.
     on_ac: Option<bool>,
+    /// A dust-clearing run: full power until this passes, then back to the
+    /// mode that was in force when it started.
+    cleaning: Option<(Instant, ControlMode)>,
+    /// When the keyboard colours were last compared with the remembered set.
+    zones_checked: Instant,
     /// Set when the hardware disagrees with our last setpoint, with the
     /// details. Reported rather than only logged - see check_drift.
     drift: Option<String>,
@@ -364,6 +389,8 @@ impl Runtime {
             lighting_changed: false,
             apps: appwatch::AppWatch::new(),
             on_ac: None,
+            cleaning: None,
+            zones_checked: Instant::now(),
             drift: None,
             history: std::collections::VecDeque::new(),
             last_reading: None,
@@ -563,6 +590,62 @@ impl Runtime {
         }
     }
 
+    /// Starts a dust-clearing run.
+    ///
+    /// Bounded at both ends: a couple of seconds does nothing useful, and a
+    /// run long enough to be forgotten about is a laptop screaming on a desk
+    /// while its owner is in another room.
+    fn start_cleaning(&mut self, seconds: u64) -> u64 {
+        let seconds = seconds.clamp(5, 120);
+        let previous = self.cleaning.map(|(_, before)| before).unwrap_or(self.mode);
+        self.cleaning = Some((Instant::now() + Duration::from_secs(seconds), previous));
+        info!("clearing dust for {seconds}s, then back to {previous}");
+        seconds
+    }
+
+    /// Remembers the zone colours, so they can be put back after a reboot.
+    ///
+    /// Polled rather than hooked: the colours can be changed by anything with
+    /// write access to the LED class - this window, brightnessctl, a script -
+    /// and there is no notification for it. Once a minute is often enough for
+    /// something that is only read at startup, and the config is only written
+    /// when they have actually changed.
+    fn remember_zones(
+        &mut self,
+        lights: Option<&lighting::Lighting>,
+        config_path: &std::path::Path,
+    ) {
+        if !self.cfg.lighting.restore_on_start
+            || self.cfg.lighting.effect != omen_core::anim::Effect::None
+            || self.zones_checked.elapsed() < ZONE_REMEMBER_EVERY
+        {
+            return;
+        }
+        self.zones_checked = Instant::now();
+
+        let Some(lights) = lights else { return };
+        let Some(zones) = lights.zones() else { return };
+        let as_arrays: Vec<[u8; 3]> = zones.iter().map(|c| [c.r, c.g, c.b]).collect();
+        if as_arrays == self.cfg.lighting.zones {
+            return;
+        }
+
+        // Written through a freshly loaded config so a hand edit made since
+        // the daemon started is not thrown away by this.
+        match Config::load(config_path) {
+            Ok(mut on_disk) => {
+                on_disk.lighting.zones = as_arrays.clone();
+                if let Err(e) = on_disk.save(config_path) {
+                    debug!("could not remember the keyboard colours: {e}");
+                    return;
+                }
+                self.cfg.lighting.zones = as_arrays;
+                debug!("keyboard colours remembered");
+            }
+            Err(e) => debug!("could not re-read the configuration to remember colours: {e}"),
+        }
+    }
+
     /// Applies the mains/battery rule when the power source changes.
     ///
     /// On the change, not on every tick: a rule that re-applied continuously
@@ -622,6 +705,15 @@ impl Runtime {
                 self.applied = Applied::Unknown;
             }
         }
+    }
+
+    /// Whether the keyboard backlight should be on, given the power source.
+    /// `None` when the setting is off and nothing should be done either way.
+    fn backlight_wanted(&self) -> Option<bool> {
+        self.cfg
+            .lighting
+            .off_on_battery
+            .then(|| self.on_ac.unwrap_or(true))
     }
 
     /// Looks for a configured application, and applies or restores its
@@ -716,7 +808,18 @@ impl Runtime {
             }
         }
 
+        if let Some(seconds) = shared.take_clean() {
+            self.start_cleaning(seconds);
+            self.applied = Applied::Unknown;
+        }
+
         if let Some(mode) = shared.take_request() {
+            // Asking for a mode ends a dust run: it is an explicit
+            // instruction about the fans, which is what a cleaning run is
+            // too, and the newer one wins.
+            if self.cleaning.take().is_some() {
+                info!("dust clearing cancelled");
+            }
             if mode != self.mode {
                 info!("mode: {} -> {mode}", self.mode);
                 self.mode = mode;
@@ -820,6 +923,23 @@ impl Runtime {
     }
 
     fn drive(&mut self, label: &str, temp: f32) {
+        // A dust run is a user request for full power with an end time. It
+        // sits here rather than in guard() on purpose: guard() is for the
+        // safety overrides, and a cleaning run must not be able to mask one -
+        // if the machine overheats during it, the emergency still takes over
+        // and this ends when its timer does.
+        if let Some((until, previous)) = self.cleaning {
+            if Instant::now() < until {
+                self.apply(Applied::Max, "clearing dust");
+                return;
+            }
+            info!("dust clearing finished, back to {previous}");
+            self.cleaning = None;
+            self.mode = previous;
+            self.governor.reset();
+            self.applied = Applied::Unknown;
+        }
+
         match self.mode {
             ControlMode::Curve => {
                 let Some(target) = self.governor.decide(temp, Instant::now()) else {
@@ -980,6 +1100,14 @@ impl Runtime {
             }),
             version: Some(omen_core::about::VERSION.to_owned()),
             config_path: self.config_path.to_str().map(str::to_owned),
+            cleaning_secs_left: self.cleaning.as_ref().map(|(until, _)| {
+                until
+                    .saturating_duration_since(Instant::now())
+                    .as_secs()
+                    // Round up, so a run of five seconds does not show four
+                    // for most of its life.
+                    .max(1)
+            }),
             drift: self.drift.clone(),
             on_ac: self.on_ac,
             battery_percent: omen_core::power::battery_percent(),
@@ -988,6 +1116,8 @@ impl Runtime {
             startup_profile: self.cfg.automation.startup_profile.clone(),
             apps: self.cfg.apps.clone(),
             active_app: self.apps.active().map(str::to_owned),
+            lighting_restore: self.cfg.lighting.restore_on_start,
+            lighting_off_on_battery: self.cfg.lighting.off_on_battery,
             effect: Some(self.cfg.lighting.spec()),
             gpu: self.gpu.get(),
             uptime_secs: self.started.elapsed().as_secs(),

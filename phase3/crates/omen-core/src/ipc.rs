@@ -141,6 +141,14 @@ pub enum Request {
     /// polled every couple of seconds and this is only looked at when
     /// somebody opens the panel.
     History { limit: usize },
+    /// The two lighting switches that are not the effect itself.
+    SetLightingOptions {
+        restore_on_start: bool,
+        off_on_battery: bool,
+    },
+    /// Run the fans at full power for a while, to clear dust, then go back
+    /// to whatever was happening before.
+    CleanFans { seconds: u64 },
     /// Re-read the config from disk.
     Reload,
 }
@@ -194,6 +202,9 @@ pub struct Snapshot {
     /// necessarily the default path.
     #[serde(default)]
     pub config_path: Option<String>,
+    /// Seconds left of a dust-clearing run, when one is in progress.
+    #[serde(default)]
+    pub cleaning_secs_left: Option<u64>,
     /// Set when the hardware is not reporting the setpoint we last wrote.
     #[serde(default)]
     pub drift: Option<String>,
@@ -217,6 +228,12 @@ pub struct Snapshot {
     /// The application profile in force, if one is.
     #[serde(default)]
     pub active_app: Option<String>,
+    /// Whether the keyboard's colours are remembered and put back at start,
+    /// and whether the backlight follows the power source.
+    #[serde(default)]
+    pub lighting_restore: bool,
+    #[serde(default)]
+    pub lighting_off_on_battery: bool,
     /// The keyboard effect the daemon is drawing, if any.
     #[serde(default)]
     pub effect: Option<crate::anim::EffectSpec>,

@@ -30,6 +30,7 @@ USAGE:
     omenctl curve set <POINTS>     Replace it, e.g. 45:0,50:1800,70:2400,90:3300
                                    (temperature:RPM pairs; rpm 0 = fans off,
                                    only valid at the bottom)
+    omenctl curve preset <NAME>    quiet / default / performance
     omenctl curve reset            Back to the built-in OMEN Gaming Hub table
 
     omenctl set curve              Automatic: the curve drives the fan (default)
@@ -62,6 +63,9 @@ USAGE:
                                    e.g. omenctl power battery low-power curve
                                    'none' clears that rule
 
+    omenctl clean [SECONDS]        Run the fans at full power to clear dust
+                                   (default 20s, 5-120), then back to normal
+
     omenctl profile <NAME>         balanced / performance / low-power
     omenctl profile startup <NAME|none>
                                    Which profile to select when the daemon
@@ -89,6 +93,7 @@ fn main() -> ExitCode {
         "app" => app_profiles(&args),
         "gpu" => gpu_power(&args),
         "power" => power_rules(&args),
+        "clean" => clean_fans(&args),
         "profile" => set_profile(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
         "version" | "--version" | "-V" => versions(),
@@ -468,6 +473,16 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+fn clean_fans(args: &[String]) -> Result<()> {
+    let seconds = match args.get(1) {
+        Some(raw) => raw
+            .parse()
+            .map_err(|_| anyhow::anyhow!("{raw:?} is not a number of seconds"))?,
+        None => 20,
+    };
+    client::report(client::send(&Request::CleanFans { seconds })?)
+}
+
 fn power_rules(args: &[String]) -> Result<()> {
     use omen_core::power::PowerRule;
 
@@ -617,13 +632,23 @@ fn status() -> Result<()> {
         // target_rpm is only set when there is a fixed setpoint. It being
         // empty does NOT mean "automatic" - it is empty in max mode too, and
         // there the fans are at full power. The mode has to be read with it.
-        match (snap.mode, snap.target_rpm) {
-            // Zero is a setpoint we are holding, not an absent one - see the
-            // bottom of the curve.
-            (_, Some(0)) => field("target", "fans off (idle, setpoint ours)"),
-            (_, Some(rpm)) => field("target", format!("{rpm} RPM")),
-            (Some(ControlMode::Max), None) => field("target", "full power"),
-            (_, None) => field("target", "control is with the EC"),
+        // A dust run drives the fans regardless of the mode, so it has to be
+        // said before the mode is: otherwise the mode reads "curve" while the
+        // fans are at full power for reasons the curve knows nothing about.
+        if let Some(left) = snap.cleaning_secs_left {
+            field(
+                "target",
+                format!("full power - clearing dust, {left}s left"),
+            );
+        } else {
+            match (snap.mode, snap.target_rpm) {
+                // Zero is a setpoint we are holding, not an absent one - see the
+                // bottom of the curve.
+                (_, Some(0)) => field("target", "fans off (idle, setpoint ours)"),
+                (_, Some(rpm)) => field("target", format!("{rpm} RPM")),
+                (Some(ControlMode::Max), None) => field("target", "full power"),
+                (_, None) => field("target", "control is with the EC"),
+            }
         }
         field("uptime", format!("{} s", snap.uptime_secs));
         println!();
@@ -785,6 +810,29 @@ fn curve(args: &[String]) -> Result<()> {
     match args.get(1).map(String::as_str) {
         Some("set") => return set_curve(args),
         Some("reset") => return client::report(client::send(&Request::ResetCurve)?),
+        Some("preset") => {
+            let Some(name) = args.get(2) else {
+                println!("presets:\n");
+                for (name, what) in omen_core::curve::PRESETS {
+                    println!("  {name:<12} {what}");
+                }
+                return Ok(());
+            };
+            let curve = omen_core::curve::preset(name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown preset: {name} ({})",
+                    omen_core::curve::PRESETS
+                        .iter()
+                        .map(|(n, _)| *n)
+                        .collect::<Vec<_>>()
+                        .join(" / ")
+                )
+            })?;
+            return client::report(client::send(&Request::SetCurve(CurveSpec {
+                points: curve.points().to_vec(),
+                interpolation: curve.interpolation(),
+            }))?);
+        }
         _ => {}
     }
 

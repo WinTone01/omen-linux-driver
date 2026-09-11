@@ -294,6 +294,8 @@
               <h2 class="panel-head__title">Curve</h2>
               <span class="panel-head__note" id="curve-note"></span>
               <div class="curve-tools">
+                <button class="btn btn--sm" id="btn-curve-preset-quiet" data-preset-curve="quiet">Quiet</button>
+                <button class="btn btn--sm" id="btn-curve-preset-perf" data-preset-curve="performance">Performance</button>
                 <button class="btn btn--sm" id="btn-curve-edit">Edit</button>
                 <button class="btn btn--sm" id="btn-curve-reset">Defaults</button>
                 <button class="btn btn--sm" id="btn-curve-cancel" hidden>Cancel</button>
@@ -326,6 +328,21 @@
               moments something was decided.
             </p>
             <div id="hist-list" class="hist-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Clear the dust</h2>
+              <span class="panel-head__note" id="clean-note"></span>
+            </div>
+            <p class="hint">
+              Runs both fans at full power for a while and then puts everything
+              back. Worth doing with the laptop tilted; it is loud, and it is
+              meant to be.
+            </p>
+            <div class="btn-row">
+              <button class="btn" id="btn-clean">Run for 20 seconds</button>
+            </div>
           </div>
 
           <div class="card" id="manual-card">
@@ -405,6 +422,21 @@
               <output id="effect-speed-out">5</output>
             </div>
             <p class="hint" id="effect-hint"></p>
+          </div>
+
+          <div class="card">
+            <div class="panel-head"><h2 class="panel-head__title">Behaviour</h2></div>
+            <dl class="kv kv--tight">
+              <dt>Put these colours back after a reboot</dt>
+              <dd><label class="switch"><input type="checkbox" id="light-restore"><span></span></label></dd>
+              <dt>Turn the backlight off on battery</dt>
+              <dd><label class="switch"><input type="checkbox" id="light-battery"><span></span></label></dd>
+            </dl>
+            <p class="hint">
+              The LED class does not survive a reboot — the keyboard comes up in
+              whatever the firmware left — so the colours have to be written again
+              by something. The service remembers them while no effect is running.
+            </p>
           </div>
 
           <div class="card">

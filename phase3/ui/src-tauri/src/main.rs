@@ -343,6 +343,36 @@ fn set_effect(effect: String, speed: u8, color: omen_core::leds::Rgb) -> Result<
     }))
 }
 
+/// The two lighting switches that are not the effect: whether the colours are
+/// remembered across a reboot, and whether the backlight follows the power
+/// source. Machine settings, so they go to the daemon.
+#[tauri::command]
+fn set_lighting_options(restore_on_start: bool, off_on_battery: bool) -> Result<String, String> {
+    talk(Request::SetLightingOptions {
+        restore_on_start,
+        off_on_battery,
+    })
+}
+
+/// A dust-clearing run. The daemon clamps the length; this is a button, and a
+/// button that can leave the fans at full power indefinitely is a trap.
+#[tauri::command]
+fn clean_fans(seconds: u64) -> Result<String, String> {
+    talk(Request::CleanFans { seconds })
+}
+
+/// One of the named curves. Sent as points rather than by name so the daemon
+/// has one way in for a curve, and the editor can start from a preset and
+/// change it without the two paths behaving differently.
+#[tauri::command]
+fn set_curve_preset(name: String) -> Result<String, String> {
+    let curve = omen_core::curve::preset(&name).ok_or_else(|| format!("unknown preset: {name}"))?;
+    talk(Request::SetCurve(omen_core::ipc::CurveSpec {
+        points: curve.points().to_vec(),
+        interpolation: curve.interpolation(),
+    }))
+}
+
 /// Per-application profiles. The list is replaced wholesale rather than
 /// patched, because its order is meaningful - the first running entry wins -
 /// and an add/remove API would have to invent a way to express that anyway.
@@ -657,6 +687,9 @@ fn main() {
             set_profile,
             reload_config,
             set_curve,
+            set_curve_preset,
+            clean_fans,
+            set_lighting_options,
             reset_curve,
             set_effect,
             set_app_profiles,
