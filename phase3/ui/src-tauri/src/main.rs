@@ -692,12 +692,20 @@ fn main() {
     // Before anything else: if this app is already running, ask that copy to
     // show itself and stop here. See single.rs - a second instance reaching
     // GTK takes the first one down with it.
-    if !single::claim() {
+    // `--tab <name>` opens (or raises) the window on one page.
+    let args: Vec<String> = std::env::args().collect();
+    let tab = args
+        .iter()
+        .position(|a| a == "--tab")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+
+    if !single::claim(tab.as_deref()) {
         return;
     }
 
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             match build_tray(app) {
                 Ok(()) => HAS_TRAY.store(true, Ordering::Relaxed),
                 Err(e) => eprintln!(
@@ -707,6 +715,12 @@ fn main() {
             }
 
             single::listen(app.handle());
+
+            // The first instance honours --tab too, so the flag behaves the
+            // same whether or not the app was already open.
+            if let (Some(tab), Some(window)) = (&tab, app.get_webview_window("main")) {
+                let _ = window.emit("omen://open-tab", tab.clone());
+            }
 
             // Starting hidden is only offered when there is a tray to be
             // hidden into; without one the user would have a running process

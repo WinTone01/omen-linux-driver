@@ -226,6 +226,7 @@ omenctl app                   # per-application profiles
 omenctl app add cs2 performance curve:performance
                               # or a fixed target: omenctl app add cs2 3000
 omenctl app remove cs2
+omen-ui --tab graphics        # open the window on one page
 omenctl gpu mux               # which GPU drives the screen (hybrid/discrete/uma)
 omenctl gpu mux discrete      # from the next boot
 omenctl gpu                   # discrete GPU state, and what holds it awake

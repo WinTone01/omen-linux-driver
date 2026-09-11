@@ -146,10 +146,16 @@ fn disks() -> Vec<Disk> {
         return out;
     };
 
+    // Subvolumes of one btrfs filesystem, or bind mounts, report the same
+    // free space from several places. Listing / and /home with identical
+    // numbers looks like a bug in the reader rather than a fact about the
+    // disk, so the first mount of each device wins.
+    let mut seen_devices: Vec<String> = Vec::new();
+
     for line in mounts.lines() {
         let mut f = line.split_whitespace();
-        let (_dev, mount, fstype) = (f.next(), f.next(), f.next());
-        let (Some(mount), Some(fstype)) = (mount, fstype) else {
+        let (dev, mount, fstype) = (f.next(), f.next(), f.next());
+        let (Some(dev), Some(mount), Some(fstype)) = (dev, mount, fstype) else {
             continue;
         };
         let interesting = mount == "/"
@@ -163,9 +169,10 @@ fn disks() -> Vec<Disk> {
         if !interesting || !real {
             continue;
         }
-        if out.iter().any(|d: &Disk| d.mount == mount) {
+        if out.iter().any(|d: &Disk| d.mount == mount) || seen_devices.iter().any(|d| d == dev) {
             continue;
         }
+        seen_devices.push(dev.to_owned());
         if let Some(disk) = statvfs(mount) {
             out.push(disk);
         }

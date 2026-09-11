@@ -297,6 +297,21 @@ $("#btn-refresh").addEventListener("click", () => refresh());
  * either has to move both. */
 const LAST_VIEW_KEY = "omen.view";
 
+/* Work that belongs to a page rather than to the poll: the diagnosis checks,
+ * the firmware scan, the decision log.
+ *
+ * Hung off the view switch rather than off the tab's click handler, because a
+ * click is only one of the ways into a page - the window also reopens where
+ * it was left, the address can name a page, and `omen-ui --tab X` raises one.
+ * Hanging it off the click meant those three showed a page that said
+ * "checking..." and never did.
+ */
+function onViewShown(id) {
+  if (id === "diagnosis") runDiagnosis(false);
+  if (id === "settings") scanFirmware(false);
+  if (id === "fan") refreshHistory();
+}
+
 function selectView(id) {
   $$("[data-view]").forEach((el) => {
     const match = el.dataset.view === id;
@@ -304,6 +319,7 @@ function selectView(id) {
     else el.classList.toggle("is-active", match);
   });
   $(".main-scroll").scrollTop = 0;
+  onViewShown(id);
   // Remembered per machine, not in the settings file: which tab you had open
   // is a property of this window on this screen, not something to sync or
   // back up. localStorage can be unavailable, and a lost tab is not worth an
@@ -319,14 +335,24 @@ $$(".device-link, .main-tab").forEach((el) =>
   el.addEventListener("click", () => selectView(el.dataset.view)),
 );
 
-/* Reopen where it was left. Verified against the markup rather than trusted:
- * a stored name from an older version may no longer be a tab. */
-try {
-  const last = localStorage.getItem(LAST_VIEW_KEY);
-  if (last && $(`.main-tab[data-view="${last}"]`)) selectView(last);
-} catch {
-  /* first run, or storage is off */
+/* Reopen where it was left, unless the address says otherwise. Both are
+ * checked against the markup rather than trusted: a stored name from an older
+ * version, or a hash someone typed, may not be a tab at all. */
+function openInitialView() {
+  const wanted = location.hash.replace(/^#/, "");
+  if (wanted && $(`.main-tab[data-view="${wanted}"]`)) {
+    selectView(wanted);
+    return;
+  }
+  try {
+    const last = localStorage.getItem(LAST_VIEW_KEY);
+    if (last && $(`.main-tab[data-view="${last}"]`)) selectView(last);
+  } catch {
+    /* first run, or storage is off */
+  }
 }
+openInitialView();
+window.addEventListener("hashchange", openInitialView);
 
 /* ── keyboard graphic ────────────────────────────────────────── */
 
@@ -1640,8 +1666,6 @@ function bindFirmware() {
   // no reason to start the fwupd daemon for someone who only wanted to look
   // at a fan curve. The window can also REOPEN on this tab, which is not a
   // click, so that case is covered too.
-  $$('[data-view="settings"]').forEach((tab) =>
-    tab.addEventListener("click", () => scanFirmware(false)));
   if ($('.view[data-view="settings"]')?.classList.contains("is-active")) {
     scanFirmware(false);
   }
@@ -1758,8 +1782,8 @@ function bindDiagnosis() {
     await copyText(text, t("report"));
   });
 
-  $$('[data-view="diagnosis"]').forEach((tab) =>
-    tab.addEventListener("click", () => runDiagnosis(false)));
+  // Entering the page is what starts a scan - see onViewShown. This covers
+  // the one case that is not a view switch: the page the window opened on.
   if ($('.view[data-view="diagnosis"]')?.classList.contains("is-active")) {
     runDiagnosis(false);
   }
@@ -1931,8 +1955,6 @@ async function refreshHistory() {
 function bindHistory() {
   // Refreshed when the tab is opened and on the normal poll while it is the
   // visible one - a log nobody is looking at does not need updating.
-  $$('[data-view="fan"]').forEach((tab) =>
-    tab.addEventListener("click", refreshHistory));
   if ($('.view[data-view="fan"]')?.classList.contains("is-active")) refreshHistory();
 }
 
@@ -2307,6 +2329,12 @@ function setVisible(next) {
     pollTimer = null;
   }
 }
+
+/* `omen-ui --tab graphics`, from a launcher or a shortcut. */
+window.__TAURI__?.event?.listen?.("omen://open-tab", (e) => {
+  const wanted = String(e.payload ?? "");
+  if ($(`.main-tab[data-view="${wanted}"]`)) selectView(wanted);
+});
 
 document.addEventListener("visibilitychange", () => setVisible(!document.hidden));
 window.__TAURI__?.event?.listen?.("omen://visible", (e) => setVisible(!!e.payload));

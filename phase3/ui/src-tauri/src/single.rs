@@ -20,9 +20,12 @@ use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
-const MESSAGE: &[u8] = b"show\n";
+/// What a later launch says to the one already running. A page name may
+/// follow, so `omen-ui --tab graphics` raises the window on that page -
+/// useful from a launcher, a script or a keyboard shortcut.
+const MESSAGE: &str = "show";
 
 fn socket_path() -> PathBuf {
     // The runtime directory is per-user and cleaned on logout, which is
@@ -37,11 +40,15 @@ fn socket_path() -> PathBuf {
 ///
 /// Returns `false` when another instance is already running and has been
 /// asked to show itself; the caller should exit quietly.
-pub fn claim() -> bool {
+pub fn claim(tab: Option<&str>) -> bool {
     let path = socket_path();
 
     if let Ok(mut stream) = UnixStream::connect(&path) {
-        let _ = stream.write_all(MESSAGE);
+        let message = match tab {
+            Some(tab) => format!("{MESSAGE} {tab}\n"),
+            None => format!("{MESSAGE}\n"),
+        };
+        let _ = stream.write_all(message.as_bytes());
         return false;
     }
 
@@ -80,22 +87,31 @@ pub fn listen(app: &tauri::AppHandle) {
         .spawn(move || {
             for stream in listener.incoming().flatten() {
                 let mut stream = stream;
-                let mut buf = [0u8; MESSAGE.len()];
-                let _ = stream.read(&mut buf);
+                let mut buf = [0u8; 64];
+                let read = stream.read(&mut buf).unwrap_or(0);
+                let said = String::from_utf8_lossy(&buf[..read]);
+                let mut words = said.split_whitespace();
+
                 // Whatever was said, someone tried to start the app: show the
-                // window. The message exists so a stray connection does not
-                // look like a launch, not as a protocol.
-                if buf.starts_with(b"show") {
-                    let handle = app.clone();
-                    // Windows may only be touched from the main thread.
-                    let _ = app.run_on_main_thread(move || {
-                        if let Some(window) = handle.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.unminimize();
-                            let _ = window.set_focus();
-                        }
-                    });
+                // window. The word exists so a stray connection does not look
+                // like a launch, not as a protocol.
+                if words.next() != Some(MESSAGE) {
+                    continue;
                 }
+                let tab = words.next().map(str::to_owned);
+
+                let handle = app.clone();
+                // Windows may only be touched from the main thread.
+                let _ = app.run_on_main_thread(move || {
+                    if let Some(window) = handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                        if let Some(tab) = tab {
+                            let _ = window.emit("omen://open-tab", tab);
+                        }
+                    }
+                });
             }
         })
         .ok();
