@@ -156,7 +156,65 @@ driver controls colour and brightness; the firmware controls on/off. This is a
 hardware limit rather than a gap in the driver — but it has to be stated, or a
 user will write a colour, see nothing, and blame the driver.
 
-## 6. No conflict with `hp-wmi`
+### The state is visible after all — `0xEE1`
+
+Dumping the lighting block of the extended EC RAM with the backlight off and
+then on, and diffing, gave exactly one difference:
+
+```
+off:  00 00 00 | ff ff ff ff ff ff ff ff ff ff ff ff | 00 ...
+on:   00 64 00 | ff ff ff ff ff ff ff ff ff ff ff ff | 00 ...
+         ^^ 0xEE1
+```
+
+`0xEE1` reads `0x64` (100 — exactly the brightness that had been set) while the
+keyboard is lit, and `0x00` while it is dark. The colours read `0xff`
+throughout, which is precisely why writing them always looked like it had
+worked.
+
+**The DSDT does not declare this byte.** The field list defines one byte at
+`0xEE0` and then jumps straight to `0xEE3`, leaving `0xEE1` and `0xEE2`
+unnamed. That is why three earlier searches came up empty — the standard EC
+window, the WMI lighting group, and a byte-by-byte diff of EC `0x40-0x4F`.
+All of them looked at declared fields; this one lives in the gap between them.
+
+It holds the brightness **in effect**, not the brightness requested: with the
+backlight off it reads 0 even though `LBRT` had been set to 100. The EC zeroes
+it while the lighting is off and applies the stored value when it comes back.
+
+So the driver can now answer "is the keyboard actually lit", which it could not
+before. `omen-kbd-rgb` exposes it as
+`/sys/devices/platform/omen-kbd-rgb/backlight_active`, and the UI says so
+instead of guessing from brightness. Turning it *on* is still `Fn+F4`; writing
+to this byte has not been attempted.
+
+## 6. Brightness is applied in software, not by `LBRT`
+
+`LBRT` does not dim this keyboard. Writing it succeeds and reads back
+correctly, and nothing changes — the same trap as the on/off switch.
+
+`OmenLinux/omen-rgb-keyboard` confirms it by omission: its brightness path never
+writes `LBRT` at all. It scales the stored colours by `level / 100` and rewrites
+the zones, and its `brightness_get` returns its own variable rather than the
+hardware. A driver that works across several OMEN models having taken that
+route is strong evidence that `LBRT` is inert for dimming.
+
+`omen-kbd-rgb` does the same: changing brightness rewrites all four zones as
+`intensity * global / 100`. Two details matter:
+
+* Scaling always starts from the **stored** intensity, never from what is
+  currently on the wire — otherwise dimming twice in a row would compound and
+  the colour would drift towards black.
+* At probe the colours on the wire are already scaled, so brightness is read
+  first and the colours are scaled back up to recover the intent. Without that,
+  reloading the module at 50 % would halve them again.
+
+`LBRT` is still written, because it is the firmware's own field and OMEN Gaming
+Hub sets it. If a board ever turns up where it does dim, that combination would
+over-dim, and this is where to look.
+
+
+## 7. No conflict with `hp-wmi`
 
 Phase 2 established that `hp-wmi` does not *own* the GUID: it calls through
 `wmi_evaluate_method` and registers itself as a `platform_driver`. The lighting
