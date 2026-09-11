@@ -337,6 +337,8 @@ struct Runtime {
     /// Last known power source, so a rule is applied on the change rather
     /// than on every tick - otherwise it could not be overridden.
     on_ac: Option<bool>,
+    /// The named curve in force, when a rule replaced the configured one.
+    curve_preset: Option<String>,
     /// A dust-clearing run: full power until this passes, then back to the
     /// mode that was in force when it started.
     cleaning: Option<(Instant, ControlMode)>,
@@ -389,6 +391,7 @@ impl Runtime {
             lighting_changed: false,
             apps: appwatch::AppWatch::new(),
             on_ac: None,
+            curve_preset: None,
             cleaning: None,
             zones_checked: Instant::now(),
             drift: None,
@@ -705,6 +708,18 @@ impl Runtime {
                 self.applied = Applied::Unknown;
             }
         }
+        // A power rule with no curve of its own puts the configured one back,
+        // unless an application profile is holding one - that one is more
+        // specific and stays.
+        if self.apps.active().is_none() {
+            match (&rule.curve, &self.curve_preset) {
+                (Some(name), current) if Some(name) != current.as_ref() => {
+                    self.use_curve(Some(name))
+                }
+                (None, Some(_)) => self.use_curve(None),
+                _ => {}
+            }
+        }
     }
 
     /// Whether the keyboard backlight should be on, given the power source.
@@ -781,6 +796,49 @@ impl Runtime {
                 self.applied = Applied::Unknown;
             }
         }
+        if let Some(curve) = actions.curve {
+            self.use_curve(curve.as_deref());
+        }
+    }
+
+    /// Swaps the running curve for a named preset, or puts the configured one
+    /// back when given `None`.
+    ///
+    /// The configuration file is not touched. A game profile that rewrote the
+    /// curve someone drew would be a poor trade, and the file is also what
+    /// the editor shows.
+    fn use_curve(&mut self, preset: Option<&str>) {
+        let curve = match preset {
+            Some(name) => match omen_core::curve::preset(name) {
+                Some(curve) => {
+                    info!("fan curve -> {name}");
+                    curve
+                }
+                None => {
+                    warn!("unknown curve preset {name:?}, leaving the curve alone");
+                    return;
+                }
+            },
+            None => match self.cfg.curve() {
+                Ok(curve) => {
+                    info!("fan curve -> the configured one");
+                    curve
+                }
+                Err(e) => {
+                    error!("could not rebuild the configured curve: {e}");
+                    return;
+                }
+            },
+        };
+
+        self.governor = Governor::new(
+            curve,
+            self.cfg.fan.hysteresis_c,
+            self.cfg.min_dwell(),
+            self.cfg.fan.step_rpm,
+        );
+        self.applied = Applied::Unknown;
+        self.curve_preset = preset.map(str::to_owned);
     }
 
     fn handle_requests(&mut self, shared: &Shared, config_path: &std::path::Path) {
@@ -1113,6 +1171,7 @@ impl Runtime {
             battery_percent: omen_core::power::battery_percent(),
             power_ac: self.cfg.automation.on_ac.clone(),
             power_battery: self.cfg.automation.on_battery.clone(),
+            curve_preset: self.curve_preset.clone(),
             startup_profile: self.cfg.automation.startup_profile.clone(),
             apps: self.cfg.apps.clone(),
             active_app: self.apps.active().map(str::to_owned),

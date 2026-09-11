@@ -39,6 +39,17 @@ pub struct AppProfile {
     /// How the fan should be driven while this is running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fan: Option<ControlMode>,
+
+    /// A named fan curve to run while this is open: quiet, default or
+    /// performance.
+    ///
+    /// Separate from `fan` because they answer different questions - `fan`
+    /// says whether the curve drives at all, this says which curve. The
+    /// configured curve is not touched: it is swapped in the running daemon
+    /// and swapped back when the program exits, because a game profile that
+    /// rewrote the curve you drew would be a poor trade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<String>,
 }
 
 impl AppProfile {
@@ -62,7 +73,11 @@ impl AppProfile {
         if let Some(p) = &self.profile {
             parts.push(p.clone());
         }
-        if let Some(f) = &self.fan {
+        // The curve says more than "fan curve" does, so it replaces that half
+        // rather than being listed next to it.
+        if let Some(c) = &self.curve {
+            parts.push(format!("{c} curve"));
+        } else if let Some(f) = &self.fan {
             parts.push(format!("fan {f}"));
         }
         if parts.is_empty() {
@@ -129,6 +144,7 @@ mod tests {
             process: process.into(),
             profile: Some("performance".into()),
             fan: None,
+            curve: None,
         }
     }
 

@@ -367,3 +367,17 @@ Object.assign(I18N.tr, {
   "Which GPU drives the screen, and what the discrete one is doing when nothing is asking it to.":
     "Ekranı hangi GPU sürüyor, ve kimse istemezken ayrık olan ne yapıyor.",
 });
+
+/* Named curves in a rule. */
+Object.assign(I18N.tr, {
+  "fan: quiet curve": "fan: sessiz eğri",
+  "fan: default curve": "fan: varsayılan eğri",
+  "fan: performance curve": "fan: performans eğrisi",
+  "quiet": "sessiz",
+  "default": "varsayılan",
+  "performance": "performans",
+  "curve": "eğrisi",
+  "nothing to apply": "uygulanacak bir şey yok",
+  "A rule is running the": "Bir kural şu anda",
+  "curve; this is the configured one.": "eğrisini çalıştırıyor; buradaki yapılandırılmış olan.",
+});

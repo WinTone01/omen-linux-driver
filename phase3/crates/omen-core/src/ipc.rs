@@ -222,6 +222,10 @@ pub struct Snapshot {
     pub power_ac: crate::power::PowerRule,
     #[serde(default)]
     pub power_battery: crate::power::PowerRule,
+    /// The named curve a rule has put in force, when one has. `None` means
+    /// the configured curve is running.
+    #[serde(default)]
+    pub curve_preset: Option<String>,
     /// The profile selected at startup, if one is configured.
     #[serde(default)]
     pub startup_profile: Option<String>,

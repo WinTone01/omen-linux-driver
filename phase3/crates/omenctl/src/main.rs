@@ -50,7 +50,9 @@ USAGE:
     omenctl app add <PROCESS> [PROFILE] [FAN]
                                    e.g. omenctl app add cs2 performance 3000
                                    PROFILE is a platform profile, FAN is
-                                   curve / max / auto / an RPM number
+                                   curve / max / auto / an RPM number, or
+                                   curve:quiet / curve:performance to run a
+                                   named curve while it is open
     omenctl app remove <PROCESS>   Drop one
 
     omenctl gpu mux [MODE]         Which GPU drives the screen from the next
@@ -62,7 +64,7 @@ USAGE:
 
     omenctl power                  What happens on mains and on battery
     omenctl power ac|battery <PROFILE|none> [FAN]
-                                   e.g. omenctl power battery low-power curve
+                                   e.g. omenctl power battery low-power curve:quiet
                                    'none' clears that rule
 
     omenctl clean [SECONDS]        Run the fans at full power to clear dust
@@ -172,6 +174,24 @@ fn parse_hex(raw: &str) -> Result<omen_core::leds::Rgb> {
     })
 }
 
+/// `curve:performance` -> the name. Anything else -> None.
+fn parse_curve_arg(raw: &str) -> Result<Option<String>> {
+    let Some(name) = raw.strip_prefix("curve:") else {
+        return Ok(None);
+    };
+    if omen_core::curve::preset(name).is_none() {
+        bail!(
+            "unknown curve {name:?}; presets are {}",
+            omen_core::curve::PRESETS
+                .iter()
+                .map(|(n, _)| *n)
+                .collect::<Vec<_>>()
+                .join(" / ")
+        );
+    }
+    Ok(Some(name.to_owned()))
+}
+
 fn set_effect(args: &[String]) -> Result<()> {
     let name = args.get(1).ok_or_else(|| {
         anyhow::anyhow!("an effect is required: none / breathing / wave / spectrum")
@@ -232,6 +252,9 @@ fn app_snapshot() -> Result<Box<omen_core::ipc::Snapshot>> {
 }
 
 /// `curve` / `max` / `auto` / a bare RPM number.
+///
+/// `curve:quiet` and friends are handled by the caller: they say WHICH curve
+/// as well as that the curve should drive, so they produce two values.
 fn parse_fan(raw: &str) -> Result<ControlMode> {
     Ok(match raw {
         "curve" => ControlMode::Curve,
@@ -301,11 +324,17 @@ fn app_profiles(args: &[String]) -> Result<()> {
                 process: process.clone(),
                 profile: None,
                 fan: None,
+                curve: None,
             };
             // Profile and fan are both optional and either may come first,
             // so they are told apart by shape - a fan mode is a number or one
             // of three words, everything else is a platform profile.
             for arg in &args[3..] {
+                if let Some(name) = parse_curve_arg(arg)? {
+                    entry.curve = Some(name);
+                    entry.fan = Some(ControlMode::Curve);
+                    continue;
+                }
                 match parse_fan(arg) {
                     Ok(mode) => entry.fan = Some(mode),
                     Err(_) => entry.profile = Some(arg.clone()),
@@ -525,6 +554,11 @@ fn power_rules(args: &[String]) -> Result<()> {
         // a number or one of three words, everything else is a profile.
         *target = PowerRule::default();
         for arg in &args[2..] {
+            if let Some(name) = parse_curve_arg(arg)? {
+                target.curve = Some(name);
+                target.fan = Some(ControlMode::Curve);
+                continue;
+            }
             match parse_fan(arg) {
                 Ok(mode) => target.fan = Some(mode),
                 Err(_) => target.profile = Some(arg.clone()),

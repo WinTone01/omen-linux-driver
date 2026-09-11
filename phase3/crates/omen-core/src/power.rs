@@ -28,11 +28,17 @@ pub struct PowerRule {
     /// How the fan should be driven.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fan: Option<ControlMode>,
+
+    /// A named curve to run on this power source. See apps::AppProfile::curve
+    /// for why this is separate from `fan` and why it does not touch the
+    /// configured curve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<String>,
 }
 
 impl PowerRule {
     pub fn is_empty(&self) -> bool {
-        self.profile.is_none() && self.fan.is_none()
+        self.profile.is_none() && self.fan.is_none() && self.curve.is_none()
     }
 
     pub fn summary(&self) -> String {
@@ -40,7 +46,11 @@ impl PowerRule {
         if let Some(p) = &self.profile {
             parts.push(p.clone());
         }
-        if let Some(f) = &self.fan {
+        // The curve says more than "fan curve" does, so it replaces that half
+        // rather than being listed next to it.
+        if let Some(c) = &self.curve {
+            parts.push(format!("{c} curve"));
+        } else if let Some(f) = &self.fan {
             parts.push(format!("fan {f}"));
         }
         if parts.is_empty() {
@@ -123,6 +133,7 @@ mod tests {
         assert!(!PowerRule {
             profile: Some("balanced".into()),
             fan: None,
+            curve: None,
         }
         .is_empty());
     }
@@ -132,6 +143,7 @@ mod tests {
         let rule = PowerRule {
             profile: Some("performance".into()),
             fan: Some(ControlMode::Max),
+            curve: None,
         };
         assert_eq!(rule.summary(), "performance, fan max");
     }

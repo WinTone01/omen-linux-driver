@@ -279,6 +279,7 @@
             <div class="chart-scale">
               <span>40 °C</span><span>70 °C</span><span>100 °C</span>
             </div>
+            <p class="hint is-warning" id="curve-forced" hidden></p>
             <p class="hint" id="curve-edit-hint" hidden>
               Drag a point to move it. Click an empty part of the chart to add one,
               right-click a point to remove it. Nothing changes until you save.
@@ -358,15 +359,7 @@
             <div class="app-add">
               <input type="text" id="app-process" placeholder="process name, e.g. cs2" spellcheck="false">
               <select id="app-profile"></select>
-              <select id="app-fan">
-                <option value="">fan: leave alone</option>
-                <option value="curve">fan: curve</option>
-                <option value="max">fan: max</option>
-                <option value="2400">fan: 2400 RPM</option>
-                <option value="3000">fan: 3000 RPM</option>
-                <option value="3600">fan: 3600 RPM</option>
-                <option value="4200">fan: 4200 RPM</option>
-              </select>
+              <select id="app-fan"></select>
               <button class="btn btn--sm" id="btn-app-add">Add</button>
             </div>
           </div>

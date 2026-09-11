@@ -223,7 +223,8 @@ omenctl effect wave 7         # keyboard: none / breathing / wave / spectrum
 omenctl effect breathing 4 '#00a0ff'
                               # speed 1-10, colour for the effects that use one
 omenctl app                   # per-application profiles
-omenctl app add cs2 performance 3000
+omenctl app add cs2 performance curve:performance
+                              # or a fixed target: omenctl app add cs2 3000
 omenctl app remove cs2
 omenctl gpu mux               # which GPU drives the screen (hybrid/discrete/uma)
 omenctl gpu mux discrete      # from the next boot

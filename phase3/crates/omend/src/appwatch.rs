@@ -29,6 +29,7 @@ struct Previous {
 struct Applied {
     mode: Option<ControlMode>,
     profile: Option<String>,
+    curve: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -45,6 +46,9 @@ pub struct AppWatch {
 #[derive(Debug, Default)]
 pub struct Actions {
     pub mode: Option<ControlMode>,
+    /// A named curve to run, or - when the profile ends and we had set one -
+    /// `Some(None)` meaning "put the configured curve back".
+    pub curve: Option<Option<String>>,
 }
 
 impl AppWatch {
@@ -99,6 +103,7 @@ impl AppWatch {
         let mut applied = Applied {
             mode: None,
             profile: None,
+            curve: profile.curve.clone(),
         };
 
         if let Some(want) = &profile.profile {
@@ -131,7 +136,10 @@ impl AppWatch {
 
         let name = profile.process.clone();
         self.active = Some((name, previous, applied.clone()));
-        Actions { mode: applied.mode }
+        Actions {
+            mode: applied.mode,
+            curve: applied.curve.map(Some),
+        }
     }
 
     fn restore(&mut self, mode: ControlMode) -> Actions {
@@ -165,6 +173,8 @@ impl AppWatch {
         info!("{name} exited -> back to {}", previous.mode);
         Actions {
             mode: applied.mode.map(|_| previous.mode),
+            // Only put the curve back if we were the ones who changed it.
+            curve: applied.curve.map(|_| None),
         }
     }
 }

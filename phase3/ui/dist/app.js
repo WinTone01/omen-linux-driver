@@ -33,7 +33,7 @@ const mockState = {
     safety_fallback: false,
     uptime_secs: 4230,
     temps: [["cpu/Tctl", 72.4], ["igpu/edge", 54.0], ["board/temp1", 46.0]],
-    apps: [{ process: "cs2", profile: "performance", fan: { mode: "manual", rpm: 3000 } }],
+    apps: [{ process: "cs2", profile: "performance", fan: { mode: "curve" }, curve: "performance" }],
     active_app: null,
     lighting_restore: false,
     lighting_off_on_battery: false,
@@ -41,7 +41,8 @@ const mockState = {
     on_ac: true,
     battery_percent: 82,
     power_ac: {},
-    power_battery: { profile: "low-power" },
+    power_battery: { profile: "low-power", fan: { mode: "curve" }, curve: "quiet" },
+    curve_preset: null,
     gpu: {
       address: "0000:04:00.0", control: "auto", status: "active",
       suspended_ms: 0, holders: [{ pid: 1688, name: "quickshell" }],
@@ -1157,8 +1158,11 @@ function fanLabel(fan) {
 function appSummary(app) {
   const parts = [];
   if (app.profile) parts.push(app.profile);
-  if (app.fan) parts.push(fanLabel(app.fan));
-  return parts.join(" · ") || "nothing to apply";
+  // The curve says more than "fan curve" does, so it replaces that half
+  // rather than being listed next to it.
+  if (app.curve) parts.push(`${t(app.curve)} ${t("curve")}`);
+  else if (app.fan) parts.push(fanLabel(app.fan));
+  return parts.join(" · ") || t("nothing to apply");
 }
 
 function saveApps(apps, message) {
@@ -1206,6 +1210,8 @@ function renderApps(s) {
   // pass rather than being missed until the next language change.
   translatePage(list);
 
+  fillChoices($("#app-fan"), FAN_CHOICES, "fan");
+
   // The profile choices come from the machine, so this cannot offer one the
   // firmware does not have.
   const sel = $("#app-profile");
@@ -1238,14 +1244,11 @@ function bindApps() {
       toast(t("pick a profile, a fan mode, or both - otherwise there is nothing to apply"), true);
       return;
     }
-    const fan =
-      !fanRaw ? null
-      : /^\d+$/.test(fanRaw) ? { mode: "manual", rpm: Number(fanRaw) }
-      : { mode: fanRaw };
+    const { fan, curve } = fanRuleFromValue(fanRaw);
 
     const apps = (state?.daemon?.apps ?? []).filter(
       (a) => a.process.toLowerCase() !== process.toLowerCase());
-    apps.push({ process, profile, fan });
+    apps.push({ process, profile, fan, curve });
     $("#app-process").value = "";
     saveApps(apps, `${process} added`);
   };
@@ -1746,14 +1749,33 @@ function bindDiagnosis() {
  * interrupted.
  */
 
+/* One control answers "how should the fan behave", because the two halves of
+ * that answer - whether the curve drives, and which curve - are never chosen
+ * independently. "curve:performance" carries both. */
 const FAN_CHOICES = [
   ["", "fan: leave alone"],
   ["curve", "fan: curve"],
+  ["curve:quiet", "fan: quiet curve"],
+  ["curve:default", "fan: default curve"],
+  ["curve:performance", "fan: performance curve"],
   ["max", "fan: max"],
   ["2400", "fan: 2400 RPM"],
   ["3000", "fan: 3000 RPM"],
   ["3600", "fan: 3600 RPM"],
 ];
+
+/* A rule's fan + curve as one select value, and back. */
+function fanRuleValue(rule) {
+  if (rule?.curve) return `curve:${rule.curve}`;
+  return fanValue(rule?.fan);
+}
+
+function fanRuleFromValue(v) {
+  if (v.startsWith("curve:")) {
+    return { fan: { mode: "curve" }, curve: v.slice("curve:".length) };
+  }
+  return { fan: fanFromValue(v), curve: null };
+}
 
 function fillChoices(sel, options, built) {
   if (sel.dataset.built === built) return;
@@ -1798,9 +1820,9 @@ function renderPowerRules(s) {
     if (document.activeElement !== sel) sel.value = value;
   };
   set($("#power-ac-profile"), ac.profile ?? "");
-  set($("#power-ac-fan"), fanValue(ac.fan));
+  set($("#power-ac-fan"), fanRuleValue(ac));
   set($("#power-bat-profile"), bat.profile ?? "");
-  set($("#power-bat-fan"), fanValue(bat.fan));
+  set($("#power-bat-fan"), fanRuleValue(bat));
 
   const onAc = s.daemon?.on_ac;
   const pct = s.daemon?.battery_percent;
@@ -1814,7 +1836,7 @@ function bindPowerRules() {
   const send = () => {
     const rule = (p, f) => ({
       profile: $(p).value || null,
-      fan: fanFromValue($(f).value),
+      ...fanRuleFromValue($(f).value),
     });
     act(() => invoke("set_power_rules", {
       onAc: rule("#power-ac-profile", "#power-ac-fan"),
@@ -2209,6 +2231,12 @@ async function refresh() {
   // saved curve here would undo a drag every two seconds.
   if (!curveEditing()) {
     drawCurve(state.curve, state.interpolation, d?.driver_temp_c, d?.target_rpm);
+  }
+  const forced = state.daemon?.curve_preset;
+  $("#curve-forced").hidden = !forced;
+  if (forced) {
+    $("#curve-forced").textContent =
+      `${t("A rule is running the")} ${t(forced)} ${t("curve; this is the configured one.")}`;
   }
   $("#curve-note").textContent = t(
     state.interpolation === "linear"

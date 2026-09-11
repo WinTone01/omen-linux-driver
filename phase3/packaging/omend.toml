@@ -171,7 +171,7 @@ app_scan_secs = 5
 # machine is on battery". Leave them out to have nothing happen automatically.
 #
 # on_ac = { profile = "performance" }
-# on_battery = { profile = "low-power", fan = { mode = "curve" } }
+# on_battery = { profile = "low-power", fan = { mode = "curve" }, curve = "quiet" }
 
 # Per-application profiles. While one of these programs is running the machine
 # switches to the settings given here, and goes back to what it was doing when
@@ -186,7 +186,13 @@ app_scan_secs = 5
 # [[app]]
 # process = "cs2"
 # profile = "performance"
-# fan = { mode = "manual", rpm = 3000 }
+# fan = { mode = "curve" }
+# curve = "performance"        # quiet / default / performance
+#
+# 'curve' names one of the built-in curves to run while the program is open.
+# The curve above in [fan] is not touched: the named one is swapped into the
+# running daemon and swapped back on exit, because a game profile that
+# rewrote the curve you drew would be a poor trade.
 #
 # [[app]]
 # process = "steam"
