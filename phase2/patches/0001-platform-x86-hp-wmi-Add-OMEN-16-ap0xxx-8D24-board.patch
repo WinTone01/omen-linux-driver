@@ -1,0 +1,57 @@
+From eacf0d4f49590727d356161bb22edb3f79eb1fc1 Mon Sep 17 00:00:00 2001
+From: WinTone <mertbay295@gmail.com>
+Date: Fri, 11 Sep 2026 05:58:45 +0300
+Subject: [PATCH] platform/x86: hp-wmi: Add OMEN 16-ap0xxx (8D24) board
+
+The OMEN 16-ap0xxx family already has two entries in the board list,
+added by commit 0aab31d47c2e ("platform/x86: hp-wmi: Add support for
+Omen 16-ap0xxx (8D26)") and commit 56b7981c6f21 ("platform/x86: hp-wmi:
+Add support for Omen 16-ap0xxx (8E35)"). HP ships a third revision under
+the same family, board 8D24, which is not listed, so it gets neither the
+platform profile nor the hwmon PWM control.
+
+The protocol was recovered from this machine's DSDT and matches what the
+driver already implements for its siblings:
+
+  - WMI command group 0x20008 with the "SECU" signature
+  - 0x2D fan speed read, 0x2E fan speed write (EC 0x34/0x35)
+  - 0x26/0x27 max fan (EC 0xEC bit 2)
+  - 0x1A power profile, writing EC 0x95
+
+omen_v1_legacy_board_params is the right parameter set, and not only by
+family: its ec_tp_offset is HP_OMEN_EC_THERMAL_PROFILE_OFFSET (0x95),
+which is where this board's DSDT places the HPCM field. The alternatives
+do not fit - omen_v1 uses 0x59, which on this board is a temperature
+register. The profile byte values were captured from the vendor software
+on Windows (0x30 balanced, 0x31 performance) and match the driver's
+omen_v1 enum.
+
+Tested on an OMEN Gaming Laptop 16-ap0xxx, BIOS F.11, kernel 7.2.4.
+Before the patch there is no pwm1 and hp-wmi registers no platform
+profile handler. After it, pwm1 appears, the handler registers alongside
+amd-pmf, and EC 0x95 reads back 48 (0x30) with the profile set to
+balanced - the same value the vendor software writes on Windows.
+
+Signed-off-by: WinTone <mertbay295@gmail.com>
+---
+ drivers/platform/x86/hp/hp-wmi.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/drivers/platform/x86/hp/hp-wmi.c b/drivers/platform/x86/hp/hp-wmi.c
+index b2773fc..f1ef61c 100644
+--- a/drivers/platform/x86/hp/hp-wmi.c
++++ b/drivers/platform/x86/hp/hp-wmi.c
+@@ -319,6 +319,10 @@ static const struct dmi_system_id hp_wmi_feature_boards[] __initconst = {
+ 		.matches = { DMI_MATCH(DMI_BOARD_NAME, "8C9C") },
+ 		.driver_data = (void *)&victus_s_board_params,
+ 	},
++	{
++		.matches = { DMI_MATCH(DMI_BOARD_NAME, "8D24") },
++		.driver_data = (void *)&omen_v1_legacy_board_params,
++	},
+ 	{
+ 		.matches = { DMI_MATCH(DMI_BOARD_NAME, "8D26") },
+ 		.driver_data = (void *)&omen_v1_legacy_board_params,
+-- 
+2.55.0
+
