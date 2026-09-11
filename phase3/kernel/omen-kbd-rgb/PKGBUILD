@@ -27,6 +27,9 @@ package() {
   install -Dm644 "$_src/Makefile"       "$dest/Makefile"
   install -Dm644 "$_src/dkms.conf"      "$dest/dkms.conf"
 
+  install -Dm644 "$_src/omen-kbd-rgb-modules.conf" \
+    "$pkgdir/usr/lib/modules-load.d/omen-kbd-rgb.conf"
+
   # dkms.conf carries the version, so keep the two in step rather than
   # letting a stale string produce a package that will not build.
   sed -i "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"$pkgver\"/" "$dest/dkms.conf"
