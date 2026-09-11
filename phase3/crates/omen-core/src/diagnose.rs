@@ -673,9 +673,12 @@ fn graphics() -> Section {
         }
     }
 
-    // The mux is reported by omen-kbd-rgb, which asks the firmware. Its
-    // absence is not a fault: most machines do not have one, and on this one
-    // it means the module is not loaded.
+    // The mux is reported by omen-kbd-rgb, which asks the firmware. Absence
+    // is not a fault - but it is only an ANSWER when the module that would
+    // have reported it is the installed one. A module from before the mux
+    // support was added cannot say the firmware has none; it can only say it
+    // did not look.
+    let rgb = about::module_status("omen_kbd_rgb");
     checks.push(match crate::gpu::mux::discover() {
         Some(mux) => Check::new(
             "mux",
@@ -687,7 +690,14 @@ fn graphics() -> Section {
                 mux.supported.join(", ")
             ),
         ),
-        None if about::module_status("omen_kbd_rgb").loaded => Check::new(
+        None if rgb.stale() => Check::new(
+            "mux",
+            "Graphics switcher",
+            Verdict::Skip,
+            "unknown - the loaded omen-kbd-rgb is an older build than the installed one",
+        )
+        .with_fix("sudo modprobe -r omen-kbd-rgb && sudo modprobe omen-kbd-rgb"),
+        None if rgb.loaded => Check::new(
             "mux",
             "Graphics switcher",
             Verdict::Skip,
