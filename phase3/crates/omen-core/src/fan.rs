@@ -117,9 +117,19 @@ impl Fan {
     }
 
     pub fn set_mode(&self, mode: PwmMode) -> Result<()> {
-        if self.mode()? == mode {
+        let current = self.mode()?;
+        if current == mode {
             return Ok(());
         }
+
+        // Going straight from MAX to MANUAL does not take reliably: the
+        // firmware has to be let out of max-fan first. omen-space does the
+        // same thing for the same reason, and the short pause is theirs too.
+        if current == PwmMode::Max && mode == PwmMode::Manual {
+            self.hwmon.write("pwm1_enable", PwmMode::Auto.as_raw())?;
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
         self.hwmon.write("pwm1_enable", mode.as_raw())
     }
 

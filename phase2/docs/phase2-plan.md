@@ -299,6 +299,11 @@ Fan behaviour in automatic mode, right after the module was loaded:
 > stopped, and handing control to the EC is **not** a safe resting state on
 > this board.
 >
+> Refined later: there appears to be a watchdog. The omen-space project writes
+> 120 to EC `0x63` and tells its users the handover to the BIOS can take up to
+> two minutes. The EC probably does take over in the end - but the CPU went
+> from 81 to 98 °C in seventy-six seconds, so waiting for it is not an option.
+>
 > What that cost, and what was done about it, is in
 > [`phase3/README.md`](../../phase3/README.md#safety).
 

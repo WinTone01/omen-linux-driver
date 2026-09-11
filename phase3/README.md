@@ -19,6 +19,24 @@ the lower part of the curve to the EC and only takes over when it wants
 **more** than the EC is providing. Idle silence is preserved rather than
 traded away.
 
+## The discrete GPU is read through the EC
+
+The NVIDIA driver registers **no hwmon** on this machine: `nvidia-smi` reports
+a temperature while `/sys/class/hwmon` has nothing for it. A curve driven from
+hwmon alone therefore never reacts to the GPU heating up — which, on a laptop
+with an RTX 5060, is most of the thermal load a game produces. The symptom is
+the worst kind: fans that stay quiet while the machine cooks.
+
+So the dGPU is read from the EC instead, one byte at `0xB7` (Phase 1 §4:
+`GTMP`). The omen-space project reads the same register on the same family,
+which is an independent confirmation of the Phase 1 map.
+
+That needs the `ec_sys` module, loaded **read-only** — omend only ever reads
+temperatures, and everything that writes goes through hp-wmi's hwmon
+interface where the kernel clamps the values. The packaging installs a
+`modules-load.d` entry and a `modprobe.d` option for it. Without it the daemon
+still runs, follows the CPU alone, and says so at startup.
+
 ## The fan curve is HP's own
 
 The default curve is not invented, it is OMEN Gaming Hub's, reproduced point
@@ -51,7 +69,10 @@ sudo install -Dm755 target/release/omenctl /usr/bin/omenctl
 sudo install -Dm644 packaging/omend.service /etc/systemd/system/omend.service
 sudo install -Dm644 packaging/omend.toml    /etc/omen/omend.toml
 sudo install -Dm644 packaging/omen-sysusers.conf /usr/lib/sysusers.d/omen.conf
+sudo install -Dm644 packaging/omen-modules.conf  /usr/lib/modules-load.d/omen.conf
+sudo install -Dm644 packaging/omen-modprobe.conf /usr/lib/modprobe.d/omen.conf
 sudo systemd-sysusers
+sudo modprobe ec_sys write_support=0
 sudo systemctl enable --now omend
 ```
 
@@ -144,7 +165,17 @@ EC*, and the fan was already there.
 
 Measured afterwards, deliberately and with a hard revert: with
 `pwm1_enable = 2` the fans sat at **0 RPM** for twelve straight seconds while
-the CPU climbed 78.6 → 85.5 °C under load. The EC never took them.
+the CPU climbed 78.6 → 85.5 °C under load.
+
+> **Refined on 2026-09-11.** The conclusion drawn at the time — "the EC never
+> takes them" — was measured over twelve seconds and stated too strongly. The
+> omen-space project writes `0x78` (120) to EC `0x63`, a watchdog timer, and
+> warns its users that handing the fans to the BIOS *"can take up to 120
+> seconds"*. So the EC most likely does take over, eventually.
+>
+> That does not change anything about the safety decision. The incident went
+> from 81 °C to 98 °C in seventy-six seconds; two minutes at 0 RPM under load
+> is not a handover, it is an overheat. The fans still get forced to full.
 
 Two mistakes, both ours:
 

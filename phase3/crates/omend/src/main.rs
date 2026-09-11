@@ -153,6 +153,16 @@ fn run(args: Args) -> Result<()> {
             .join(", ")
     );
 
+    // Without the dGPU the curve is blind to most of the heat a game makes,
+    // and the only symptom is fans that stay quiet while the machine cooks.
+    // Worth saying out loud rather than leaving to be discovered.
+    if !thermal.has_dgpu() {
+        warn!(
+            "the discrete GPU is not being watched - load 'ec_sys' so it can be read \
+             (modprobe ec_sys write_support=0); without it the curve only follows the CPU"
+        );
+    }
+
     // If hp-wmi is not among the profile handlers the 8D24 patch did not take
     // effect. The fan may still work, but we want to know.
     if !PlatformProfile::hp_wmi_active() {
