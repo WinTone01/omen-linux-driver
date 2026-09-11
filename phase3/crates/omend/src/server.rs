@@ -316,6 +316,53 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             }
         }
 
+        Request::SetPowerRules { on_ac, on_battery } => {
+            info!(
+                "request: on mains -> {}, on battery -> {}",
+                on_ac.summary(),
+                on_battery.summary()
+            );
+            let mut cfg = match Config::load(config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("the current configuration could not be read: {e}"),
+                    }
+                }
+            };
+            for rule in [&on_ac, &on_battery] {
+                if let Some(want) = &rule.profile {
+                    match PlatformProfile::discover() {
+                        Some(pp) if pp.choices().contains(want) => {}
+                        Some(pp) => {
+                            return Response::Error {
+                                message: format!(
+                                    "invalid profile {want:?}; choices: {}",
+                                    pp.choices().join(" ")
+                                ),
+                            }
+                        }
+                        None => {
+                            return Response::Error {
+                                message: "no platform_profile".into(),
+                            }
+                        }
+                    }
+                }
+            }
+            cfg.automation.on_ac = on_ac;
+            cfg.automation.on_battery = on_battery;
+            if let Err(e) = cfg.save(config_path) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+            shared.request_reload();
+            Response::Done {
+                message: "power rules saved".into(),
+            }
+        }
+
         Request::Reload => {
             shared.request_reload();
             Response::Done {

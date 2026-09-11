@@ -11,6 +11,7 @@
 
 mod appwatch;
 mod guard;
+mod hotkey;
 mod lighting;
 mod server;
 mod shared;
@@ -208,6 +209,13 @@ fn run(args: Args) -> Result<()> {
         .then(|| lighting::Lighting::start(rt.cfg.lighting.clone()))
         .flatten();
 
+    // The OMEN key cycles the performance profile. Not for --once, which is
+    // a single diagnostic pass, and not for --dry-run, which promises to
+    // write nothing.
+    if !args.once && !args.dry_run {
+        hotkey::spawn();
+    }
+
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
         signal_hook::flag::register(sig, Arc::clone(&stop))
@@ -301,6 +309,9 @@ struct Runtime {
     /// from here, and it should not be - it is not part of fan control.
     lighting_changed: bool,
     apps: appwatch::AppWatch,
+    /// Last known power source, so a rule is applied on the change rather
+    /// than on every tick - otherwise it could not be overridden.
+    on_ac: Option<bool>,
     config_path: std::path::PathBuf,
     /// When the process list was last scanned.
     apps_scanned: Instant,
@@ -336,6 +347,7 @@ impl Runtime {
             read_only,
             lighting_changed: false,
             apps: appwatch::AppWatch::new(),
+            on_ac: None,
             config_path: config_path.to_owned(),
             // Scan on the first tick rather than one interval in: a daemon
             // starting while a game is already open should notice it.
@@ -386,6 +398,7 @@ impl Runtime {
             }
         };
 
+        self.apply_power_rule();
         self.scan_apps();
         self.apply_gpu_power();
 
@@ -397,6 +410,67 @@ impl Runtime {
 
         shared.publish(self.snapshot(temp));
         shared.finish_tick();
+    }
+
+    /// Applies the mains/battery rule when the power source changes.
+    ///
+    /// On the change, not on every tick: a rule that re-applied continuously
+    /// could not be overridden, which would make the profile buttons in the
+    /// UI stop working while plugged in. And application profiles win - a
+    /// game asking for performance is a more specific statement than "this
+    /// machine is on battery".
+    fn apply_power_rule(&mut self) {
+        let now = omen_core::power::on_ac();
+        if now == self.on_ac || now.is_none() {
+            return;
+        }
+        let first = self.on_ac.is_none();
+        self.on_ac = now;
+        let on_ac = now.unwrap();
+
+        let rule = if on_ac {
+            self.cfg.automation.on_ac.clone()
+        } else {
+            self.cfg.automation.on_battery.clone()
+        };
+        if rule.is_empty() {
+            return;
+        }
+        // At startup the startup_profile has just been applied; letting a
+        // power rule immediately overwrite it would make that setting look
+        // broken. The rule takes over from the first change onwards.
+        if first && self.cfg.automation.startup_profile.is_some() {
+            return;
+        }
+        if self.apps.active().is_some() {
+            debug!("power source changed, but an application profile is in force");
+            return;
+        }
+
+        info!(
+            "{} -> {}",
+            if on_ac { "on mains" } else { "on battery" },
+            rule.summary()
+        );
+
+        if let Some(want) = &rule.profile {
+            match PlatformProfile::discover() {
+                Some(pp) if pp.choices().contains(want) => {
+                    if let Err(e) = pp.set(want) {
+                        warn!("could not set the {want} profile: {e}");
+                    }
+                }
+                Some(pp) => warn!("{want:?} is not one of {}", pp.choices().join(" ")),
+                None => warn!("no platform_profile to set"),
+            }
+        }
+        if let Some(mode) = rule.fan {
+            if mode != self.mode {
+                self.mode = mode;
+                self.governor.reset();
+                self.applied = Applied::Unknown;
+            }
+        }
     }
 
     /// Looks for a configured application, and applies or restores its
@@ -735,6 +809,10 @@ impl Runtime {
             }),
             version: Some(omen_core::about::VERSION.to_owned()),
             config_path: self.config_path.to_str().map(str::to_owned),
+            on_ac: self.on_ac,
+            battery_percent: omen_core::power::battery_percent(),
+            power_ac: self.cfg.automation.on_ac.clone(),
+            power_battery: self.cfg.automation.on_battery.clone(),
             startup_profile: self.cfg.automation.startup_profile.clone(),
             apps: self.cfg.apps.clone(),
             active_app: self.apps.active().map(str::to_owned),

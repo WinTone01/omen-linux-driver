@@ -35,6 +35,10 @@ const mockState = {
     temps: [["cpu/Tctl", 72.4], ["igpu/edge", 54.0], ["board/temp1", 46.0]],
     apps: [{ process: "cs2", profile: "performance", fan: { mode: "manual", rpm: 3000 } }],
     active_app: null,
+    on_ac: true,
+    battery_percent: 82,
+    power_ac: {},
+    power_battery: { profile: "low-power" },
     gpu: {
       address: "0000:04:00.0", control: "auto", status: "active",
       suspended_ms: 0, holders: [{ pid: 1688, name: "quickshell" }],
@@ -83,6 +87,10 @@ async function mockInvoke(cmd, args) {
         : args.mode.mode === "curve" ? 2100
         : null;
       return `mode: ${args.mode.mode}`;
+    case "set_power_rules":
+      mockState.daemon.power_ac = args.onAc;
+      mockState.daemon.power_battery = args.onBattery;
+      return "power rules saved";
     case "set_startup_profile":
       mockState.daemon.startup_profile = args.profile;
       return args.profile ? `${args.profile} will be selected at startup`
@@ -1661,6 +1669,96 @@ function bindDiagnosis() {
   }
 }
 
+/* ── power source ────────────────────────────────────────────────
+ *
+ * Four selects describing two rules. Filled from the machine's own profile
+ * list, and sent as a pair because the daemon stores them as a pair - sending
+ * one at a time would leave the two halves out of step if an edit were
+ * interrupted.
+ */
+
+const FAN_CHOICES = [
+  ["", "fan: leave alone"],
+  ["curve", "fan: curve"],
+  ["max", "fan: max"],
+  ["2400", "fan: 2400 RPM"],
+  ["3000", "fan: 3000 RPM"],
+  ["3600", "fan: 3600 RPM"],
+];
+
+function fillChoices(sel, options, built) {
+  if (sel.dataset.built === built) return;
+  sel.dataset.built = built;
+  sel.replaceChildren();
+  for (const [value, label] of options) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    sel.append(opt);
+  }
+}
+
+function fanValue(fan) {
+  if (!fan) return "";
+  return fan.mode === "manual" ? String(fan.rpm) : fan.mode;
+}
+
+function fanFromValue(v) {
+  if (!v) return null;
+  return /^\d+$/.test(v) ? { mode: "manual", rpm: Number(v) } : { mode: v };
+}
+
+function renderPowerRules(s) {
+  const choices = s.profile_choices ?? [];
+  const built = String(choices.length);
+  const profileOptions = [["", "profile: leave alone"]]
+    .concat(choices.map((c) => [c, `profile: ${c}`]));
+
+  for (const id of ["#power-ac-profile", "#power-bat-profile"]) {
+    fillChoices($(id), profileOptions, built);
+  }
+  for (const id of ["#power-ac-fan", "#power-bat-fan"]) {
+    fillChoices($(id), FAN_CHOICES, "fan");
+  }
+
+  const ac = s.daemon?.power_ac ?? {};
+  const bat = s.daemon?.power_battery ?? {};
+  // Not while someone is choosing: overwriting an open select mid-decision is
+  // what makes a settings page feel haunted.
+  const set = (sel, value) => {
+    if (document.activeElement !== sel) sel.value = value;
+  };
+  set($("#power-ac-profile"), ac.profile ?? "");
+  set($("#power-ac-fan"), fanValue(ac.fan));
+  set($("#power-bat-profile"), bat.profile ?? "");
+  set($("#power-bat-fan"), fanValue(bat.fan));
+
+  const onAc = s.daemon?.on_ac;
+  const pct = s.daemon?.battery_percent;
+  $("#power-note").textContent =
+    onAc === true ? `on mains${pct != null ? `, battery ${pct}%` : ""}`
+    : onAc === false ? `on battery${pct != null ? ` ${pct}%` : ""}`
+    : "";
+}
+
+function bindPowerRules() {
+  const send = () => {
+    const rule = (p, f) => ({
+      profile: $(p).value || null,
+      fan: fanFromValue($(f).value),
+    });
+    act(() => invoke("set_power_rules", {
+      onAc: rule("#power-ac-profile", "#power-ac-fan"),
+      onBattery: rule("#power-bat-profile", "#power-bat-fan"),
+    }));
+  };
+
+  for (const id of ["#power-ac-profile", "#power-ac-fan",
+                    "#power-bat-profile", "#power-bat-fan"]) {
+    $(id).addEventListener("change", send);
+  }
+}
+
 async function refresh() {
   try {
     state = await invoke("get_state");
@@ -1672,6 +1770,7 @@ async function refresh() {
   renderProfiles(state);
   renderApps(state);
   renderGraphics(state);
+  renderPowerRules(state);
   renderStartupProfile(state);
   renderTrayDependent(state);
   maybeAlert(state);
@@ -1699,6 +1798,7 @@ bindGraphics();
 bindSettings();
 bindFirmware();
 bindDiagnosis();
+bindPowerRules();
 loadSettings();
 renderVersions();
 refresh();

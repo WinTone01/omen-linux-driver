@@ -57,6 +57,11 @@ USAGE:
                                    it awake. This board has no mux, so there
                                    is no panel to switch - see the note below.
 
+    omenctl power                  What happens on mains and on battery
+    omenctl power ac|battery <PROFILE|none> [FAN]
+                                   e.g. omenctl power battery low-power curve
+                                   'none' clears that rule
+
     omenctl profile <NAME>         balanced / performance / low-power
     omenctl profile startup <NAME|none>
                                    Which profile to select when the daemon
@@ -83,6 +88,7 @@ fn main() -> ExitCode {
         "effect" => set_effect(&args),
         "app" => app_profiles(&args),
         "gpu" => gpu_power(&args),
+        "power" => power_rules(&args),
         "profile" => set_profile(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
         "version" | "--version" | "-V" => versions(),
@@ -461,6 +467,56 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+fn power_rules(args: &[String]) -> Result<()> {
+    use omen_core::power::PowerRule;
+
+    let snap = app_snapshot()?;
+    let mut on_ac = snap.power_ac.clone();
+    let mut on_battery = snap.power_battery.clone();
+
+    let Some(which) = args.get(1).map(String::as_str) else {
+        let now = match snap.on_ac {
+            Some(true) => "on mains",
+            Some(false) => "on battery",
+            None => "power source unknown",
+        };
+        println!("currently {now}\n");
+        field("on mains", on_ac.summary());
+        field("on battery", on_battery.summary());
+        if on_ac.is_empty() && on_battery.is_empty() {
+            println!("\n  Nothing is applied automatically. Set a rule with:");
+            println!("    omenctl power battery low-power");
+        }
+        return Ok(());
+    };
+
+    let target = match which {
+        "ac" | "mains" => &mut on_ac,
+        "battery" | "bat" => &mut on_battery,
+        other => bail!("unknown power source: {other} (ac / battery)"),
+    };
+
+    let first = args
+        .get(2)
+        .ok_or_else(|| anyhow::anyhow!("a profile is required, or 'none' to clear the rule"))?;
+
+    if first == "none" {
+        *target = PowerRule::default();
+    } else {
+        // Same shape-based parsing as the application profiles: a fan mode is
+        // a number or one of three words, everything else is a profile.
+        *target = PowerRule::default();
+        for arg in &args[2..] {
+            match parse_fan(arg) {
+                Ok(mode) => target.fan = Some(mode),
+                Err(_) => target.profile = Some(arg.clone()),
+            }
+        }
+    }
+
+    client::report(client::send(&Request::SetPowerRules { on_ac, on_battery })?)
+}
+
 fn gpu_power(args: &[String]) -> Result<()> {
     match args.get(1) {
         None => {
@@ -616,8 +672,12 @@ fn status() -> Result<()> {
     ) {
         Ok(fan) => {
             field("hwmon", fan.hwmon_path().display());
+            // Named apart from the daemon's own "mode" above: one is what
+            // omend intends, the other is what the hardware reports, and
+            // printing both as "mode" made them look like a repetition
+            // rather than a cross-check.
             field(
-                "mode",
+                "pwm1_enable",
                 fan.mode()
                     .map(|m| m.to_string())
                     .unwrap_or_else(|e| format!("? ({e})")),

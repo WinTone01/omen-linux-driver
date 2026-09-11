@@ -189,6 +189,30 @@
           </p>
           <div class="power-grid" id="profile-cards"></div>
 
+          <div class="card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Power source</h2>
+              <span class="panel-head__note" id="power-note"></span>
+            </div>
+            <p class="hint">
+              What the machine should do on mains and on battery. Applied when the
+              source changes, not continuously — so you can still override it while
+              plugged in. An application profile wins over these.
+            </p>
+            <dl class="kv kv--tight">
+              <dt>On mains</dt>
+              <dd class="power-rule">
+                <select id="power-ac-profile"></select>
+                <select id="power-ac-fan"></select>
+              </dd>
+              <dt>On battery</dt>
+              <dd class="power-rule">
+                <select id="power-bat-profile"></select>
+                <select id="power-bat-fan"></select>
+              </dd>
+            </dl>
+          </div>
+
           <div class="card" id="gfx-card">
             <div class="panel-head">
               <h2 class="panel-head__title">Graphics</h2>

@@ -150,6 +150,16 @@ dgpu_power = "auto"
 # How often the process list is checked for the application profiles below.
 app_scan_secs = 5
 
+# What to do on mains power and on battery.
+#
+# Applied when the source CHANGES, not continuously - otherwise the setting
+# could not be overridden while plugged in. An application profile wins over
+# these: a game asking for performance is a more specific statement than "this
+# machine is on battery". Leave them out to have nothing happen automatically.
+#
+# on_ac = { profile = "performance" }
+# on_battery = { profile = "low-power", fan = { mode = "curve" } }
+
 # Per-application profiles. While one of these programs is running the machine
 # switches to the settings given here, and goes back to what it was doing when
 # the program exits - to what it was, not to a fixed default. Nothing is

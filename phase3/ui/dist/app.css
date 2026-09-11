@@ -788,3 +788,7 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
   padding-left: 9px; border-left: 2px solid var(--border);
 }
 .diag-row__fix code { font-size: 11px; }
+
+/* Two controls in one definition cell, right-aligned with the rest of the
+ * key/value rows. */
+.power-rule { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }

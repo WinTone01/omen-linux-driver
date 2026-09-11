@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WindowEvent,
 };
@@ -367,6 +367,16 @@ async fn firmware_refresh() -> Result<String, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Mains and battery rules, replaced as a pair - the daemon stores them that
+/// way, and sending one at a time could leave the two halves out of step.
+#[tauri::command]
+fn set_power_rules(
+    on_ac: omen_core::power::PowerRule,
+    on_battery: omen_core::power::PowerRule,
+) -> Result<String, String> {
+    talk(Request::SetPowerRules { on_ac, on_battery })
+}
+
 /// A machine setting, not a window one: it changes what happens at the next
 /// boot, for everyone.
 #[tauri::command]
@@ -492,7 +502,51 @@ fn show_window(app: &tauri::AppHandle) {
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Open OMEN Control", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    // The two things worth doing without opening a window: change the
+    // performance profile, and put the fans back on the curve or up to full.
+    // Anything more belongs in the window, where there is room to explain it.
+    //
+    // The profile list comes from the firmware rather than being hard-coded,
+    // so the menu cannot offer a profile this machine does not have. It is
+    // built once, at startup: a tray menu that rebuilds itself while open is
+    // a menu that closes under the pointer.
+    let choices = omen_core::profile::PlatformProfile::discover()
+        .map(|p| p.choices())
+        .unwrap_or_default();
+
+    let profile_items: Vec<MenuItem<tauri::Wry>> = choices
+        .iter()
+        .map(|name| MenuItem::with_id(app, format!("profile:{name}"), name, true, None::<&str>))
+        .collect::<tauri::Result<_>>()?;
+
+    let fan_curve = MenuItem::with_id(app, "fan:curve", "Automatic", true, None::<&str>)?;
+    let fan_max = MenuItem::with_id(app, "fan:max", "Full power", true, None::<&str>)?;
+
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = vec![&show];
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let sep3 = PredefinedMenuItem::separator(app)?;
+
+    let profile_header;
+    if !profile_items.is_empty() {
+        items.push(&sep1);
+        profile_header = MenuItem::with_id(app, "hdr:profile", "Profile", false, None::<&str>)?;
+        items.push(&profile_header);
+        for item in &profile_items {
+            items.push(item);
+        }
+    }
+
+    let fan_header = MenuItem::with_id(app, "hdr:fan", "Fans", false, None::<&str>)?;
+    items.push(&sep2);
+    items.push(&fan_header);
+    items.push(&fan_curve);
+    items.push(&fan_max);
+    items.push(&sep3);
+    items.push(&quit);
+
+    let menu = Menu::with_items(app, &items)?;
 
     let icon = app
         .default_window_icon()
@@ -506,10 +560,29 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         // The menu belongs on the right button; the left one opens the
         // window, which is what people expect of a tray icon.
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_window(app),
-            "quit" => app.exit(0),
-            _ => {}
+        .on_menu_event(|app, event| {
+            let id = event.id.as_ref();
+            match id {
+                "show" => show_window(app),
+                "quit" => app.exit(0),
+                _ => {
+                    // Fire and forget: the tray has nowhere to show an error,
+                    // and the window will show the state that resulted
+                    // either way.
+                    if let Some(name) = id.strip_prefix("profile:") {
+                        let _ = talk(Request::SetProfile {
+                            profile: name.to_owned(),
+                        });
+                    } else if let Some(mode) = id.strip_prefix("fan:") {
+                        let mode = if mode == "max" {
+                            ControlMode::Max
+                        } else {
+                            ControlMode::Curve
+                        };
+                        let _ = talk(Request::SetMode(mode));
+                    }
+                }
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -569,6 +642,7 @@ fn main() {
             set_app_profiles,
             set_dgpu_power,
             set_startup_profile,
+            set_power_rules,
             firmware,
             firmware_refresh,
             get_settings,

@@ -108,6 +108,11 @@ pub enum Request {
     /// Which platform profile to select when the daemon starts. `None`
     /// leaves it to whatever the firmware remembers.
     SetStartupProfile { profile: Option<String> },
+    /// What to do on mains power and on battery.
+    SetPowerRules {
+        on_ac: crate::power::PowerRule,
+        on_battery: crate::power::PowerRule,
+    },
     /// Re-read the config from disk.
     Reload,
 }
@@ -151,6 +156,17 @@ pub struct Snapshot {
     /// necessarily the default path.
     #[serde(default)]
     pub config_path: Option<String>,
+    /// Mains or battery. `None` when it could not be determined.
+    #[serde(default)]
+    pub on_ac: Option<bool>,
+    /// Battery charge, when there is a battery.
+    #[serde(default)]
+    pub battery_percent: Option<u8>,
+    /// The rules for each power source.
+    #[serde(default)]
+    pub power_ac: crate::power::PowerRule,
+    #[serde(default)]
+    pub power_battery: crate::power::PowerRule,
     /// The profile selected at startup, if one is configured.
     #[serde(default)]
     pub startup_profile: Option<String>,

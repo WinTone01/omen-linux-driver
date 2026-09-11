@@ -21,6 +21,7 @@ pub mod fan;
 pub mod gpu;
 pub mod ipc;
 pub mod leds;
+pub mod power;
 pub mod profile;
 pub mod sysfs;
 pub mod thermal;

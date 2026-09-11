@@ -16,6 +16,7 @@ use crate::curve::{self, Curve, Interpolation, Point};
 use crate::error::{Error, Result};
 use crate::fan::{DEFAULT_MAX_RPM, DEFAULT_MIN_RPM};
 use crate::gpu::DgpuPower;
+use crate::power::PowerRule;
 
 pub const DEFAULT_PATH: &str = "/etc/omen/omend.toml";
 
@@ -72,6 +73,16 @@ pub struct AutomationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub startup_profile: Option<String>,
 
+    /// What to do on mains power, and on battery.
+    ///
+    /// Empty rules mean "leave it alone", which is the default: a laptop that
+    /// changes its own performance profile when you unplug it is a surprise
+    /// unless you asked for it.
+    #[serde(default)]
+    pub on_ac: PowerRule,
+    #[serde(default)]
+    pub on_battery: PowerRule,
+
     /// How often the process list is checked, in seconds.
     ///
     /// Every check walks /proc. Five seconds is quick enough that a game is
@@ -85,6 +96,8 @@ impl Default for AutomationConfig {
     fn default() -> Self {
         Self {
             startup_profile: None,
+            on_ac: PowerRule::default(),
+            on_battery: PowerRule::default(),
             app_scan_secs: default_app_scan(),
         }
     }
@@ -353,6 +366,16 @@ impl Config {
                 return Err(Error::Curve(
                     "an application profile has an empty process name".into(),
                 ));
+            }
+        }
+        for (what, rule) in [
+            ("on_ac", &self.automation.on_ac),
+            ("on_battery", &self.automation.on_battery),
+        ] {
+            if let Some(p) = &rule.profile {
+                if p.trim().is_empty() {
+                    return Err(Error::Curve(format!("{what}.profile is empty")));
+                }
             }
         }
         if self.automation.app_scan_secs == 0 {
