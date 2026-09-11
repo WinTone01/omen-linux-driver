@@ -19,6 +19,34 @@ the lower part of the curve to the EC and only takes over when it wants
 **more** than the EC is providing. Idle silence is preserved rather than
 traded away.
 
+## Living with power-profiles-daemon
+
+KDE's power profile switcher, and GNOME's, go through
+`power-profiles-daemon`, which writes the same
+`/sys/firmware/acpi/platform_profile` this project does. That sounds like a
+fight, and it is not one. Measured:
+
+```
+start                     PPD=balanced     sysfs=balanced
+omenctl profile performance
+  immediately             PPD=balanced     sysfs=performance
+  after five seconds      PPD=performance  sysfs=performance
+PPD set to balanced       PPD=balanced     sysfs=balanced
+```
+
+PPD watches the file rather than owning it: an external change is adopted,
+not reverted. So the desktop's widget catches up with a change made here
+within a few seconds, and a change made in the widget shows up here on the
+next poll. Both directions work, and nothing has to be disabled.
+
+Two things can still surprise you, and neither is a bug:
+
+* PPD applies policies of its own — dropping to power-saver on a low
+  battery, for instance. When it does, the profile shown here changes on its
+  own, because it genuinely did change.
+* An application can ask PPD to *hold* a profile for its lifetime. While a
+  hold is active PPD may re-assert its choice over one made here.
+
 ## The discrete GPU is read through the EC
 
 The NVIDIA driver registers **no hwmon** on this machine: `nvidia-smi` reports
