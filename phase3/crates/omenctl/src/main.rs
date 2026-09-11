@@ -595,15 +595,21 @@ fn gpu_power(args: &[String]) -> Result<()> {
 
     match args.get(1) {
         None => {
-            print_gpu(app_snapshot().ok().and_then(|s| s.gpu.clone()));
+            let mut gpu = app_snapshot().ok().and_then(|s| s.gpu.clone());
+            if let Some(gpu) = gpu.as_mut() {
+                omen_core::gpu::merge_local_holders(gpu);
+            }
+            print_gpu(gpu);
             println!();
-            println!("  This machine has no graphics mux: the panel is wired to the integrated");
-            println!("  GPU (the NVIDIA card has only an HDMI connector) and the DSDT does not");
-            println!("  mention one. To run a program on the discrete GPU, offload it:");
+            println!("  In hybrid, a program runs on the integrated GPU unless it asks for");
+            println!("  the other one. To make one ask - in Steam, before %command%:");
             println!();
-            println!("    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia <program>");
+            println!("    {}", omen_core::gpu::OFFLOAD_ENV);
             println!();
-            println!("  In Steam, put that in the game's launch options before %command%.");
+            println!("  And to stop one reaching the discrete GPU at all, which is how a");
+            println!("  program that merely enumerates devices ends up keeping it awake:");
+            println!();
+            println!("    {}", omen_core::gpu::igpu_env());
             Ok(())
         }
         Some(arg) => {
@@ -654,19 +660,20 @@ fn print_gpu(from_daemon: Option<omen_core::gpu::GpuPower>) {
         field("nvidia dpm", &dpm);
     }
 
+    // Listed whenever there are any, not only when the GPU has never slept.
+    // "What is using it right now" is the question someone asks when the
+    // battery is going, and it has an answer either way.
+    if !gpu.holders.is_empty() {
+        println!("  held open by");
+        for h in &gpu.holders {
+            println!("    {:<18} pid {:<7} {}", h.name, h.pid, h.nodes.join(" "));
+        }
+    } else if gpu.awake_despite_pm() && !via_daemon {
+        println!("  (run as root, or with omend running, to see what holds it open)");
+    }
+
     if gpu.awake_despite_pm() {
         println!("  ! the GPU is allowed to suspend but never has");
-        if gpu.holders.is_empty() {
-            if via_daemon {
-                println!("    nothing is holding /dev/nvidia* open");
-            } else {
-                println!("    (run as root, or with omend running, to see what holds it open)");
-            }
-        } else {
-            for h in &gpu.holders {
-                println!("    held open by {} (pid {})", h.name, h.pid);
-            }
-        }
     }
 }
 

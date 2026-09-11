@@ -443,6 +443,18 @@
               <code id="gfx-offload">__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia</code>
               <button class="btn btn--sm" id="btn-gfx-copy">Copy</button>
             </div>
+            <p class="hint">
+              The other direction is the one that saves battery. The discrete card
+              is the FIRST render node on this machine, so a program that opens
+              &ldquo;a GPU&rdquo; without choosing — or that enumerates all of them
+              to see what is there — lands on it and keeps it awake for as long as
+              it runs. Put this in front of such a program and it has no NVIDIA
+              driver to find:
+            </p>
+            <div class="copy-row">
+              <code id="gfx-igpu">—</code>
+              <button class="btn btn--sm" id="btn-igpu-copy">Copy</button>
+            </div>
           </div>
 
         </section>

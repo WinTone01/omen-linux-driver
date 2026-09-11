@@ -45,7 +45,9 @@ const mockState = {
     curve_preset: null,
     gpu: {
       address: "0000:04:00.0", control: "auto", status: "active",
-      suspended_ms: 0, holders: [{ pid: 1688, name: "quickshell" }],
+      suspended_ms: 0,
+      holders: [{ pid: 1688, name: "quickshell",
+                  nodes: ["/dev/dri/renderD128", "/dev/nvidia0"] }],
     },
     mux: { supported: ["uma", "hybrid", "discrete"], current: "hybrid" },
   },
@@ -165,6 +167,11 @@ async function mockInvoke(cmd, args) {
       };
     case "diagnostics":
       return "omen-control 0.1.0\nboard        8D24\n(mock)\n";
+    case "gpu_env":
+      return {
+        offload: "__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia",
+        igpu: "__GLX_VENDOR_LIBRARY_NAME=mesa __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+      };
     case "set_gpu_mux":
       mockState.daemon.mux.current = args.mode;
       return `graphics set to ${args.mode}; it takes effect after a reboot`;
@@ -1291,9 +1298,16 @@ function renderGraphics(s) {
       : gpu.control === "on" ? "never — you asked for that" : "never";
 
   const holders = gpu.holders ?? [];
-  $("#gfx-holders").textContent = holders.length
+  const cell = $("#gfx-holders");
+  cell.textContent = holders.length
     ? holders.map((h) => `${h.name} (${h.pid})`).join(", ")
     : t(gpu.status === "suspended" ? "nothing — it is asleep" : "nothing");
+  // Which device file each one has open, on hover: /dev/nvidia0 is a program
+  // set up to render there, while only /dev/dri/cardN is usually one that
+  // opened every card it could find - different problems, different fixes.
+  cell.title = holders
+    .map((h) => `${h.name} (${h.pid}): ${(h.nodes ?? []).join(" ")}`)
+    .join("\n");
 
   $("#gfx-note").textContent =
     gpu.control === "auto" && gpu.suspended_ms === 0 && gpu.status !== "suspended"
@@ -1305,6 +1319,16 @@ function bindGraphics() {
   $$("#gfx-power button").forEach((b) =>
     b.addEventListener("click", () =>
       act(() => invoke("set_dgpu_power", { power: b.dataset.power }))));
+
+  invoke("gpu_env")
+    .then((env) => {
+      $("#gfx-offload").textContent = env.offload;
+      $("#gfx-igpu").textContent = env.igpu;
+    })
+    .catch(() => {});
+
+  $("#btn-igpu-copy").addEventListener("click", () =>
+    copyText($("#gfx-igpu").textContent.trim(), t("command")));
 
   $("#btn-gfx-copy").addEventListener("click", async () => {
     const text = $("#gfx-offload").textContent.trim();

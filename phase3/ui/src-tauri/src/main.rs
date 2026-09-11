@@ -256,15 +256,8 @@ fn get_state() -> UiState {
     // busy. The daemon's list is kept when it has one (a root process could
     // be the culprit) and this one is merged in.
     let mut daemon = daemon;
-    if let (Some(snap), Some(local)) = (daemon.as_mut(), omen_core::gpu::discover()) {
-        if let Some(gpu) = snap.gpu.as_mut() {
-            for holder in local.holders {
-                if !gpu.holders.iter().any(|h| h.pid == holder.pid) {
-                    gpu.holders.push(holder);
-                }
-            }
-            gpu.holders.sort_by_key(|h| h.pid);
-        }
+    if let Some(gpu) = daemon.as_mut().and_then(|s| s.gpu.as_mut()) {
+        omen_core::gpu::merge_local_holders(gpu);
     }
 
     let (leds, leds_error, leds_writable) = match Leds::discover() {
@@ -510,6 +503,23 @@ fn system_info() -> sysinfo::SysInfo {
     sysinfo::read()
 }
 
+/// The two env prefixes: one to send a program to the discrete GPU, one to
+/// keep it away from it. Computed rather than hard-coded - see
+/// omen_core::gpu::igpu_env.
+#[derive(Debug, Serialize)]
+struct GpuEnv {
+    offload: String,
+    igpu: String,
+}
+
+#[tauri::command]
+fn gpu_env() -> GpuEnv {
+    GpuEnv {
+        offload: omen_core::gpu::OFFLOAD_ENV.to_owned(),
+        igpu: omen_core::gpu::igpu_env(),
+    }
+}
+
 /// Which GPU drives the screen from the next boot. Goes through the daemon:
 /// the attribute is root-owned, and a change that only shows up after a
 /// reboot should be announced by the thing that knows that.
@@ -739,6 +749,7 @@ fn main() {
             set_app_profiles,
             set_dgpu_power,
             set_gpu_mux,
+            gpu_env,
             system_info,
             set_startup_profile,
             set_power_rules,

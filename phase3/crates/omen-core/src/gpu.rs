@@ -38,6 +38,14 @@ pub struct GpuPower {
 pub struct Holder {
     pub pid: u32,
     pub name: String,
+    /// Which of the GPU's device files it has open, by name.
+    ///
+    /// Worth reporting rather than collapsing to a yes: /dev/nvidia0 means a
+    /// driver client - the program is set up to render there - while
+    /// /dev/dri/card1 alone is usually a program that opened every card it
+    /// could find. They are different problems with different fixes.
+    #[serde(default)]
+    pub nodes: Vec<String>,
 }
 
 impl GpuPower {
@@ -129,7 +137,7 @@ pub fn discover() -> Option<GpuPower> {
             holders: if status == "suspended" {
                 Vec::new()
             } else {
-                holders()
+                holders(&drm_nodes(&dev))
             },
             status,
             suspended_ms: sysfs::read_string(&dev.join("power/runtime_suspended_time"))
@@ -150,7 +158,29 @@ pub fn discover() -> Option<GpuPower> {
 /// Only processes the caller can see are found. Run as root - as the daemon
 /// is - that is all of them; run as a user it is only their own, which is why
 /// the daemon reports this rather than the CLI working it out itself.
-fn holders() -> Vec<Holder> {
+/// The device files this GPU answers to: /dev/dri/card1, /dev/dri/renderD128
+/// and so on, read from the PCI device rather than assumed.
+///
+/// Which number a GPU gets is not fixed. On this machine the DISCRETE card is
+/// renderD128 - the first one, the one anything that opens "a render node"
+/// without choosing gets - which is exactly why programs end up on it without
+/// anyone asking them to.
+fn drm_nodes(dev: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dev.join("drm")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name();
+            let name = name.to_str()?;
+            (name.starts_with("card") || name.starts_with("renderD"))
+                .then(|| PathBuf::from("/dev/dri").join(name))
+        })
+        .collect()
+}
+
+fn holders(drm: &[PathBuf]) -> Vec<Holder> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return Vec::new();
     };
@@ -165,21 +195,28 @@ fn holders() -> Vec<Holder> {
             continue;
         };
 
-        let holds = fds.flatten().any(|fd| {
-            std::fs::read_link(fd.path())
-                .map(|target| is_nvidia_node(&target))
-                .unwrap_or(false)
-        });
+        let mut nodes: Vec<String> = fds
+            .flatten()
+            .filter_map(|fd| std::fs::read_link(fd.path()).ok())
+            .filter(|target| is_nvidia_node(target) || drm.iter().any(|n| n == target))
+            .filter_map(|target| target.to_str().map(str::to_owned))
+            .collect();
+        nodes.sort();
+        nodes.dedup();
 
-        if holds {
+        if !nodes.is_empty() {
             let name = sysfs::read_string(&entry.path().join("comm")).unwrap_or_default();
-            found.push(Holder { pid, name });
+            found.push(Holder { pid, name, nodes });
         }
     }
     found.sort_by_key(|h| h.pid);
     found
 }
 
+/// The proprietary driver's own nodes.
+///
+/// Kept alongside the DRM ones rather than replaced by them: a program can
+/// hold either, and holding either is enough to keep the GPU awake.
 fn is_nvidia_node(target: &Path) -> bool {
     // /dev/nvidia0, /dev/nvidiactl, /dev/nvidia-modeset, /dev/nvidia-uvm...
     // but not /dev/nvidia-caps, which is a directory of counters that
@@ -188,6 +225,61 @@ fn is_nvidia_node(target: &Path) -> bool {
         return false;
     };
     target.starts_with("/dev") && name.starts_with("nvidia") && !name.starts_with("nvidia-caps")
+}
+
+/// Adds the holders this process can see to a GPU reported by the daemon.
+///
+/// The daemon runs with an empty capability set, and reading another user's
+/// /proc/<pid>/fd needs one - so it can see the GPU but not who is using it.
+/// A tool running as the user can see the user's own programs, which are
+/// exactly the ones that keep a laptop GPU busy. Both lists are kept: a root
+/// process could be the culprit, and only the daemon would see that one.
+pub fn merge_local_holders(gpu: &mut GpuPower) {
+    let Some(local) = discover() else {
+        return;
+    };
+    for holder in local.holders {
+        if !gpu.holders.iter().any(|h| h.pid == holder.pid) {
+            gpu.holders.push(holder);
+        }
+    }
+    gpu.holders.sort_by_key(|h| h.pid);
+}
+
+/// What to put in front of a command to run it on the discrete GPU.
+pub const OFFLOAD_ENV: &str = "__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia";
+
+/// What to put in front of a command to keep it OFF the discrete GPU.
+///
+/// This is the more useful direction on this machine. The discrete card is
+/// renderD128 - the FIRST render node - so a program that opens "a GPU"
+/// without choosing, or that enumerates all of them to see what is there,
+/// lands on it and keeps it awake for as long as it runs. Firefox's decoder
+/// process and a Qt shell both do exactly that here.
+///
+/// Restricting the EGL and Vulkan driver lists is stronger than asking
+/// politely with DRI_PRIME, which the proprietary driver does not honour: the
+/// process is left with no NVIDIA driver to load, so there is nothing for it
+/// to enumerate. The paths are checked rather than assumed, because handing
+/// someone a command that points at a file they do not have would break the
+/// program it is meant to fix.
+pub fn igpu_env() -> String {
+    let mut parts = vec!["__GLX_VENDOR_LIBRARY_NAME=mesa".to_string()];
+
+    let mesa = "/usr/share/glvnd/egl_vendor.d/50_mesa.json";
+    if Path::new(mesa).exists() {
+        parts.push(format!("__EGL_VENDOR_LIBRARY_FILENAMES={mesa}"));
+    }
+    for icd in [
+        "/usr/share/vulkan/icd.d/radeon_icd.x86_64.json",
+        "/usr/share/vulkan/icd.d/radeon_icd.json",
+    ] {
+        if Path::new(icd).exists() {
+            parts.push(format!("VK_DRIVER_FILES={icd}"));
+            break;
+        }
+    }
+    parts.join(" ")
 }
 
 /// Where the module options live, for reporting whether dynamic power
