@@ -224,6 +224,8 @@ omenctl profile performance   # balanced / performance / low-power
 omenctl profile startup balanced
                               # which profile to start the machine on
 omenctl version               # what is running vs what is installed
+omenctl doctor                # check the whole installation, with remedies
+omenctl doctor --text         # the same, to paste into a bug report
 omenctl reload                # re-read the config
 
 omend --dry-run --once        # show what it would do, writing nothing

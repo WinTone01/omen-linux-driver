@@ -62,6 +62,7 @@
           <button class="device-link"           data-view="performance" role="tab">Performance Control</button>
           <button class="device-link"           data-view="fan"         role="tab">Fan Control</button>
           <button class="device-link"           data-view="lighting"    role="tab">Lighting</button>
+          <button class="device-link"           data-view="diagnosis"   role="tab">Diagnosis</button>
           <button class="device-link"           data-view="settings"    role="tab">Settings</button>
         </nav>
       </div>
@@ -80,6 +81,7 @@
         <button class="main-tab"           data-view="performance" role="tab">Performance Control</button>
         <button class="main-tab"           data-view="fan"         role="tab">Fan Control</button>
         <button class="main-tab"           data-view="lighting"    role="tab">Lighting</button>
+        <button class="main-tab"           data-view="diagnosis"   role="tab">Diagnosis</button>
         <button class="main-tab"           data-view="settings"    role="tab">Settings</button>
       </div>
 
@@ -382,6 +384,23 @@
           </div>
         </section>
 
+        <!-- ── Diagnosis ──────────────────────────────────────── -->
+        <section class="view" data-view="diagnosis" role="tabpanel">
+          <div class="diag-head">
+            <div>
+              <h2 class="panel-head__title">Diagnosis</h2>
+              <p class="hint" id="diag-summary">checking…</p>
+            </div>
+            <div class="btn-row">
+              <button class="btn" id="btn-diag-run">Check again</button>
+              <button class="btn" id="btn-diag-copy">Copy report</button>
+            </div>
+          </div>
+
+          <div class="diag-counts" id="diag-counts"></div>
+          <div id="diag-sections"></div>
+        </section>
+
         <!-- ── Settings ───────────────────────────────────────── -->
         <section class="view" data-view="settings" role="tabpanel">
           <div class="card">
@@ -481,18 +500,6 @@
             </div>
           </div>
 
-          <div class="card">
-            <div class="panel-head"><h2 class="panel-head__title">Diagnostics</h2></div>
-            <p class="hint">
-              The state of the machine, the daemon and the modules as one block of
-              text — the half of a bug report that usually gets left out.
-            </p>
-            <div class="btn-row">
-              <button class="btn" id="btn-diag-copy">Copy report</button>
-              <button class="btn" id="btn-diag-show">Show</button>
-            </div>
-            <pre class="diag" id="diag-out" hidden></pre>
-          </div>
         </section>
 
       </div>

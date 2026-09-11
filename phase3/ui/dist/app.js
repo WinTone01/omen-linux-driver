@@ -87,6 +87,21 @@ async function mockInvoke(cmd, args) {
       mockState.daemon.startup_profile = args.profile;
       return args.profile ? `${args.profile} will be selected at startup`
                           : "the startup profile will be left to the firmware";
+    case "diagnose":
+      return {
+        sections: [
+          { title: "Hardware", checks: [
+            { id: "board", title: "Board", verdict: "ok", detail: "8D24, the one this is built for", fix: null },
+          ]},
+          { title: "Thermal", checks: [
+            { id: "dgpu_temp", title: "Discrete GPU temperature", verdict: "warn",
+              detail: "the service is not watching it - the curve only follows the CPU",
+              fix: "sudo modprobe ec_sys (read-only), then: sudo systemctl restart omend" },
+          ]},
+        ],
+      };
+    case "diagnose_text":
+      return "omen-control 0.1.0 - 1 thing worth knowing about\n";
     case "firmware":
       return {
         available: true, error: null, updates: true,
@@ -1422,16 +1437,6 @@ function bindSettings() {
   $("#btn-ver-copy").addEventListener("click", () =>
     copyText($("#ver-commands").textContent, "commands"));
 
-  $("#btn-diag-copy").addEventListener("click", async () => {
-    const text = await invoke("diagnostics");
-    await copyText(text, "report");
-  });
-  $("#btn-diag-show").addEventListener("click", async () => {
-    const out = $("#diag-out");
-    if (!out.hidden) { out.hidden = true; return; }
-    out.textContent = await invoke("diagnostics");
-    out.hidden = false;
-  });
 }
 
 /* ── firmware ────────────────────────────────────────────────────
@@ -1538,6 +1543,124 @@ function bindFirmware() {
   }
 }
 
+/* ── diagnosis ───────────────────────────────────────────────────
+ *
+ * The checks live in omen-core, so this page and "omenctl doctor" ask the
+ * same questions and get the same answers. All this does is render them -
+ * and render the remedy, which is the half a diagnostic usually leaves out.
+ *
+ * Not on the poll: the checks talk to the daemon, walk /proc and shell out to
+ * modinfo. Run when the page is opened, and when asked.
+ */
+
+let diagnosed = false;
+
+const VERDICT_LABEL = { ok: "OK", warn: "WARN", fail: "FAIL", skip: "—" };
+
+function countChecks(report, verdict) {
+  return report.sections.reduce(
+    (n, s) => n + s.checks.filter((c) => c.verdict === verdict).length, 0);
+}
+
+async function runDiagnosis(force) {
+  if (diagnosed && !force) return;
+  diagnosed = true;
+
+  $("#diag-summary").textContent = "checking…";
+  $("#btn-diag-run").disabled = true;
+
+  let report;
+  try {
+    report = await invoke("diagnose");
+  } catch (e) {
+    $("#diag-summary").textContent = String(e);
+    $("#btn-diag-run").disabled = false;
+    return;
+  }
+  $("#btn-diag-run").disabled = false;
+
+  const fail = countChecks(report, "fail");
+  const warn = countChecks(report, "warn");
+  const ok = countChecks(report, "ok");
+
+  $("#diag-summary").textContent =
+    fail && warn ? `${fail} broken, ${warn} worth knowing about`
+    : fail ? `${fail} thing${fail > 1 ? "s" : ""} broken`
+    : warn ? `${warn} thing${warn > 1 ? "s" : ""} worth knowing about`
+    : "everything checked is working";
+
+  const counts = $("#diag-counts");
+  counts.replaceChildren();
+  for (const [cls, n, label] of [
+    ["is-fail", fail, "broken"],
+    ["is-warn", warn, "to know about"],
+    ["is-ok", ok, "working"],
+  ]) {
+    if (!n) continue;
+    const pill = document.createElement("span");
+    pill.className = `diag-count ${cls}`;
+    const b = document.createElement("b");
+    b.textContent = String(n);
+    pill.append(b, document.createTextNode(label));
+    counts.append(pill);
+  }
+
+  const host = $("#diag-sections");
+  host.replaceChildren();
+  for (const section of report.sections) {
+    const wrap = document.createElement("section");
+    wrap.className = "diag-section";
+
+    const h = document.createElement("h3");
+    h.className = "diag-section__title";
+    h.textContent = section.title;
+    wrap.append(h);
+
+    for (const check of section.checks) {
+      const row = document.createElement("div");
+      row.className = `diag-row is-${check.verdict}`;
+
+      const badge = document.createElement("span");
+      badge.className = `diag-badge is-${check.verdict}`;
+      badge.textContent = VERDICT_LABEL[check.verdict] ?? check.verdict;
+
+      const body = document.createElement("div");
+      const title = document.createElement("div");
+      title.className = "diag-row__title";
+      title.textContent = check.title;
+      const detail = document.createElement("div");
+      detail.className = "diag-row__detail";
+      detail.textContent = check.detail;
+      body.append(title, detail);
+
+      if (check.fix) {
+        const fix = document.createElement("div");
+        fix.className = "diag-row__fix";
+        fix.textContent = check.fix;
+        body.append(fix);
+      }
+
+      row.append(badge, body);
+      wrap.append(row);
+    }
+    host.append(wrap);
+  }
+}
+
+function bindDiagnosis() {
+  $("#btn-diag-run").addEventListener("click", () => runDiagnosis(true));
+  $("#btn-diag-copy").addEventListener("click", async () => {
+    const text = await invoke("diagnose_text");
+    await copyText(text, "report");
+  });
+
+  $$('[data-view="diagnosis"]').forEach((tab) =>
+    tab.addEventListener("click", () => runDiagnosis(false)));
+  if ($('.view[data-view="diagnosis"]')?.classList.contains("is-active")) {
+    runDiagnosis(false);
+  }
+}
+
 async function refresh() {
   try {
     state = await invoke("get_state");
@@ -1575,6 +1698,7 @@ bindApps();
 bindGraphics();
 bindSettings();
 bindFirmware();
+bindDiagnosis();
 loadSettings();
 renderVersions();
 refresh();

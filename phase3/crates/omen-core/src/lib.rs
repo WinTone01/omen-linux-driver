@@ -15,6 +15,7 @@ pub mod anim;
 pub mod apps;
 pub mod config;
 pub mod curve;
+pub mod diagnose;
 pub mod error;
 pub mod fan;
 pub mod gpu;

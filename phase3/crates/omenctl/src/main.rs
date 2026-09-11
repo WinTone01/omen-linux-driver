@@ -64,6 +64,8 @@ USAGE:
     omenctl reload                 Make the daemon re-read its configuration
     omenctl version                Versions, and whether anything running is
                                    older than what is installed
+    omenctl doctor [--text]        Check the whole installation and say what
+                                   to do about anything that is wrong
 
 Control commands go to omend over a socket; the daemon is the only thing that
 writes to the fan. Run with sudo if you get a permission error.
@@ -84,6 +86,7 @@ fn main() -> ExitCode {
         "profile" => set_profile(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
         "version" | "--version" | "-V" => versions(),
+        "doctor" | "check" => doctor(&args),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -384,6 +387,78 @@ fn versions() -> Result<()> {
         println!("  or the fans are under load.");
     }
     Ok(())
+}
+
+/// The whole installation, checked.
+///
+/// `--text` prints the same thing without colour or alignment, which is the
+/// form to paste into a bug report.
+fn doctor(args: &[String]) -> Result<()> {
+    use omen_core::diagnose::{self, Verdict};
+
+    let report = diagnose::run();
+
+    if args.iter().any(|a| a == "--text") {
+        print!("{}", report.to_text());
+        return Ok(());
+    }
+
+    // Colour only when something is reading it. A redirected doctor run is
+    // usually on its way into a text field.
+    let tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let paint = |v: Verdict| -> String {
+        let label = v.label();
+        if !tty {
+            return format!("{label:<4}");
+        }
+        let colour = match v {
+            Verdict::Ok => "32",
+            Verdict::Warn => "33",
+            Verdict::Fail => "31",
+            Verdict::Skip => "90",
+        };
+        format!("\x1b[{colour}m{label:<4}\x1b[0m")
+    };
+
+    for section in &report.sections {
+        println!("\n{}", section.title.to_uppercase());
+        for c in &section.checks {
+            println!("  {} {:<26} {}", paint(c.verdict), c.title, c.detail);
+            if let Some(fix) = &c.fix {
+                // Wrapped by hand rather than by a crate: the fixes are
+                // written to fit, and a wrapping dependency for five lines of
+                // output is not worth the build time.
+                for line in wrap(fix, 68) {
+                    println!("       {line}");
+                }
+            }
+        }
+    }
+
+    println!("\n{}", report.summary());
+    if report.count(Verdict::Fail) > 0 || report.count(Verdict::Warn) > 0 {
+        println!("Paste-able version: omenctl doctor --text");
+    }
+    Ok(())
+}
+
+/// Greedy word wrap.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.len() + 1 + word.len() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 fn gpu_power(args: &[String]) -> Result<()> {

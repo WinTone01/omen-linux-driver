@@ -732,3 +732,59 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .fw-row__ver { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
 .fw-row__new { font-family: var(--mono); font-size: 11px; color: var(--omen-red); }
 .fw-row__flag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+
+/* ── diagnosis ───────────────────────────────────────────────── */
+
+.diag-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; margin-bottom: 14px;
+}
+.diag-head .hint { margin: 4px 0 0; }
+
+.diag-counts { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.diag-counts:empty { display: none; }
+.diag-count {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 5px 10px; border-radius: var(--radius-md);
+  background: var(--bg-card); border: 1px solid var(--border);
+  font-size: 11px; color: var(--text-muted);
+}
+.diag-count b { font-size: 13px; color: var(--text); }
+.diag-count.is-fail b { color: var(--omen-red); }
+.diag-count.is-warn b { color: var(--accent-amber); }
+.diag-count.is-ok   b { color: var(--accent-teal); }
+
+.diag-section { margin-bottom: 18px; }
+.diag-section__title {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text-muted); margin: 0 0 8px 2px;
+}
+
+.diag-row {
+  display: grid; grid-template-columns: 58px 1fr; gap: 10px;
+  padding: 10px 12px; border-radius: var(--radius-md);
+  background: var(--bg-card); border: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.diag-row.is-fail { border-color: var(--omen-red); }
+.diag-row.is-warn { border-color: var(--accent-amber); }
+
+.diag-badge {
+  align-self: start; text-align: center;
+  font-size: 10px; letter-spacing: .06em; font-weight: 600;
+  padding: 3px 0; border-radius: var(--radius-sm);
+  background: var(--bg-elevated); color: var(--text-muted);
+}
+.diag-badge.is-ok   { color: var(--accent-teal); }
+.diag-badge.is-warn { color: var(--accent-amber); }
+.diag-badge.is-fail { background: var(--omen-red); color: #fff; }
+
+.diag-row__title { font-size: 12px; font-weight: 600; }
+.diag-row__detail { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+/* The fix is the half a diagnostic usually leaves out, so it is set apart
+ * rather than run on from the finding. */
+.diag-row__fix {
+  font-size: 11px; color: var(--text-muted); margin-top: 7px;
+  padding-left: 9px; border-left: 2px solid var(--border);
+}
+.diag-row__fix code { font-size: 11px; }
