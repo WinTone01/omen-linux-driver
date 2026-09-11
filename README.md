@@ -23,6 +23,52 @@ evidence. Where the hardware refused to do something, that is recorded too —
 this project has been wrong in public twice, and both corrections are in the
 git history.
 
+## Install
+
+One line, from anywhere:
+
+```bash
+git clone https://github.com/WinTone01/omen-linux-driver.git && cd omen-linux-driver && ./install.sh
+```
+
+<details>
+<summary>Same thing, one step at a time</summary>
+
+<br>
+
+```bash
+git clone https://github.com/WinTone01/omen-linux-driver.git
+cd omen-linux-driver
+./install.sh
+```
+
+Over SSH instead: `git clone git@github.com:WinTone01/omen-linux-driver.git`
+
+</details>
+
+That is the whole thing. It identifies the machine first and refuses to go on
+if it is not an HP OMEN or Victus, checks what is missing before building
+anything, and installs three pieces in the order they depend on each other:
+
+| | Gives you |
+|---|---|
+| `hp-wmi` with the 8D24 entry | `pwm1`, fan tachometers, `platform_profile` |
+| `omen-kbd-rgb` | four RGB zones, `gpu_mux_mode` |
+| `omen-control` | `omend`, `omenctl`, `omen-ui`, the unit and the udev rules |
+
+```console
+$ ./install.sh --check          # nothing is installed, it just looks
+[1/2] This machine
+    vendor   HP
+    model    OMEN Gaming Laptop 16-ap0xxx
+    board    8D24
+  ✓ OMEN 16-ap0xxx (8D24) — the board this was built and verified on
+```
+
+`--no-gui` skips the window, `--yes` answers the prompts, `--uninstall` takes
+it back out. On Arch it goes through `makepkg`, so pacman owns the files;
+elsewhere it builds with `cargo` and DKMS directly.
+
 ## The window
 
 <table>
@@ -120,52 +166,6 @@ flowchart LR
 ```
 
 </details>
-
-## Install
-
-One line, from anywhere:
-
-```bash
-git clone https://github.com/WinTone01/omen-linux-driver.git && cd omen-linux-driver && ./install.sh
-```
-
-<details>
-<summary>Same thing, one step at a time</summary>
-
-<br>
-
-```bash
-git clone https://github.com/WinTone01/omen-linux-driver.git
-cd omen-linux-driver
-./install.sh
-```
-
-Over SSH instead: `git clone git@github.com:WinTone01/omen-linux-driver.git`
-
-</details>
-
-That is the whole thing. It identifies the machine first and refuses to go on
-if it is not an HP OMEN or Victus, checks what is missing before building
-anything, and installs three pieces in the order they depend on each other:
-
-| | Gives you |
-|---|---|
-| `hp-wmi` with the 8D24 entry | `pwm1`, fan tachometers, `platform_profile` |
-| `omen-kbd-rgb` | four RGB zones, `gpu_mux_mode` |
-| `omen-control` | `omend`, `omenctl`, `omen-ui`, the unit and the udev rules |
-
-```console
-$ ./install.sh --check          # nothing is installed, it just looks
-[1/2] This machine
-    vendor   HP
-    model    OMEN Gaming Laptop 16-ap0xxx
-    board    8D24
-  ✓ OMEN 16-ap0xxx (8D24) — the board this was built and verified on
-```
-
-`--no-gui` skips the window, `--yes` answers the prompts, `--uninstall` takes
-it back out. On Arch it goes through `makepkg`, so pacman owns the files;
-elsewhere it builds with `cargo` and DKMS directly.
 
 ## From the terminal
 
