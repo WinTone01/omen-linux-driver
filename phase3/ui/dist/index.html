@@ -61,6 +61,8 @@
           <button class="device-link is-active" data-view="vitals"      role="tab">System Vitals</button>
           <button class="device-link"           data-view="performance" role="tab">Performance Control</button>
           <button class="device-link"           data-view="fan"         role="tab">Fan Control</button>
+          <button class="device-link"           data-view="automation"  role="tab">Game Profiles</button>
+          <button class="device-link"           data-view="graphics"    role="tab">Graphics</button>
           <button class="device-link"           data-view="lighting"    role="tab">Lighting</button>
           <button class="device-link"           data-view="diagnosis"   role="tab">Diagnosis</button>
           <button class="device-link"           data-view="settings"    role="tab">Settings</button>
@@ -80,6 +82,8 @@
         <button class="main-tab is-active" data-view="vitals"      role="tab">System Vitals</button>
         <button class="main-tab"           data-view="performance" role="tab">Performance Control</button>
         <button class="main-tab"           data-view="fan"         role="tab">Fan Control</button>
+        <button class="main-tab"           data-view="automation"  role="tab">Game Profiles</button>
+        <button class="main-tab"           data-view="graphics"    role="tab">Graphics</button>
         <button class="main-tab"           data-view="lighting"    role="tab">Lighting</button>
         <button class="main-tab"           data-view="diagnosis"   role="tab">Diagnosis</button>
         <button class="main-tab"           data-view="settings"    role="tab">Settings</button>
@@ -233,106 +237,6 @@
           </div>
 
           <div class="card">
-            <div class="panel-head">
-              <h2 class="panel-head__title">Power source</h2>
-              <span class="panel-head__note" id="power-note"></span>
-            </div>
-            <p class="hint">
-              What the machine should do on mains and on battery. Applied when the
-              source changes, not continuously — so you can still override it while
-              plugged in. An application profile wins over these.
-            </p>
-            <dl class="kv kv--tight">
-              <dt>On mains</dt>
-              <dd class="power-rule">
-                <select id="power-ac-profile"></select>
-                <select id="power-ac-fan"></select>
-              </dd>
-              <dt>On battery</dt>
-              <dd class="power-rule">
-                <select id="power-bat-profile"></select>
-                <select id="power-bat-fan"></select>
-              </dd>
-            </dl>
-          </div>
-
-          <div class="card" id="mux-card" hidden>
-            <div class="panel-head">
-              <h2 class="panel-head__title">Graphics Switcher</h2>
-              <span class="panel-head__note" id="mux-note"></span>
-            </div>
-            <div class="power-grid" id="mux-cards"></div>
-            <p class="hint">
-              Changing this re-wires the screen during the next boot — nothing
-              happens until you restart. Hybrid keeps the discrete GPU asleep
-              until something asks for it; Discrete drives the panel from it
-              directly, which is faster in games and costs battery everywhere
-              else.
-            </p>
-            <p class="hint">
-              Know the way back before choosing Discrete: the panel is then driven
-              by the NVIDIA GPU, and if that does not come up you need a working
-              machine to undo it. A text console (Ctrl+Alt+F3) or ssh is enough —
-              <code>omenctl gpu mux hybrid</code> does not need a desktop.
-            </p>
-          </div>
-
-          <div class="card" id="gfx-card">
-            <div class="panel-head">
-              <h2 class="panel-head__title">Graphics</h2>
-              <span class="panel-head__note" id="gfx-note"></span>
-            </div>
-            <p class="hint" id="gfx-layout"></p>
-            <div class="seg-4 seg-4--two" id="gfx-power">
-              <button data-power="auto">Let it sleep</button>
-              <button data-power="on">Keep it awake</button>
-            </div>
-            <dl class="kv kv--tight">
-              <dt>Runtime state</dt><dd id="gfx-state">—</dd>
-              <dt>Time suspended</dt><dd id="gfx-suspended">—</dd>
-              <dt>Holding it awake</dt><dd id="gfx-holders">—</dd>
-            </dl>
-            <p class="hint">
-              There is no graphics mux on this board, so there is no panel to
-              switch: the screen is wired to the integrated GPU and the NVIDIA
-              card drives HDMI and anything you offload to it. To run a program
-              on it, put this in front of the command — in Steam, before
-              <code>%command%</code>:
-            </p>
-            <div class="copy-row">
-              <code id="gfx-offload">__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia</code>
-              <button class="btn btn--sm" id="btn-gfx-copy">Copy</button>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="panel-head">
-              <h2 class="panel-head__title">Application profiles</h2>
-              <span class="panel-head__note" id="apps-note"></span>
-            </div>
-            <p class="hint">
-              While one of these programs is running, the machine switches to the
-              settings you give it and goes back to what it was doing when the
-              program exits. The first entry that is running wins.
-            </p>
-            <div id="apps-list" class="app-list"></div>
-            <div class="app-add">
-              <input type="text" id="app-process" placeholder="process name, e.g. cs2" spellcheck="false">
-              <select id="app-profile"></select>
-              <select id="app-fan">
-                <option value="">fan: leave alone</option>
-                <option value="curve">fan: curve</option>
-                <option value="max">fan: max</option>
-                <option value="2400">fan: 2400 RPM</option>
-                <option value="3000">fan: 3000 RPM</option>
-                <option value="3600">fan: 3600 RPM</option>
-                <option value="4200">fan: 4200 RPM</option>
-              </select>
-              <button class="btn btn--sm" id="btn-app-add">Add</button>
-            </div>
-          </div>
-
-          <div class="card">
             <div class="panel-head"><h2 class="panel-head__title">Configuration</h2></div>
             <p class="hint">
               The fan curve lives in <code>/etc/omen/omend.toml</code>. After editing
@@ -429,6 +333,125 @@
               <div><span class="mini-label">PWM</span><span class="mini-value" id="f-pwm">—</span></div>
             </div>
           </div>
+        </section>
+
+        <!-- ── Game Profiles ──────────────────────────────────── -->
+        <section class="view" data-view="automation" role="tabpanel">
+          <div class="panel-head"><h2 class="panel-head__title">Automatic profiles</h2></div>
+          <p class="hint hint--lede">
+            Two rules, applied in that order: a running program wins over the
+            power source, because "this game is open" says more about what the
+            machine should be doing than "the charger is in".
+          </p>
+
+          <div class="card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Application profiles</h2>
+              <span class="panel-head__note" id="apps-note"></span>
+            </div>
+            <p class="hint">
+              While one of these programs is running, the machine switches to the
+              settings you give it and goes back to what it was doing when the
+              program exits. The first entry that is running wins.
+            </p>
+            <div id="apps-list" class="app-list"></div>
+            <div class="app-add">
+              <input type="text" id="app-process" placeholder="process name, e.g. cs2" spellcheck="false">
+              <select id="app-profile"></select>
+              <select id="app-fan">
+                <option value="">fan: leave alone</option>
+                <option value="curve">fan: curve</option>
+                <option value="max">fan: max</option>
+                <option value="2400">fan: 2400 RPM</option>
+                <option value="3000">fan: 3000 RPM</option>
+                <option value="3600">fan: 3600 RPM</option>
+                <option value="4200">fan: 4200 RPM</option>
+              </select>
+              <button class="btn btn--sm" id="btn-app-add">Add</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Power source</h2>
+              <span class="panel-head__note" id="power-note"></span>
+            </div>
+            <p class="hint">
+              What the machine should do on mains and on battery. Applied when the
+              source changes, not continuously — so you can still override it while
+              plugged in. An application profile wins over these.
+            </p>
+            <dl class="kv kv--tight">
+              <dt>On mains</dt>
+              <dd class="power-rule">
+                <select id="power-ac-profile"></select>
+                <select id="power-ac-fan"></select>
+              </dd>
+              <dt>On battery</dt>
+              <dd class="power-rule">
+                <select id="power-bat-profile"></select>
+                <select id="power-bat-fan"></select>
+              </dd>
+            </dl>
+          </div>
+
+        </section>
+
+        <!-- ── Graphics ───────────────────────────────────────── -->
+        <section class="view" data-view="graphics" role="tabpanel">
+          <div class="panel-head"><h2 class="panel-head__title">Graphics</h2></div>
+          <p class="hint hint--lede">
+            Which GPU drives the screen, and what the discrete one is doing when
+            nothing is asking it to.
+          </p>
+
+          <div class="card" id="mux-card" hidden>
+            <div class="panel-head">
+              <h2 class="panel-head__title">Graphics Switcher</h2>
+              <span class="panel-head__note" id="mux-note"></span>
+            </div>
+            <div class="power-grid" id="mux-cards"></div>
+            <p class="hint">
+              Changing this re-wires the screen during the next boot — nothing
+              happens until you restart. Hybrid keeps the discrete GPU asleep
+              until something asks for it; Discrete drives the panel from it
+              directly, which is faster in games and costs battery everywhere
+              else.
+            </p>
+            <p class="hint">
+              Know the way back before choosing Discrete: the panel is then driven
+              by the NVIDIA GPU, and if that does not come up you need a working
+              machine to undo it. A text console (Ctrl+Alt+F3) or ssh is enough —
+              <code>omenctl gpu mux hybrid</code> does not need a desktop.
+            </p>
+          </div>
+
+          <div class="card" id="gfx-card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Discrete GPU power</h2>
+              <span class="panel-head__note" id="gfx-note"></span>
+            </div>
+            <p class="hint" id="gfx-layout"></p>
+            <div class="seg-4 seg-4--two" id="gfx-power">
+              <button data-power="auto">Let it sleep</button>
+              <button data-power="on">Keep it awake</button>
+            </div>
+            <dl class="kv kv--tight">
+              <dt>Runtime state</dt><dd id="gfx-state">—</dd>
+              <dt>Time suspended</dt><dd id="gfx-suspended">—</dd>
+              <dt>Holding it awake</dt><dd id="gfx-holders">—</dd>
+            </dl>
+            <p class="hint">
+              In Hybrid, programs run on the integrated GPU unless they ask for
+              the other one. To make one ask, put this in front of the command —
+              in Steam, before <code>%command%</code>:
+            </p>
+            <div class="copy-row">
+              <code id="gfx-offload">__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia</code>
+              <button class="btn btn--sm" id="btn-gfx-copy">Copy</button>
+            </div>
+          </div>
+
         </section>
 
         <!-- ── Lighting ───────────────────────────────────────── -->

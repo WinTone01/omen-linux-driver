@@ -69,8 +69,9 @@ const I18N = {
     "Runtime state": "Çalışma durumu",
     "Time suspended": "Uyuduğu süre",
     "Holding it awake": "Uyanık tutan",
-    "There is no graphics mux on this board, so there is no panel to switch: the screen is wired to the integrated GPU and the NVIDIA card drives HDMI and anything you offload to it. To run a program on it, put this in front of the command — in Steam, before":
-      "Bu kartta MUX yok, yani anahtarlanacak bir panel de yok: ekran tümleşik GPU'ya bağlı, NVIDIA kartı ise HDMI'ı ve ona yönlendirdiğin her şeyi sürüyor. Bir programı onun üzerinde çalıştırmak için komutun önüne şunu koy — Steam'de şunun önüne:",
+    "In Hybrid, programs run on the integrated GPU unless they ask for the other one. To make one ask, put this in front of the command — in Steam, before":
+      "Hibritte programlar, diğerini istemedikçe tümleşik GPU'da çalışır. İstemesini sağlamak için komutun önüne şunu koy — Steam'de şunun önüne:",
+    "Discrete GPU power": "Ayrık GPU gücü",
 
     "Application profiles": "Uygulama profilleri",
     "While one of these programs is running, the machine switches to the settings you give it and goes back to what it was doing when the program exits. The first entry that is running wins.":
@@ -355,4 +356,14 @@ Object.assign(I18N.tr, {
   "Hue": "Renk tonu",
   "Static": "Sabit",
   "Off": "Kapalı",
+});
+
+/* The two pages that were split out of Performance Control. */
+Object.assign(I18N.tr, {
+  "Game Profiles": "Oyun Profilleri",
+  "Automatic profiles": "Otomatik profiller",
+  "Two rules, applied in that order: a running program wins over the power source, because \"this game is open\" says more about what the machine should be doing than \"the charger is in\".":
+    "İki kural, bu sırayla uygulanır: çalışan bir program güç kaynağına üstün gelir, çünkü \"bu oyun açık\" makinenin ne yapması gerektiği hakkında \"şarj takılı\"dan daha fazlasını söyler.",
+  "Which GPU drives the screen, and what the discrete one is doing when nothing is asking it to.":
+    "Ekranı hangi GPU sürüyor, ve kimse istemezken ayrık olan ne yapıyor.",
 });

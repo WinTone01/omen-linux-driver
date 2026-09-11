@@ -17,6 +17,7 @@
 
 mod fwupd;
 mod settings;
+mod single;
 mod sysinfo;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -247,6 +248,24 @@ fn get_state() -> UiState {
                 .ok()
                 .and_then(|c| c.curve().ok())
         });
+
+    // The daemon reports the GPU, but not usefully who is holding it awake:
+    // it runs with an empty capability set, and reading another user's
+    // /proc/<pid>/fd needs one. This process is the user, so it can see the
+    // user's own programs - which are exactly the ones keeping a laptop GPU
+    // busy. The daemon's list is kept when it has one (a root process could
+    // be the culprit) and this one is merged in.
+    let mut daemon = daemon;
+    if let (Some(snap), Some(local)) = (daemon.as_mut(), omen_core::gpu::discover()) {
+        if let Some(gpu) = snap.gpu.as_mut() {
+            for holder in local.holders {
+                if !gpu.holders.iter().any(|h| h.pid == holder.pid) {
+                    gpu.holders.push(holder);
+                }
+            }
+            gpu.holders.sort_by_key(|h| h.pid);
+        }
+    }
 
     let (leds, leds_error, leds_writable) = match Leds::discover() {
         Ok(l) => (Some(l.state()), None, l.writable()),
@@ -660,6 +679,13 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 fn main() {
+    // Before anything else: if this app is already running, ask that copy to
+    // show itself and stop here. See single.rs - a second instance reaching
+    // GTK takes the first one down with it.
+    if !single::claim() {
+        return;
+    }
+
     tauri::Builder::default()
         .setup(|app| {
             match build_tray(app) {
@@ -669,6 +695,8 @@ fn main() {
                      Install libappindicator-gtk3 for one."
                 ),
             }
+
+            single::listen(app.handle());
 
             // Starting hidden is only offered when there is a tray to be
             // hidden into; without one the user would have a running process
@@ -728,4 +756,6 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("could not start the OMEN Control window");
+
+    single::release();
 }
