@@ -349,6 +349,9 @@ Object.assign(I18N.tr, {
   "Changing this re-wires the screen during the next boot — nothing happens until you restart. Hybrid keeps the discrete GPU asleep until something asks for it; Discrete drives the panel from it directly, which is faster in games and costs battery everywhere else.":
     "Bunu değiştirmek ekranı bir sonraki açılışta yeniden bağlar — yeniden başlatana kadar hiçbir şey olmaz. Hibrit, ayrık GPU'yu biri isteyene kadar uykuda tutar; Ayrık ise paneli doğrudan ondan sürer, ki bu oyunlarda daha hızlı ve diğer her yerde pilden yer.",
 
+  "Know the way back before choosing Discrete: the panel is then driven by the NVIDIA GPU, and if that does not come up you need a working machine to undo it. A text console (Ctrl+Alt+F3) or ssh is enough —":
+    "Ayrık'ı seçmeden önce dönüş yolunu bil: panel o zaman NVIDIA GPU tarafından sürülür, ve o açılmazsa geri almak için çalışan bir makineye ihtiyacın olur. Bir metin konsolu (Ctrl+Alt+F3) ya da ssh yeter —",
+  "does not need a desktop.": "masaüstü gerektirmiyor.",
   "Hue": "Renk tonu",
   "Static": "Sabit",
   "Off": "Kapalı",

@@ -549,6 +549,11 @@ fn gpu_power(args: &[String]) -> Result<()> {
             field("supported", mux.supported.join(" "));
             println!("\n  Switching takes effect at the next boot: the firmware re-wires");
             println!("  the panel during POST, nothing changes while the machine is up.");
+            println!();
+            println!("  Know the way back before switching to discrete. The panel is then");
+            println!("  driven by the NVIDIA GPU, and if that does not come up you need a");
+            println!("  working machine to undo it: a text console (Ctrl+Alt+F3) or ssh is");
+            println!("  enough, since 'omenctl gpu mux hybrid' does not need a desktop.");
             return Ok(());
         };
         return client::report(client::send(&Request::SetGpuMux { mode: mode.clone() })?);
