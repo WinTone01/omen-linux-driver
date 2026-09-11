@@ -12,6 +12,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 omen-core = { workspace = true }
-tauri = { version = "2", features = [] }
+# tray-icon: the panel icon. image-png: the tray needs to decode the icon,
+# and ours are PNG.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -26,6 +26,12 @@
   },
   "bundle": {
     "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ],
     "targets": ["deb", "rpm", "appimage"],
     "category": "Utility",
     "shortDescription": "Fan, thermal and RGB control for the HP OMEN 16-ap0xxx"

@@ -15,10 +15,24 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde::Serialize;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, WindowEvent,
+};
 
 use omen_core::ipc::{client, ControlMode, Request, Response, Snapshot};
 use omen_core::leds::{LedState, Leds, Rgb};
+
+/// Whether the tray icon actually came up.
+///
+/// Closing to the tray is only safe if there is a tray to close to. Without
+/// libappindicator the icon never appears, and hiding the window then would
+/// leave the user with a running process and no way back to it.
+static HAS_TRAY: AtomicBool = AtomicBool::new(false);
 
 /// Everything the UI needs for one refresh, in a single round trip.
 #[derive(Debug, Serialize)]
@@ -299,8 +313,78 @@ fn set_brightness(value: u8) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn show_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Builds the tray icon, or explains why it could not.
+///
+/// Not fatal: the window works on its own, and a laptop without
+/// libappindicator should still get the app rather than a failed start.
+fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Open OMEN Control", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or_else(|| tauri::Error::UnknownPath)?;
+
+    TrayIconBuilder::with_id("omen-tray")
+        .icon(icon)
+        .tooltip("OMEN Control")
+        .menu(&menu)
+        // The menu belongs on the right button; the left one opens the
+        // window, which is what people expect of a tray icon.
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
+        .setup(|app| {
+            match build_tray(app) {
+                Ok(()) => HAS_TRAY.store(true, Ordering::Relaxed),
+                Err(e) => eprintln!(
+                    "no tray icon ({e}); closing the window will quit. \
+                     Install libappindicator-gtk3 for one."
+                ),
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Close to the tray rather than exiting, the way a control panel
+            // that watches temperatures should behave - but only when there
+            // is a tray to reopen it from.
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if HAS_TRAY.load(Ordering::Relaxed) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_state,
             set_mode,
