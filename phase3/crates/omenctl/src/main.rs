@@ -116,10 +116,13 @@ fn field(name: &str, value: impl std::fmt::Display) {
 }
 
 fn status() -> Result<()> {
+    let mut daemon_temps: Option<Vec<(String, f32)>> = None;
+
     // When the daemon is running its view is richer: drive mode, whether the
     // critical cutout has tripped, the target setpoint. Otherwise we fall
     // back to reading sysfs.
     if let Ok(Response::Ok(snap)) = client::send(&Request::Status) {
+        daemon_temps = Some(snap.temps.clone());
         println!("omend");
         field("mode", snap.mode.map(|m| m.to_string()).unwrap_or_default());
         if snap.safety_fallback {
@@ -208,19 +211,35 @@ fn status() -> Result<()> {
     }
 
     println!("\ntemperatures");
-    match Thermal::discover() {
-        Ok(t) => {
-            for (label, value) in t.read_all() {
-                match value {
-                    Ok(c) => field(&label, format!("{c:.1} C")),
-                    Err(e) => field(&label, format!("unreadable ({e})")),
-                }
-            }
-            if let Ok((label, c)) = t.hottest() {
-                println!("  -> driving the curve: {label} {c:.1} C");
+    // The daemon's list when it is reachable, ours otherwise.
+    //
+    // These differ, and the daemon's is the one that matters: it runs as root
+    // and can read the EC, where the discrete GPU lives. Showing our own list
+    // would quietly omit the sensor the curve is most likely to be driven by
+    // under load, and give the impression it is not being watched.
+    match daemon_temps {
+        Some(temps) if !temps.is_empty() => {
+            for (label, c) in &temps {
+                field(label, format!("{c:.1} C"));
             }
         }
-        Err(e) => println!("  {e}"),
+        _ => match Thermal::discover() {
+            Ok(t) => {
+                for (label, value) in t.read_all() {
+                    match value {
+                        Ok(c) => field(&label, format!("{c:.1} C")),
+                        Err(e) => field(&label, format!("unreadable ({e})")),
+                    }
+                }
+                println!(
+                    "  (omend not reachable; the EC sensors it reads as root are missing here)"
+                );
+                if let Ok((label, c)) = t.hottest() {
+                    println!("  -> driving the curve: {label} {c:.1} C");
+                }
+            }
+            Err(e) => println!("  {e}"),
+        },
     }
 
     Ok(())

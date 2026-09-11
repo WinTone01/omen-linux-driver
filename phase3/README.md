@@ -29,7 +29,13 @@ the worst kind: fans that stay quiet while the machine cooks.
 
 So the dGPU is read from the EC instead, one byte at `0xB7` (Phase 1 §4:
 `GTMP`). The omen-space project reads the same register on the same family,
-which is an independent confirmation of the Phase 1 map.
+which is an independent confirmation of the Phase 1 map — and the reading
+itself was checked against the vendor tool:
+
+```
+dgpu/ec      65.0 C
+nvidia-smi   65
+```
 
 That needs the `ec_sys` module, loaded **read-only** — omend only ever reads
 temperatures, and everything that writes goes through hp-wmi's hwmon
