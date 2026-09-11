@@ -119,7 +119,20 @@ fn handle(stream: UnixStream, shared: &Shared, config_path: &Path) -> Result<()>
                 message: format!("could not parse the request: {e}"),
             },
         };
-        let mut json = serde_json::to_string(&response)?;
+        // A reply that cannot be serialised used to drop the connection with
+        // only a debug line, which looks exactly like a hung daemon from the
+        // client side. It has happened twice, both times for the same reason
+        // (serde cannot put a sequence under an internal tag), so answer with
+        // the error instead of disappearing.
+        let mut json = match serde_json::to_string(&response) {
+            Ok(json) => json,
+            Err(e) => {
+                error!("a reply could not be serialised: {e}");
+                serde_json::to_string(&Response::Error {
+                    message: format!("the daemon could not encode its reply: {e}"),
+                })?
+            }
+        };
         json.push('\n');
         writer.write_all(json.as_bytes())?;
         writer.flush()?;
@@ -130,6 +143,13 @@ fn handle(stream: UnixStream, shared: &Shared, config_path: &Path) -> Result<()>
 fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
     match req {
         Request::Status => Response::Ok(Box::new(shared.snapshot())),
+
+        // Capped here as well as in the daemon: a client asking for a million
+        // entries should not be able to make the daemon build a million-entry
+        // reply.
+        Request::History { limit } => Response::History {
+            decisions: shared.history(limit.min(500)),
+        },
 
         Request::SetMode(mode) => {
             info!("request: mode -> {mode}");

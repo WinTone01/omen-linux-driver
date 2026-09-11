@@ -26,6 +26,9 @@ pub struct Inner {
     pub reload: bool,
     /// The last tick's view; this is what `status` returns.
     pub snapshot: Snapshot,
+    /// The decision log. Kept here rather than read from the loop's own copy
+    /// because the listener thread must not borrow the loop's state.
+    pub history: Vec<omen_core::ipc::Decision>,
     /// Incremented on every completed loop iteration, so synchronous requests
     /// can answer "has my turn been processed yet".
     pub tick_seq: u64,
@@ -103,6 +106,16 @@ impl Shared {
 
     pub fn has_pending(&self) -> bool {
         self.lock().pending()
+    }
+
+    /// The decision log, published by the loop alongside the snapshot.
+    pub fn history(&self, limit: usize) -> Vec<omen_core::ipc::Decision> {
+        let log = &self.lock().history;
+        log.iter().rev().take(limit).rev().cloned().collect()
+    }
+
+    pub fn publish_history(&self, history: Vec<omen_core::ipc::Decision>) {
+        self.lock().history = history;
     }
 
     pub fn snapshot(&self) -> Snapshot {

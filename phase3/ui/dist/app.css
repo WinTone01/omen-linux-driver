@@ -792,3 +792,21 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 /* Two controls in one definition cell, right-aligned with the rest of the
  * key/value rows. */
 .power-rule { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+
+/* ── decision log ────────────────────────────────────────────── */
+
+.hist-list { display: flex; flex-direction: column-reverse; gap: 2px; max-height: 260px; overflow-y: auto; }
+.hist-list:empty::after {
+  content: "nothing yet — the setpoint has not changed since the service started";
+  color: var(--text-muted); font-size: 12px;
+}
+.hist-row {
+  display: grid; grid-template-columns: 64px 1fr 90px; gap: 10px; align-items: baseline;
+  padding: 5px 8px; border-radius: var(--radius-sm);
+  font-size: 11px; font-family: var(--mono); color: var(--text-dim);
+}
+.hist-row:nth-child(odd) { background: rgba(255,255,255,.02); }
+.hist-row__when { color: var(--text-muted); }
+.hist-row__target { text-align: right; color: var(--text); }
+.hist-row.is-max .hist-row__target { color: var(--omen-red); }
+.hist-row.is-off .hist-row__target { color: var(--accent-teal); }

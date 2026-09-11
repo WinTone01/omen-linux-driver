@@ -95,6 +95,12 @@ async function mockInvoke(cmd, args) {
       mockState.daemon.startup_profile = args.profile;
       return args.profile ? `${args.profile} will be selected at startup`
                           : "the startup profile will be left to the firmware";
+    case "history":
+      return [
+        { uptime_secs: 12, label: "cpu/Tctl", temp_c: 48.2, target_rpm: 0, reason: "cpu/Tctl 48.2C" },
+        { uptime_secs: 96, label: "cpu/Tctl", temp_c: 58.1, target_rpm: 1800, reason: "cpu/Tctl 58.1C" },
+        { uptime_secs: 240, label: "dgpu/ec", temp_c: 74.0, target_rpm: 2400, reason: "dgpu/ec 74.0C" },
+      ];
     case "diagnose":
       return {
         sections: [
@@ -185,6 +191,8 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
  * callback, so a slow poll really does mean fewer wake-ups. */
 let POLL_MS = 2000;
 let pollTimer = null;
+/* Whether anyone can see this window. See setVisible. */
+let visible = true;
 const ZONES = ["Left", "WASD", "Centre", "Numpad"];
 
 let state = null;
@@ -445,11 +453,11 @@ function renderEffect(s) {
     $("#effect-speed-out").textContent = String(now.speed ?? 5);
   }
   $("#effect-speed-row").hidden = now.effect === "none";
-  $("#effect-hint").textContent = EFFECT_HINT[now.effect] ?? "";
+  $("#effect-hint").textContent = t(EFFECT_HINT[now.effect] ?? "");
   // An effect repaints the zones several times a second, so the colour
   // pickers below are not what the keyboard is showing. Say so.
   $("#effect-note").textContent =
-    now.effect === "none" ? "" : "the zone colours below are being animated";
+    now.effect === "none" ? "" : t("the zone colours below are being animated");
 }
 
 $("#bright-range").addEventListener("input", (e) => {
@@ -469,7 +477,7 @@ function renderDaemon(s) {
 
   if (!s.daemon) {
     dot.className = "status-dot is-down";
-    text.textContent = "omend unreachable";
+    text.textContent = t("omend unreachable");
     banner.hidden = false;
     banner.classList.add("is-error");
     banner.innerHTML =
@@ -481,7 +489,7 @@ function renderDaemon(s) {
   }
 
   dot.className = "status-dot is-up";
-  text.textContent = "omend connected";
+  text.textContent = t("omend connected");
   banner.hidden = !s.daemon.safety_fallback;
   if (s.daemon.safety_fallback) {
     banner.classList.add("is-error");
@@ -541,7 +549,7 @@ function renderDaemon(s) {
   $$("#fan-modes button").forEach((b) =>
     b.classList.toggle("is-active", b.dataset.mode === active),
   );
-  $("#fan-mode-help").textContent = MODE_HELP[active] ?? "";
+  $("#fan-mode-help").textContent = t(MODE_HELP[active] ?? "");
   $("#fan-mode-help").classList.toggle("is-warning", active === "auto");
   $("#manual-card").style.opacity = active === "manual" ? "1" : ".55";
 
@@ -840,7 +848,7 @@ function curveEditing() {
 function startEdit() {
   const points = state?.curve ?? [];
   if (points.length < 2) {
-    toast("no curve to edit", true);
+    toast(t("no curve to edit"), true);
     return;
   }
   draft = points.map((p) => ({ ...p }));
@@ -865,7 +873,7 @@ function renderEditor() {
   $("#curve-line").classList.toggle("is-draft", editing);
   // Going back to the built-in table is worth offering without having to
   // enter the editor first - it is the way out of a curve you regret.
-  $("#btn-curve-reset").textContent = resetArmed ? "Sure?" : "Defaults";
+  $("#btn-curve-reset").textContent = t(resetArmed ? "Sure?" : "Defaults");
   $("#btn-curve-reset").classList.toggle("is-armed", resetArmed);
   if (editing) drawCurve(draft, state?.interpolation, null, null);
   buildHandles();
@@ -1061,7 +1069,7 @@ function bindCurveEditor() {
     if (!curveEditing() || !hit) return;
     ev.preventDefault();
     if (draft.length <= 2) {
-      toast("a curve needs at least two points", true);
+      toast(t("a curve needs at least two points"), true);
       return;
     }
     draft.splice(Number(hit.dataset.index), 1);
@@ -1140,14 +1148,17 @@ function renderApps(s) {
     if (app.process === active) {
       const badge = document.createElement("span");
       badge.className = "app-row__badge";
-      badge.textContent = "running";
+      badge.textContent = t("running");
       row.append(badge);
     }
     row.append(what, drop);
     list.append(row);
   }
 
-  $("#apps-note").textContent = active ? `${active} is running` : "";
+  $("#apps-note").textContent = active ? `${active} ${t("running")}` : "";
+  // The rows were built after the page was translated, so they get their own
+  // pass rather than being missed until the next language change.
+  translatePage(list);
 
   // The profile choices come from the machine, so this cannot offer one the
   // firmware does not have.
@@ -1157,7 +1168,7 @@ function renderApps(s) {
     sel.replaceChildren();
     const none = document.createElement("option");
     none.value = "";
-    none.textContent = "profile: leave alone";
+    none.textContent = t("profile: leave alone");
     sel.append(none);
     for (const name of s.profile_choices ?? []) {
       const opt = document.createElement("option");
@@ -1172,13 +1183,13 @@ function bindApps() {
   const add = () => {
     const process = $("#app-process").value.trim();
     if (!process) {
-      toast("a process name is required", true);
+      toast(t("a process name is required"), true);
       return;
     }
     const profile = $("#app-profile").value || null;
     const fanRaw = $("#app-fan").value;
     if (!profile && !fanRaw) {
-      toast("pick a profile, a fan mode, or both - otherwise there is nothing to apply", true);
+      toast(t("pick a profile, a fan mode, or both - otherwise there is nothing to apply"), true);
       return;
     }
     const fan =
@@ -1221,8 +1232,8 @@ function renderGraphics(s) {
   $$("#gfx-power button").forEach((b) =>
     b.classList.toggle("is-active", b.dataset.power === gpu.control));
 
-  $("#gfx-state").textContent =
-    gpu.status === "suspended" ? "suspended (asleep)" : gpu.status;
+  $("#gfx-state").textContent = t(
+    gpu.status === "suspended" ? "suspended (asleep)" : gpu.status);
   $("#gfx-state").className = "is-term";
 
   $("#gfx-suspended").textContent =
@@ -1233,11 +1244,11 @@ function renderGraphics(s) {
   const holders = gpu.holders ?? [];
   $("#gfx-holders").textContent = holders.length
     ? holders.map((h) => `${h.name} (${h.pid})`).join(", ")
-    : gpu.status === "suspended" ? "nothing — it is asleep" : "nothing";
+    : t(gpu.status === "suspended" ? "nothing — it is asleep" : "nothing");
 
   $("#gfx-note").textContent =
     gpu.control === "auto" && gpu.suspended_ms === 0 && gpu.status !== "suspended"
-      ? "allowed to sleep, but it never has"
+      ? t("allowed to sleep, but it never has")
       : "";
 }
 
@@ -1250,7 +1261,7 @@ function bindGraphics() {
     const text = $("#gfx-offload").textContent.trim();
     try {
       await navigator.clipboard.writeText(text);
-      toast("copied");
+      toast(t("copied"));
     } catch {
       // Clipboard access can be refused; selecting the text is the fallback
       // that always works.
@@ -1282,11 +1293,13 @@ async function loadSettings() {
   }
   POLL_MS = settings.poll_ms;
   startPolling();
+  applyLanguage(settings.lang ?? null);
   renderSettings();
 }
 
 function renderSettings() {
   if (!settings) return;
+  $("#set-lang").value = settings.lang ?? "";
   $("#set-poll").value = String(settings.poll_ms);
   $("#set-alerts").checked = !!settings.alerts;
   $("#set-autostart").checked = !!settings.autostart;
@@ -1328,7 +1341,7 @@ function renderStartupProfile(s) {
     sel.replaceChildren();
     const none = document.createElement("option");
     none.value = "";
-    none.textContent = "leave it as the firmware remembers";
+    none.textContent = t("leave it as the firmware remembers");
     sel.append(none);
     for (const name of choices) {
       const opt = document.createElement("option");
@@ -1397,7 +1410,7 @@ async function renderVersions() {
   $("#ver-catchup").hidden = commands.length === 0;
   $("#ver-commands").textContent = commands.join(" && ");
   $("#ver-note").textContent = commands.length
-    ? "something installed is newer than what is running"
+    ? t("something installed is newer than what is running")
     : "";
 }
 
@@ -1406,7 +1419,7 @@ async function copyText(text, what) {
     await navigator.clipboard.writeText(text);
     toast(`${what} copied`);
   } catch {
-    toast("could not reach the clipboard", true);
+    toast(t("could not reach the clipboard"), true);
   }
 }
 
@@ -1428,6 +1441,16 @@ function maybeAlert(s) {
 }
 
 function bindSettings() {
+  $("#set-lang").addEventListener("change", (e) => {
+    const lang = e.target.value || null;
+    saveSettings({ lang });
+    // Applied immediately rather than on the next start: a language setting
+    // that needs a restart to take effect is a language setting nobody
+    // trusts they set correctly.
+    applyLanguage(lang);
+    refresh();
+  });
+
   $("#set-poll").addEventListener("change", (e) =>
     saveSettings({ poll_ms: Number(e.target.value) }));
   $("#set-alerts").addEventListener("change", (e) => {
@@ -1443,7 +1466,7 @@ function bindSettings() {
     act(() => invoke("set_startup_profile", { profile: e.target.value || null })));
 
   $("#btn-ver-copy").addEventListener("click", () =>
-    copyText($("#ver-commands").textContent, "commands"));
+    copyText($("#ver-commands").textContent, t("commands")));
 
 }
 
@@ -1464,7 +1487,7 @@ async function scanFirmware(force) {
   firmwareScanned = true;
 
   const list = $("#fw-list");
-  $("#fw-note").textContent = "scanning…";
+  $("#fw-note").textContent = t("scanning…");
   list.replaceChildren();
 
   let fw;
@@ -1498,7 +1521,7 @@ async function scanFirmware(force) {
     if (dev.needs_reboot && dev.update) {
       const flag = document.createElement("span");
       flag.className = "fw-row__flag";
-      flag.textContent = "needs reboot";
+      flag.textContent = t("needs reboot");
       row.append(flag);
     }
 
@@ -1527,10 +1550,10 @@ function bindFirmware() {
   $("#btn-fw-scan").addEventListener("click", () => scanFirmware(true));
 
   $("#btn-fw-refresh").addEventListener("click", async () => {
-    $("#fw-note").textContent = "asking LVFS…";
+    $("#fw-note").textContent = t("asking LVFS…");
     try {
       await invoke("firmware_refresh");
-      toast("update metadata refreshed");
+      toast(t("update metadata refreshed"));
     } catch (e) {
       toast(String(e), true);
     }
@@ -1574,7 +1597,7 @@ async function runDiagnosis(force) {
   if (diagnosed && !force) return;
   diagnosed = true;
 
-  $("#diag-summary").textContent = "checking…";
+  $("#diag-summary").textContent = t("checking…");
   $("#btn-diag-run").disabled = true;
 
   let report;
@@ -1592,17 +1615,17 @@ async function runDiagnosis(force) {
   const ok = countChecks(report, "ok");
 
   $("#diag-summary").textContent =
-    fail && warn ? `${fail} broken, ${warn} worth knowing about`
-    : fail ? `${fail} thing${fail > 1 ? "s" : ""} broken`
-    : warn ? `${warn} thing${warn > 1 ? "s" : ""} worth knowing about`
-    : "everything checked is working";
+    fail && warn ? `${fail} ${t("broken")}, ${warn} ${t("to know about")}`
+    : fail ? `${fail} ${t("broken")}`
+    : warn ? `${warn} ${t("to know about")}`
+    : t("everything checked is working");
 
   const counts = $("#diag-counts");
   counts.replaceChildren();
   for (const [cls, n, label] of [
-    ["is-fail", fail, "broken"],
-    ["is-warn", warn, "to know about"],
-    ["is-ok", ok, "working"],
+    ["is-fail", fail, t("broken")],
+    ["is-warn", warn, t("to know about")],
+    ["is-ok", ok, t("working")],
   ]) {
     if (!n) continue;
     const pill = document.createElement("span");
@@ -1659,7 +1682,7 @@ function bindDiagnosis() {
   $("#btn-diag-run").addEventListener("click", () => runDiagnosis(true));
   $("#btn-diag-copy").addEventListener("click", async () => {
     const text = await invoke("diagnose_text");
-    await copyText(text, "report");
+    await copyText(text, t("report"));
   });
 
   $$('[data-view="diagnosis"]').forEach((tab) =>
@@ -1693,7 +1716,7 @@ function fillChoices(sel, options, built) {
   for (const [value, label] of options) {
     const opt = document.createElement("option");
     opt.value = value;
-    opt.textContent = label;
+    opt.textContent = t(label);
     sel.append(opt);
   }
 }
@@ -1711,8 +1734,8 @@ function fanFromValue(v) {
 function renderPowerRules(s) {
   const choices = s.profile_choices ?? [];
   const built = String(choices.length);
-  const profileOptions = [["", "profile: leave alone"]]
-    .concat(choices.map((c) => [c, `profile: ${c}`]));
+  const profileOptions = [["", t("profile: leave alone")]]
+    .concat(choices.map((c) => [c, `${t("profile")}: ${c}`]));
 
   for (const id of ["#power-ac-profile", "#power-bat-profile"]) {
     fillChoices($(id), profileOptions, built);
@@ -1759,6 +1782,68 @@ function bindPowerRules() {
   }
 }
 
+/* ── decision log ────────────────────────────────────────────────
+ *
+ * Asked for separately from the status, and only while the Fan tab is open:
+ * the status is polled every couple of seconds and nobody needs two hundred
+ * rows of history at that rate.
+ */
+
+function fmtSince(secs) {
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+}
+
+async function refreshHistory() {
+  const list = $("#hist-list");
+  if (!list) return;
+
+  let rows;
+  try {
+    rows = await invoke("history", { limit: 200 });
+  } catch {
+    return;
+  }
+
+  list.replaceChildren();
+  for (const row of rows) {
+    const el = document.createElement("div");
+    const off = row.target_rpm === 0;
+    const max = row.target_rpm != null && row.target_rpm >= FAN_MAX;
+    el.className = "hist-row" + (off ? " is-off" : max ? " is-max" : "");
+
+    const when = document.createElement("span");
+    when.className = "hist-row__when";
+    when.textContent = `+${fmtSince(row.uptime_secs)}`;
+
+    const what = document.createElement("span");
+    what.textContent = `${row.label} ${row.temp_c.toFixed(1)} °C`;
+
+    const target = document.createElement("span");
+    target.className = "hist-row__target";
+    target.textContent =
+      row.target_rpm == null ? "EC"
+      : row.target_rpm === 0 ? t("fans off")
+      : `${row.target_rpm} RPM`;
+    target.title = row.reason;
+
+    el.append(when, what, target);
+    list.append(el);
+  }
+  $("#hist-note").textContent = rows.length
+    ? `${rows.length} ${t("changes since the service started")}`
+    : "";
+}
+
+function bindHistory() {
+  // Refreshed when the tab is opened and on the normal poll while it is the
+  // visible one - a log nobody is looking at does not need updating.
+  $$('[data-view="fan"]').forEach((tab) =>
+    tab.addEventListener("click", refreshHistory));
+  if ($('.view[data-view="fan"]')?.classList.contains("is-active")) refreshHistory();
+}
+
 async function refresh() {
   try {
     state = await invoke("get_state");
@@ -1771,6 +1856,7 @@ async function refresh() {
   renderApps(state);
   renderGraphics(state);
   renderPowerRules(state);
+  if ($('.view[data-view="fan"]')?.classList.contains("is-active")) refreshHistory();
   renderStartupProfile(state);
   renderTrayDependent(state);
   maybeAlert(state);
@@ -1784,10 +1870,10 @@ async function refresh() {
   if (!curveEditing()) {
     drawCurve(state.curve, state.interpolation, d?.driver_temp_c, d?.target_rpm);
   }
-  $("#curve-note").textContent =
+  $("#curve-note").textContent = t(
     state.interpolation === "linear"
       ? "linear between points"
-      : "held between points, as OMEN Gaming Hub does";
+      : "held between points, as OMEN Gaming Hub does");
 }
 
 buildKeycaps();
@@ -1799,11 +1885,33 @@ bindSettings();
 bindFirmware();
 bindDiagnosis();
 bindPowerRules();
+bindHistory();
 loadSettings();
 renderVersions();
 refresh();
 function startPolling() {
   clearInterval(pollTimer);
+  if (!visible) return;
   pollTimer = setInterval(() => { if (Date.now() > holdUntil) refresh(); }, POLL_MS);
 }
 startPolling();
+
+/* Closing to the tray leaves this page running. Polling the daemon every two
+ * seconds for a window nobody can see is work that only costs battery, so the
+ * Rust side says when the window is hidden and shown - WebKit does not fire
+ * visibilitychange reliably for an unmapped window, though it is listened for
+ * as well for the cases where it does. */
+function setVisible(next) {
+  if (next === visible) return;
+  visible = next;
+  if (visible) {
+    refresh();
+    startPolling();
+  } else {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+document.addEventListener("visibilitychange", () => setVisible(!document.hidden));
+window.__TAURI__?.event?.listen?.("omen://visible", (e) => setVisible(!!e.payload));

@@ -19,8 +19,24 @@ MSG
 }
 
 post_upgrade() {
+  # Restart it rather than print a reminder. The daemon keeps running the old
+  # binary until it is restarted, so without this the fix you just installed
+  # is still not the code that is running - and the reminder is read by
+  # nobody. try-restart does nothing if the service is not running, which is
+  # the correct behaviour for someone who has not enabled it yet.
+  #
+  # The fans are handed back safely on the way out (ExecStopPost) and picked
+  # up again within a tick, so a restart under load is not a gap in cooling.
   if systemctl is-active --quiet omend; then
-    echo "  restart omend to pick up the new binary: systemctl restart omend"
+    echo "  restarting omend so the new binary is the one running"
+    systemctl try-restart omend >/dev/null 2>&1 || \
+      echo "  could not restart omend - do it by hand: systemctl restart omend"
+  fi
+
+  # The kernel module is a separate package and cannot be reloaded from here
+  # while the keyboard is lit; say so rather than do it.
+  if [ -d /sys/module/omen_kbd_rgb ]; then
+    echo "  (kernel modules keep the build that is loaded until reboot: omenctl version)"
   fi
 }
 

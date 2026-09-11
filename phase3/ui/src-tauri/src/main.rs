@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Emitter, Manager, WindowEvent,
 };
 
 use omen_core::ipc::{client, ControlMode, Request, Response, Snapshot};
@@ -79,6 +79,7 @@ fn snapshot() -> (Option<Snapshot>, Option<String>, Option<String>) {
         Ok(Response::Error { message }) | Ok(Response::Done { message }) => {
             (None, Some(message), None)
         }
+        Ok(Response::History { .. }) => (None, Some("unexpected reply".into()), None),
         Err(e) => {
             let hint = daemon_hint(&e);
             (None, Some(e.to_string()), hint)
@@ -289,7 +290,7 @@ fn talk(req: Request) -> Result<String, String> {
     match client::send(&req).map_err(|e| e.to_string())? {
         Response::Done { message } => Ok(message),
         Response::Error { message } => Err(message),
-        Response::Ok(_) => Ok(String::new()),
+        Response::Ok(_) | Response::History { .. } => Ok(String::new()),
     }
 }
 
@@ -422,6 +423,16 @@ fn versions() -> VersionInfo {
 
 /// The whole installation, checked. Same checks the CLI runs - see
 /// omen_core::diagnose for why they live there rather than here.
+/// The recent setpoint decisions. Asked for only when the panel is open -
+/// see ipc::Request::History.
+#[tauri::command]
+fn history(limit: usize) -> Vec<omen_core::ipc::Decision> {
+    match client::send(&Request::History { limit }) {
+        Ok(Response::History { decisions }) => decisions,
+        _ => Vec::new(),
+    }
+}
+
 #[tauri::command]
 async fn diagnose() -> omen_core::diagnose::Report {
     // On a worker thread: the checks talk to the daemon, walk /proc and shell
@@ -492,6 +503,9 @@ fn show_window(app: &tauri::AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        // Resume polling, and refresh at once: the readings on screen are as
+        // old as the time it spent hidden.
+        let _ = window.emit("omen://visible", true);
     }
 }
 
@@ -628,6 +642,12 @@ fn main() {
                 if HAS_TRAY.load(Ordering::Relaxed) {
                     api.prevent_close();
                     let _ = window.hide();
+                    // Tell the page it is not being looked at. A hidden
+                    // window polling the daemon every two seconds for the
+                    // rest of the session is work nobody sees, on a laptop.
+                    // WebKit does not reliably fire visibilitychange when a
+                    // window is unmapped, so this is said explicitly.
+                    let _ = window.emit("omen://visible", false);
                 }
             }
         })
@@ -648,6 +668,7 @@ fn main() {
             get_settings,
             set_settings,
             versions,
+            history,
             diagnose,
             diagnose_text,
             set_zone,

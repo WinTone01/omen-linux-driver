@@ -200,6 +200,11 @@ Check with `omenctl status`.
 
 ## Usage
 
+The window follows the desktop's language where it has a translation (English
+and Turkish); Settings has an explicit choice. Everything the daemon says -
+its replies, the diagnosis findings, the journal - stays English, because that
+is also what goes into a bug report.
+
 ```bash
 omenctl status                # daemon + hardware state
 omenctl curve                 # active curve and safety thresholds

@@ -315,6 +315,19 @@
             </p>
           </div>
 
+          <div class="card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Recent decisions</h2>
+              <span class="panel-head__note" id="hist-note"></span>
+            </div>
+            <p class="hint">
+              Every time the setpoint actually changed, and what the temperature
+              was when it did. The keep-alive rewrites are not here — only the
+              moments something was decided.
+            </p>
+            <div id="hist-list" class="hist-list"></div>
+          </div>
+
           <div class="card" id="manual-card">
             <div class="panel-head"><h2 class="panel-head__title">Manual target</h2></div>
             <div class="slider-row">
@@ -436,6 +449,14 @@
               live in <code>/etc/omen/omend.toml</code>.
             </p>
             <dl class="kv kv--tight">
+              <dt>Language</dt>
+              <dd>
+                <select id="set-lang">
+                  <option value="">Follow the system</option>
+                  <option value="en">English</option>
+                  <option value="tr">Türkçe</option>
+                </select>
+              </dd>
               <dt>Refresh every</dt>
               <dd>
                 <select id="set-poll">
@@ -534,6 +555,7 @@
 </div>
 
 <div class="hub-toast" id="toast" hidden></div>
+<script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

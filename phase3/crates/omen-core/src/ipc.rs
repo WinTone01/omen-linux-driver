@@ -67,6 +67,28 @@ impl std::fmt::Display for ControlMode {
     }
 }
 
+/// One setpoint decision, for the record.
+///
+/// Kept because the fans misbehaving is a thing you notice afterwards. The
+/// journal has the same lines, but a window cannot read the journal, and
+/// "what was the machine doing at the time" is exactly the question a log is
+/// for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Decision {
+    /// Seconds since the daemon started. Not a wall clock: the daemon may
+    /// have started before the clock was set, and what matters here is the
+    /// order and the spacing.
+    pub uptime_secs: u64,
+    /// The sensor that drove it, and its reading.
+    pub label: String,
+    pub temp_c: f32,
+    /// The setpoint that was chosen. 0 means the fans were stopped; `None`
+    /// means control was handed to the EC.
+    pub target_rpm: Option<u32>,
+    /// Why, in words - "curve", "manual", "emergency: ...".
+    pub reason: String,
+}
+
 /// A curve as it travels over the wire: the points plus how to read between
 /// them. Same shape as the `[fan]` section of the config file, so an editor
 /// round-trips without a translation layer in the middle.
@@ -113,6 +135,12 @@ pub enum Request {
         on_ac: crate::power::PowerRule,
         on_battery: crate::power::PowerRule,
     },
+    /// The recent setpoint decisions, newest last.
+    ///
+    /// A separate request rather than part of the status: the status is
+    /// polled every couple of seconds and this is only looked at when
+    /// somebody opens the panel.
+    History { limit: usize },
     /// Re-read the config from disk.
     Reload,
 }
@@ -121,8 +149,18 @@ pub enum Request {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Response {
     Ok(Box<Snapshot>),
-    Done { message: String },
-    Error { message: String },
+    /// A struct variant, not a newtype: serde's internally-tagged
+    /// representation cannot put a sequence directly under a tag, and the
+    /// failure mode is a reply that silently does not serialise.
+    History {
+        decisions: Vec<Decision>,
+    },
+    Done {
+        message: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// The daemon's view as of its last tick.
@@ -156,6 +194,9 @@ pub struct Snapshot {
     /// necessarily the default path.
     #[serde(default)]
     pub config_path: Option<String>,
+    /// Set when the hardware is not reporting the setpoint we last wrote.
+    #[serde(default)]
+    pub drift: Option<String>,
     /// Mains or battery. `None` when it could not be determined.
     #[serde(default)]
     pub on_ac: Option<bool>,

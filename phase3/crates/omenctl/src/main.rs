@@ -220,6 +220,7 @@ fn app_snapshot() -> Result<Box<omen_core::ipc::Snapshot>> {
         Response::Ok(snap) => Ok(snap),
         Response::Error { message } => bail!("{message}"),
         Response::Done { message } => bail!("unexpected reply: {message}"),
+        Response::History { .. } => bail!("unexpected reply: a history"),
     }
 }
 

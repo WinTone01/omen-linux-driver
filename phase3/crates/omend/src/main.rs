@@ -252,6 +252,11 @@ fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
+/// How many decisions are kept for the UI. At one change every few seconds
+/// under a varying load, this is roughly the last hour of interesting
+/// behaviour; the journal has the rest.
+const HISTORY_MAX: usize = 200;
+
 /// How often a setpoint we already hold is written again. See apply().
 const SETPOINT_KEEPALIVE: Duration = Duration::from_secs(10);
 
@@ -312,6 +317,17 @@ struct Runtime {
     /// Last known power source, so a rule is applied on the change rather
     /// than on every tick - otherwise it could not be overridden.
     on_ac: Option<bool>,
+    /// Set when the hardware disagrees with our last setpoint, with the
+    /// details. Reported rather than only logged - see check_drift.
+    drift: Option<String>,
+    /// The last few setpoint decisions, for the UI. Bounded: this is a
+    /// daemon that runs for weeks.
+    history: std::collections::VecDeque<omen_core::ipc::Decision>,
+    /// The most recent sensor reading, so a decision can record what drove
+    /// it without the temperature being passed through four call sites.
+    last_reading: Option<(String, f32)>,
+    /// When the disagreement was first seen.
+    drift_since: Option<Instant>,
     config_path: std::path::PathBuf,
     /// When the process list was last scanned.
     apps_scanned: Instant,
@@ -348,6 +364,10 @@ impl Runtime {
             lighting_changed: false,
             apps: appwatch::AppWatch::new(),
             on_ac: None,
+            drift: None,
+            history: std::collections::VecDeque::new(),
+            last_reading: None,
+            drift_since: None,
             config_path: config_path.to_owned(),
             // Scan on the first tick rather than one interval in: a daemon
             // starting while a game is already open should notice it.
@@ -377,6 +397,7 @@ impl Runtime {
 
     fn tick(&mut self, shared: &Shared, config_path: &std::path::Path) {
         self.handle_requests(shared, config_path);
+        self.check_drift();
 
         let temp = match self.thermal.hottest() {
             Ok(v) => Some(v),
@@ -402,6 +423,8 @@ impl Runtime {
         self.scan_apps();
         self.apply_gpu_power();
 
+        self.last_reading = temp.clone();
+
         if let Some((label, celsius)) = &temp {
             if self.guard(label, *celsius) {
                 self.drive(label, *celsius);
@@ -409,7 +432,135 @@ impl Runtime {
         }
 
         shared.publish(self.snapshot(temp));
+        shared.publish_history(self.history(HISTORY_MAX));
         shared.finish_tick();
+    }
+
+    /// Adds a decision to the log kept for the UI.
+    ///
+    /// Only on a change: the keep-alive rewrites the same setpoint every ten
+    /// seconds, and a log of "still 2400 RPM" six times a minute would bury
+    /// the moments that matter.
+    fn record(&mut self, want: Applied, why: &str) {
+        let (label, temp_c) = self
+            .last_reading
+            .clone()
+            .unwrap_or_else(|| ("?".to_string(), f32::NAN));
+
+        self.history.push_back(omen_core::ipc::Decision {
+            uptime_secs: self.started.elapsed().as_secs(),
+            label,
+            temp_c,
+            target_rpm: match want {
+                Applied::Rpm(rpm) => Some(rpm),
+                Applied::Idle => Some(0),
+                Applied::Max => Some(self.cfg.fan.max_rpm),
+                Applied::Auto | Applied::Unknown => None,
+            },
+            reason: why.to_owned(),
+        });
+        while self.history.len() > HISTORY_MAX {
+            self.history.pop_front();
+        }
+    }
+
+    /// Looks for the hwmon again, for when the one we had went away.
+    ///
+    /// hp-wmi's hwmon is numbered by registration order, so rebuilding and
+    /// reloading the module - which this project does every time it is
+    /// upgraded - moves it. The cached path then points at nothing, every
+    /// write fails, and the old behaviour was to treat that as a cooling
+    /// failure and force the fans to full. Looking again first is strictly
+    /// better: if it worked, nothing was ever wrong.
+    ///
+    /// Returns true when a usable fan was found at a NEW path.
+    ///
+    /// Note that the restore-on-exit guard keeps its own handle, taken at
+    /// startup. If the module is reloaded, its path is stale too and the
+    /// restore it performs on exit will fail and be logged. That is benign:
+    /// the fans are left at the last setpoint, which a module reload has
+    /// already reset anyway.
+    fn rediscover_fan(&mut self) -> bool {
+        let Ok(found) = Fan::discover(self.cfg.fan.min_rpm, self.cfg.fan.max_rpm) else {
+            return false;
+        };
+        if found.hwmon_path() == self.fan.hwmon_path() {
+            return false;
+        }
+        warn!(
+            "the fan moved from {} to {} - the module was probably reloaded",
+            self.fan.hwmon_path().display(),
+            found.hwmon_path().display()
+        );
+        self.fan = found;
+        self.applied = Applied::Unknown;
+        true
+    }
+
+    /// Compares what the hardware reports with what we last wrote.
+    ///
+    /// Everything else in this daemon assumes a write that returned Ok stayed
+    /// written, and the history of this project says that is optimistic: the
+    /// EC has a watchdog on manual control, another tool can write pwm1, and
+    /// a suspend or a module reload re-initialises the controller. The
+    /// setpoint is re-asserted every ten seconds anyway; this notices when it
+    /// had to be, which is the difference between "under control" and
+    /// "believed to be under control".
+    ///
+    /// Two ticks before it counts. One is a race: the read can land between
+    /// our write and the firmware applying it.
+    fn check_drift(&mut self) {
+        // Nothing was written, so there is nothing to have stuck. In
+        // read-only mode the daemon keeps a model of what it WOULD have set,
+        // and comparing that against hardware someone else is driving
+        // reports a disagreement on every tick.
+        if self.read_only {
+            return;
+        }
+        let want = match self.applied {
+            Applied::Rpm(rpm) => Some(self.fan.rpm_to_pwm(rpm)),
+            Applied::Idle => Some(0),
+            // Max and Auto are modes rather than setpoints; pwm1 is not
+            // meaningful in them.
+            _ => None,
+        };
+        let Some(want) = want else {
+            self.drift_since = None;
+            self.drift = None;
+            return;
+        };
+
+        let hw = match (self.fan.pwm(), self.fan.mode()) {
+            (Ok(pwm), Ok(mode)) => Some((pwm, mode)),
+            _ => None,
+        };
+        let Some((pwm, mode)) = hw else { return };
+
+        let agrees = pwm == want && mode == omen_core::fan::PwmMode::Manual;
+        if agrees {
+            if self.drift.is_some() {
+                info!("the setpoint is being honoured again");
+            }
+            self.drift_since = None;
+            self.drift = None;
+            return;
+        }
+
+        match self.drift_since {
+            None => self.drift_since = Some(Instant::now()),
+            Some(since) if since.elapsed() >= self.cfg.interval() => {
+                let message =
+                    format!("wrote pwm {want} in manual, hardware reports pwm {pwm} in {mode}");
+                if self.drift.as_deref() != Some(message.as_str()) {
+                    warn!("the fan setpoint did not stick: {message}");
+                }
+                self.drift = Some(message);
+                // Write it again from scratch. The keep-alive would get there
+                // within ten seconds; there is no reason to wait once we know.
+                self.applied = Applied::Unknown;
+            }
+            Some(_) => {}
+        }
     }
 
     /// Applies the mains/battery rule when the power source changes.
@@ -697,6 +848,9 @@ impl Runtime {
         // WMI call every ten seconds to know we still mean it. omen-space
         // rewrites its duty on the same interval, for the same reason.
         let repeat = want == self.applied;
+        if !repeat {
+            self.record(want, why);
+        }
         if repeat {
             let refresh = matches!(want, Applied::Rpm(_) | Applied::Idle)
                 && self.applied_at.elapsed() >= SETPOINT_KEEPALIVE;
@@ -716,7 +870,11 @@ impl Runtime {
                     self.applied = want;
                     return;
                 }
-                match self.fan.set_target_rpm(rpm) {
+                let mut result = self.fan.set_target_rpm(rpm);
+                if result.is_err() && self.rediscover_fan() {
+                    result = self.fan.set_target_rpm(rpm);
+                }
+                match result {
                     Ok(actual) => {
                         if actual != rpm {
                             debug!("{rpm} RPM requested, clamped to {actual} RPM");
@@ -739,6 +897,9 @@ impl Runtime {
                     info!("{why} -> fans off (setpoint 0, still ours)");
                 }
                 if !self.read_only {
+                    if self.fan.set_idle().is_err() {
+                        self.rediscover_fan();
+                    }
                     if let Err(e) = self.fan.set_idle() {
                         // Same reasoning as a failed setpoint write: we no
                         // longer know what the fan is doing, and the EC will
@@ -772,6 +933,16 @@ impl Runtime {
             }
             Applied::Unknown => {}
         }
+    }
+
+    pub fn history(&self, limit: usize) -> Vec<omen_core::ipc::Decision> {
+        self.history
+            .iter()
+            .rev()
+            .take(limit)
+            .rev()
+            .cloned()
+            .collect()
     }
 
     fn take_lighting_change(&mut self) -> Option<omen_core::config::LightingConfig> {
@@ -809,6 +980,7 @@ impl Runtime {
             }),
             version: Some(omen_core::about::VERSION.to_owned()),
             config_path: self.config_path.to_str().map(str::to_owned),
+            drift: self.drift.clone(),
             on_ac: self.on_ac,
             battery_percent: omen_core::power::battery_percent(),
             power_ac: self.cfg.automation.on_ac.clone(),

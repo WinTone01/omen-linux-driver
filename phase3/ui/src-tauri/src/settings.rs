@@ -29,6 +29,9 @@ pub struct Settings {
     pub autostart: bool,
     /// Start hidden in the tray. Only honoured when there is a tray.
     pub start_hidden: bool,
+    /// UI language: "en", "tr", or absent to follow the desktop's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
 }
 
 impl Default for Settings {
@@ -38,6 +41,7 @@ impl Default for Settings {
             alerts: true,
             autostart: false,
             start_hidden: false,
+            lang: None,
         }
     }
 }

@@ -22,6 +22,6 @@ pub fn report(resp: Response) -> Result<()> {
             Ok(())
         }
         Response::Error { message } => bail!("{message}"),
-        Response::Ok(_) => Ok(()),
+        Response::Ok(_) | Response::History { .. } => Ok(()),
     }
 }
