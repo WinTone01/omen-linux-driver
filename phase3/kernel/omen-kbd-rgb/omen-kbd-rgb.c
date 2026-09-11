@@ -198,12 +198,24 @@ static int omen_write_zones(struct omen_rgb *rgb, u8 global);
 
 /* --- brightness (LBRT) --- */
 
-static enum led_brightness omen_bl_get(struct led_classdev *cdev)
+/*
+ * Read once at probe to pick up whatever the firmware was left holding, and
+ * not wired to the LED class as a brightness_get.
+ *
+ * The class caches the value it was last set to, and that is the more honest
+ * answer here: LBRT's read-back semantics are murky - dumping the extended EC
+ * RAM showed 0xEFC at 0xe4 while the keyboard was lit and 0x00 while dark,
+ * neither of which is the 100 that LM04 returns - so reporting it back as the
+ * user's setting would be guessing. OmenLinux/omen-rgb-keyboard reaches the
+ * same conclusion from the other direction: its brightness_get returns its own
+ * variable and never asks the hardware.
+ */
+static u8 omen_bl_read_hw(void)
 {
 	u8 buf[4] = { 0 };
 
 	if (omen_wmi_query(LIGHTING_BRIGHT_GET, buf, 0, sizeof(buf)))
-		return 0;
+		return BRIGHTNESS_MAX;
 	return min_t(u8, buf[0], BRIGHTNESS_MAX);
 }
 
@@ -472,7 +484,7 @@ static int omen_rgb_probe(struct platform_device *pdev)
 	 * Brightness first: the zone colours on the wire are scaled by it, so
 	 * it has to be known before they can be read back as intent.
 	 */
-	rgb->kbd_bl.brightness = omen_bl_get(&rgb->kbd_bl);
+	rgb->kbd_bl.brightness = omen_bl_read_hw();
 
 	ret = omen_zone_read_initial(rgb, rgb->kbd_bl.brightness);
 	if (ret) {
@@ -495,20 +507,19 @@ static int omen_rgb_probe(struct platform_device *pdev)
 	 */
 	rgb->kbd_bl.name = "omen::kbd_backlight";
 	rgb->kbd_bl.max_brightness = BRIGHTNESS_MAX;
-	rgb->kbd_bl.brightness_get = omen_bl_get;
 	rgb->kbd_bl.brightness_set_blocking = omen_bl_set;
 	rgb->kbd_bl.flags |= LED_RETAIN_AT_SHUTDOWN;
 
 	/*
-	 * If the keyboard is off when the module loads (an older version
-	 * switching it off at rmmod, or simply the user's choice), writing a
-	 * colour shows nothing and looks like a broken driver. We do not fix
-	 * it silently - it may well be deliberate - but we make it visible.
+	 * Say so when the keyboard is dark. Writing a colour then shows nothing
+	 * and looks like a broken driver, and it is the single most common way
+	 * to be misled by this hardware. The state comes from the byte that
+	 * actually tracks it rather than from the brightness setting, which
+	 * stays at whatever it was told even while the lighting is off.
 	 */
-	if (rgb->kbd_bl.brightness == 0)
+	if (rgb->h2ra && !readb(rgb->h2ra + H2RA_ACTIVE_BRIGHTNESS))
 		dev_info(&pdev->dev,
-			 "keyboard backlight is off; turn it on with: echo %d > /sys/class/leds/%s/brightness\n",
-			 BRIGHTNESS_MAX, rgb->kbd_bl.name);
+			 "the keyboard backlight is off, so colours written now will not be visible; press Fn+F4\n");
 
 	ret = devm_led_classdev_register(&pdev->dev, &rgb->kbd_bl);
 	if (ret)
