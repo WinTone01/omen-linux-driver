@@ -33,6 +33,10 @@ const mockState = {
     safety_fallback: false,
     uptime_secs: 4230,
     temps: [["cpu/Tctl", 72.4], ["igpu/edge", 54.0], ["board/temp1", 46.0]],
+    gpu: {
+      address: "0000:04:00.0", control: "auto", status: "active",
+      suspended_ms: 0, holders: [{ pid: 1688, name: "quickshell" }],
+    },
   },
   daemon_error: null,
   leds: {
@@ -354,6 +358,7 @@ function renderDaemon(s) {
     : "automatic (EC)";
   $("#v-driver").textContent =
     d.driver_label && cpu != null ? `${d.driver_label} ${cpu.toFixed(1)} °C` : "—";
+  renderGpu(d.gpu);
   $("#v-uptime").textContent = fmtUptime(d.uptime_secs);
   $("#profile-quick-label").textContent = d.profile ?? "—";
 
@@ -384,6 +389,37 @@ function renderDaemon(s) {
 const MODE_LABEL = { curve: "Automatic", auto: "EC default", max: "Max" };
 const modeText = (m) =>
   m.mode === "manual" ? `Manual (${m.rpm} RPM)` : (MODE_LABEL[m.mode] ?? m.mode);
+
+// Discrete GPU runtime power. Worth a line on this machine because the dGPU
+// is the biggest single draw on battery, and it only saves anything if it is
+// actually allowed to sleep - which it is not while something holds a
+// /dev/nvidia* handle open.
+function renderGpu(gpu) {
+  const el = $("#v-gpu");
+  if (!el) return;
+  if (!gpu) { el.textContent = "none"; el.title = ""; return; }
+
+  const suspended = gpu.suspended_ms > 0
+    ? `${(gpu.suspended_ms / 60000).toFixed(0)} min asleep`
+    : "never slept";
+
+  if (gpu.control === "on") {
+    el.textContent = `${gpu.status} — runtime PM off`;
+    el.title = "power/control is \"on\": the GPU is pinned awake.";
+  } else if (gpu.suspended_ms === 0 && gpu.status !== "suspended") {
+    const who = (gpu.holders ?? []).map((h) => `${h.name} (${h.pid})`);
+    el.textContent = who.length
+      ? `awake — held by ${who[0].split(" (")[0]}${who.length > 1 ? ` +${who.length - 1}` : ""}`
+      : "awake — never slept";
+    el.title = who.length
+      ? `Holding /dev/nvidia* open:\n${who.join("\n")}`
+      : "Runtime PM is allowed but the GPU has never suspended.";
+  } else {
+    el.textContent = `${gpu.status} — ${suspended}`;
+    el.title = "";
+  }
+  el.className = "is-term";
+}
 
 function fmtUptime(secs) {
   if (secs == null) return "—";

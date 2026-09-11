@@ -24,6 +24,7 @@ use log::{debug, error, info, warn};
 use omen_core::config::Config;
 use omen_core::curve::Governor;
 use omen_core::fan::Fan;
+use omen_core::gpu;
 use omen_core::ipc::{ControlMode, Snapshot};
 use omen_core::profile::PlatformProfile;
 use omen_core::thermal::Thermal;
@@ -275,6 +276,7 @@ struct Runtime {
     mode: ControlMode,
     applied: Applied,
     read_only: bool,
+    gpu: gpu::Watch,
     started: Instant,
 }
 
@@ -296,6 +298,7 @@ impl Runtime {
             mode: ControlMode::Curve,
             applied: Applied::Unknown,
             read_only,
+            gpu: gpu::Watch::new(),
             started: Instant::now(),
         })
     }
@@ -566,6 +569,7 @@ impl Runtime {
                 .into_iter()
                 .filter_map(|(l, v)| v.ok().map(|c| (l, c)))
                 .collect(),
+            gpu: self.gpu.get(),
             uptime_secs: self.started.elapsed().as_secs(),
         }
     }

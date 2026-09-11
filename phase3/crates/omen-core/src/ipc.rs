@@ -109,6 +109,9 @@ pub struct Snapshot {
     #[serde(default)]
     pub safety_reason: Option<String>,
     pub temps: Vec<(String, f32)>,
+    /// Discrete GPU runtime power state, when there is a dGPU.
+    #[serde(default)]
+    pub gpu: Option<crate::gpu::GpuPower>,
     pub uptime_secs: u64,
 }
 

@@ -14,6 +14,7 @@ pub mod config;
 pub mod curve;
 pub mod error;
 pub mod fan;
+pub mod gpu;
 pub mod ipc;
 pub mod leds;
 pub mod profile;

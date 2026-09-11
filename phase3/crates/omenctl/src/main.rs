@@ -115,14 +115,68 @@ fn field(name: &str, value: impl std::fmt::Display) {
     println!("  {name:<16} {value}");
 }
 
+/// Discrete GPU runtime power management.
+///
+/// The interesting number is `suspended` - if the GPU is allowed to suspend
+/// and never has, something is holding it open, and that something costs
+/// battery for as long as it runs.
+fn print_gpu(from_daemon: Option<omen_core::gpu::GpuPower>) {
+    // Prefer the daemon's view: it runs as root and therefore sees every
+    // process, where we only see our own.
+    let via_daemon = from_daemon.is_some();
+    let Some(gpu) = from_daemon.or_else(omen_core::gpu::discover) else {
+        return;
+    };
+
+    println!("\ndiscrete GPU");
+    field("pci", &gpu.address);
+    field(
+        "runtime pm",
+        match gpu.control.as_str() {
+            "auto" => "auto  (may suspend)".to_string(),
+            "on" => "on  (pinned awake)".to_string(),
+            other => other.to_string(),
+        },
+    );
+    field("state", &gpu.status);
+    field(
+        "suspended",
+        if gpu.suspended_ms == 0 {
+            "never".to_string()
+        } else {
+            format!("{:.1} min total", gpu.suspended_ms as f64 / 60_000.0)
+        },
+    );
+    if let Some(dpm) = omen_core::gpu::dynamic_power_management() {
+        field("nvidia dpm", &dpm);
+    }
+
+    if gpu.awake_despite_pm() {
+        println!("  ! the GPU is allowed to suspend but never has");
+        if gpu.holders.is_empty() {
+            if via_daemon {
+                println!("    nothing is holding /dev/nvidia* open");
+            } else {
+                println!("    (run as root, or with omend running, to see what holds it open)");
+            }
+        } else {
+            for h in &gpu.holders {
+                println!("    held open by {} (pid {})", h.name, h.pid);
+            }
+        }
+    }
+}
+
 fn status() -> Result<()> {
     let mut daemon_temps: Option<Vec<(String, f32)>> = None;
+    let mut daemon_gpu: Option<omen_core::gpu::GpuPower> = None;
 
     // When the daemon is running its view is richer: drive mode, whether the
     // critical cutout has tripped, the target setpoint. Otherwise we fall
     // back to reading sysfs.
     if let Ok(Response::Ok(snap)) = client::send(&Request::Status) {
         daemon_temps = Some(snap.temps.clone());
+        daemon_gpu = snap.gpu.clone();
         println!("omend");
         field("mode", snap.mode.map(|m| m.to_string()).unwrap_or_default());
         if snap.safety_fallback {
@@ -162,6 +216,8 @@ fn status() -> Result<()> {
         sysfs::read_string(std::path::Path::new("/proc/sys/kernel/osrelease"))
             .unwrap_or_else(|_| "?".into()),
     );
+
+    print_gpu(daemon_gpu);
 
     println!("\nplatform profile");
     match PlatformProfile::discover() {
