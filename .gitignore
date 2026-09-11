@@ -24,3 +24,8 @@ phase3/kernel/**/.tmp_versions/
 
 # Tauri generated
 phase3/ui/src-tauri/gen/
+
+# makepkg ciktisi
+phase3/**/pkg/
+phase3/**/src/*.pkg.tar.*
+phase3/**/*.pkg.tar.*
