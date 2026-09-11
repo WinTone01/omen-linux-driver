@@ -81,6 +81,32 @@ upstream tag matching the running kernel, and a `PKGBUILD` that downloads
 source at build time would be a bad package. It registers itself with DKMS all
 the same, so it survives kernel updates.
 
+If you installed by hand first — as anyone following this project's own
+earlier instructions did — `pacman` will refuse the package rather than
+overwrite files it does not own:
+
+```
+error: failed to commit transaction (conflicting files)
+omen-control: /usr/bin/omend exists in filesystem
+```
+
+Clear the hand-installed copies first:
+
+```bash
+sudo systemctl stop omend
+sudo rm -f /usr/bin/omend /usr/bin/omenctl \
+           /usr/lib/{modprobe.d,modules-load.d,sysusers.d}/omen.conf \
+           /etc/systemd/system/omend.service \
+           /etc/udev/rules.d/99-omen-leds.rules
+sudo mv -n /etc/omen/omend.toml /etc/omen/omend.toml.manual
+```
+
+The last two removals are not in the conflict list but matter more than the
+ones that are: the package puts the unit and the udev rule under
+`/usr/lib/`, and `/etc/` always shadows `/usr/lib/`. Leaving them means the
+system keeps using the hand-installed copies even after an upgrade — silent,
+and unpleasant to track down.
+
 ### Anything else
 
 ```bash
