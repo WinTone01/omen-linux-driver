@@ -605,6 +605,21 @@
           </div>
 
           <p class="hint" id="diag-saved" hidden></p>
+          <div class="card" id="root-card" hidden>
+            <div class="panel-head">
+              <h2 class="panel-head__title">Needs your password</h2>
+              <span class="panel-head__note" id="root-asker"></span>
+            </div>
+            <p class="hint">
+              Almost nothing here needs root — the service holds the privileges
+              and this window talks to it over a socket. What is left is the
+              plumbing: restarting the service after an upgrade, reloading a
+              module, joining the group. Each button runs one fixed command,
+              shown next to it.
+            </p>
+            <div id="root-list" class="app-list"></div>
+          </div>
+
           <div class="diag-counts" id="diag-counts"></div>
           <div id="diag-sections"></div>
         </section>

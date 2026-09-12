@@ -558,6 +558,57 @@ async fn save_report() -> Result<String, String> {
     .unwrap_or_else(|e| Err(e.to_string()))
 }
 
+/// The things this machine needs done as root, if any.
+///
+/// Only what is actually out of step - a list of what *could* be run as root
+/// is a menu, and offering a menu of root commands is what this replaces.
+#[derive(Debug, Serialize)]
+struct PrivilegedAction {
+    id: String,
+    title: String,
+    why: String,
+    command: String,
+}
+
+#[tauri::command]
+fn privileged_actions() -> Vec<PrivilegedAction> {
+    omen_core::elevate::Action::all()
+        .iter()
+        .filter(|a| a.applicable())
+        .map(|a| PrivilegedAction {
+            id: a.as_str().to_owned(),
+            title: a.title().to_owned(),
+            why: a.why().to_owned(),
+            command: a.command(),
+        })
+        .collect()
+}
+
+/// How a password will be asked for here, so the button can say so before it
+/// is pressed.
+#[tauri::command]
+fn privileged_asker() -> String {
+    omen_core::elevate::Asker::detect().describe().to_owned()
+}
+
+/// Runs one of them.
+///
+/// The window sends a NAME, never a command: what each name runs is written
+/// in omen_core::elevate and nowhere else. An unknown name is refused rather
+/// than interpreted - this is the one place in the app where being liberal in
+/// what it accepts would hand somebody a root shell.
+#[tauri::command]
+async fn run_privileged(action: String) -> Result<String, String> {
+    let Some(action) = omen_core::elevate::Action::parse(&action) else {
+        return Err(format!("unknown action: {action}"));
+    };
+    // On a worker thread: pkexec puts up a dialog and waits for a person,
+    // which is a very long time to block the UI thread for.
+    tauri::async_runtime::spawn_blocking(move || omen_core::elevate::run(action))
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()))
+}
+
 #[tauri::command]
 async fn diagnose() -> omen_core::diagnose::Report {
     // On a worker thread: the checks talk to the daemon, walk /proc and shell
@@ -861,6 +912,9 @@ fn main() {
             curve_code,
             import_curve_code,
             save_report,
+            privileged_actions,
+            privileged_asker,
+            run_privileged,
             diagnose,
             diagnose_text,
             set_zone,

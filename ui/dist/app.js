@@ -1989,12 +1989,89 @@ async function runDiagnosis(force) {
   }
 }
 
+/* ── the things that need root ───────────────────────────────────
+ *
+ * The window sends a NAME, never a command; what each name runs lives in the
+ * Rust side and nowhere else. The password is typed into the desktop's own
+ * polkit dialog, which is the only prompt anyone should type one into.
+ *
+ * Shown only when there is something to do. A permanent list of root commands
+ * on a page people visit when something is wrong is an invitation to run one
+ * and see.
+ */
+
+async function renderRootActions() {
+  const card = $("#root-card");
+  if (!card) return;
+
+  let actions = [];
+  try {
+    actions = await invoke("privileged_actions");
+  } catch {
+    card.hidden = true;
+    return;
+  }
+
+  card.hidden = actions.length === 0;
+  if (!actions.length) return;
+
+  try {
+    $("#root-asker").textContent = await invoke("privileged_asker");
+  } catch {
+    $("#root-asker").textContent = "";
+  }
+
+  const list = $("#root-list");
+  list.replaceChildren();
+  for (const action of actions) {
+    const row = document.createElement("div");
+    row.className = "app-row";
+
+    const name = document.createElement("span");
+    name.className = "app-row__name";
+    name.textContent = t(action.title);
+
+    const what = document.createElement("span");
+    what.className = "app-row__what";
+    // The command itself, not a description of it: a password prompt should
+    // never be the first time you find out what is about to run.
+    what.textContent = action.command;
+
+    const run = document.createElement("button");
+    run.className = "btn btn--sm btn--accent";
+    run.textContent = t("Run");
+    run.title = t(action.why);
+    run.addEventListener("click", async () => {
+      run.disabled = true;
+      run.textContent = t("asking…");
+      try {
+        toast(await invoke("run_privileged", { action: action.id }));
+        await refresh();
+        await renderRootActions();
+      } catch (e) {
+        // A cancelled dialog lands here too, which is right: nothing
+        // happened, and the row stays where it was.
+        toast(String(e), true);
+        run.disabled = false;
+        run.textContent = t("Run");
+      }
+    });
+
+    row.append(name, what, run);
+    list.append(row);
+  }
+  translatePage(list);
+}
+
 function bindDiagnosis() {
+  $("#btn-diag-run").addEventListener("click", renderRootActions);
   $("#btn-diag-run").addEventListener("click", () => runDiagnosis(true));
   $("#btn-diag-copy").addEventListener("click", async () => {
     const text = await invoke("diagnose_text");
     await copyText(text, t("report"));
   });
+
+  renderRootActions();
 
   $("#btn-diag-save").addEventListener("click", async () => {
     const note = $("#diag-saved");

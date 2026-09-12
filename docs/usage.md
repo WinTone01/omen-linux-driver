@@ -311,6 +311,35 @@ implemented because the same code is right on every machine whose driver does
 expose the threshold, and because "the kernel offers no control here" is a
 more useful answer than silence.
 
+### The things that need root, and how it asks
+
+Almost nothing here does. The daemon holds the privileges, `omenctl` and the
+window reach it through a socket owned by the `omen` group, and the LEDs are
+reachable through a udev rule. What is left is the plumbing around it, and
+each piece is a named action rather than a command to copy:
+
+```console
+$ omenctl fix
+what needs root here
+
+  restart-daemon     Restart the service
+                     An upgrade leaves the old daemon running until it is restarted.
+                     $ systemctl restart omend
+
+  How it will ask: your desktop's own password dialog (polkit)
+  To run one:      omenctl fix restart-daemon
+```
+
+`omenctl fix` on its own lists what this machine is actually out of step on -
+a clean machine lists nothing. Running one asks for a password through polkit
+on a desktop, through `sudo` on a terminal, and on a machine with neither it
+prints the command for you to run yourself. The window shows the same list on
+the Diagnosis page, with the command next to each button.
+
+What may be run is a closed list, written in `crates/omen-core/src/elevate.rs`.
+Nothing accepts a command from a caller, a config file or the window: an API
+that runs a string as root is a root shell with extra steps.
+
 ### Machines that can only do part of this
 
 `omenctl caps` asks each interface separately — fan setpoint, tachometers,

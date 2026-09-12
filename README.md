@@ -168,6 +168,7 @@ omenctl power battery low-power curve:quiet
 omenctl calibrate --yes        # measure what the fans really do
 omenctl caps                   # what this machine can be asked to do
 omenctl report                 # one file for a bug report
+omenctl fix                    # what needs root here, and it asks for you
 omenctl curve code             # the curve as one line, to share
 omenctl effect wave 7          # none / breathing / wave / spectrum
 omenctl gpu                    # what is holding the discrete GPU awake

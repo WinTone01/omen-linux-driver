@@ -112,6 +112,19 @@ const I18N = {
     "performance profiles": "performans profilleri",
     "keyboard lighting": "klavye aydınlatması",
 
+    /* ── what needs root ────────────────────────────────────── */
+    "Needs your password": "Şifreni ister",
+    "Almost nothing here needs root — the service holds the privileges and this window talks to it over a socket. What is left is the plumbing: restarting the service after an upgrade, reloading a module, joining the group. Each button runs one fixed command, shown next to it.":
+      "Burada neredeyse hiçbir şey root istemez — yetkileri servis tutar, bu pencere onunla soket üzerinden konuşur. Geriye tesisat kalır: yükseltmeden sonra servisi yeniden başlatmak, modül yeniden yüklemek, gruba katılmak. Her düğme yanında yazan tek sabit komutu çalıştırır.",
+    "Run": "Çalıştır",
+    "asking…": "soruluyor…",
+    "Restart the service": "Servisi yeniden başlat",
+    "Start the service, and at every boot": "Servisi başlat, her açılışta da",
+    "Reload hp-wmi": "hp-wmi'yi yeniden yükle",
+    "Reload omen-kbd-rgb": "omen-kbd-rgb'yi yeniden yükle",
+    "Load ec_sys (read-only)": "ec_sys'i yükle (salt okunur)",
+    "Join the 'omen' group": "'omen' grubuna katıl",
+
     /* ── sharing and reports ────────────────────────────────── */
     "Copy code": "Kodu kopyala",
     "Paste code": "Kod yapıştır",

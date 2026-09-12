@@ -5,18 +5,18 @@
 //!
 //!   * `pwm1_enable`  0 = MAX, 1 = MANUAL, 2 = AUTO
 //!   * `pwm1`         0..255, mapped LINEARLY onto 0..max_rpm
-//!                    WRITING it sets the target. READING it does not give
-//!                    that target back: it converts the fan's CURRENT speed.
-//!                    Measured 2026-09-12: setpoint 1800, fans turning at
-//!                    1700, pwm1 reads 90 (90/255 x 4800 = 1694); mid-ramp,
-//!                    2300 RPM and 122 (2296). So pwm1 is a measurement on
-//!                    the way back, and anything comparing it against what
-//!                    was written will disagree on every ramp - see
-//!                    omend's check_drift, which used to.
 //!   * writes to `pwm1` are only accepted in MANUAL mode (else -EINVAL)
 //!   * the kernel additionally clamps the setpoint to min_rpm..max_rpm
 //!
 //! So clamping happens twice: here first, then in the kernel.
+//!
+//! One asymmetry is worth knowing before building anything on this: WRITING
+//! `pwm1` sets the target, but READING it does not give that target back - it
+//! converts the fan's CURRENT speed through the same scale. Measured
+//! 2026-09-12: setpoint 1800, fans turning at 1700, `pwm1` reads 90
+//! (90/255 x 4800 = 1694); mid-ramp, 2300 RPM and 122 (2296). So anything
+//! that compares `pwm1` against what was written disagrees on every ramp -
+//! see omend's check_drift, which used to.
 
 use crate::error::{Error, Result};
 use crate::sysfs::Hwmon;

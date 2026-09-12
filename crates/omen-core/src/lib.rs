@@ -19,6 +19,7 @@ pub mod caps;
 pub mod config;
 pub mod curve;
 pub mod diagnose;
+pub mod elevate;
 pub mod error;
 pub mod fan;
 pub mod gpu;

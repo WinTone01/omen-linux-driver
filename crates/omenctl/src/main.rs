@@ -93,6 +93,13 @@ USAGE:
                                    Which profile to select when the daemon
                                    starts. 'none' leaves it to the firmware.
     omenctl reload                 Make the daemon re-read its configuration
+    omenctl fix [WHAT]             The things here that need root - restarting
+                                   the service, reloading a module, joining the
+                                   'omen' group. Without an argument it lists
+                                   what this machine needs; with one it runs it
+                                   and asks for your password the way your
+                                   desktop does.
+
     omenctl caps                   What this machine can be asked to do, and
                                    why anything missing is missing
     omenctl version                Versions, and whether anything running is
@@ -128,6 +135,7 @@ fn main() -> ExitCode {
         "profile" => set_profile(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
         "caps" | "capabilities" => capabilities(),
+        "fix" => fix(&args),
         "version" | "--version" | "-V" => versions(),
         "doctor" | "check" => doctor(&args),
         "report" => report(&args),
@@ -393,6 +401,70 @@ fn app_profiles(args: &[String]) -> Result<()> {
         }
 
         Some(other) => bail!("unknown subcommand: {other} (list / add / remove)"),
+    }
+}
+
+/// The few things here that need root, and a way to ask for it.
+///
+/// This exists because the alternative was printing a command and hoping.
+/// Everything that needs root is a named action with its argv written in the
+/// binary - nothing takes a command from anywhere else - and asking goes
+/// through polkit on a desktop or sudo on a terminal, so the password is
+/// typed into a prompt the person already recognises.
+fn fix(args: &[String]) -> Result<()> {
+    use omen_core::elevate::{Action, Asker};
+
+    let Some(name) = args.get(1) else {
+        let asker = Asker::detect();
+        println!("what needs root here\n");
+
+        let mut offered = 0;
+        for action in Action::all() {
+            if !action.applicable() {
+                continue;
+            }
+            offered += 1;
+            println!("  {:<18} {}", action.as_str(), action.title());
+            for line in wrap(action.why(), 66) {
+                println!("  {:<18} {}", "", line);
+            }
+            println!("  {:<18} $ {}\n", "", action.command());
+        }
+        if offered == 0 {
+            println!("  Nothing. The service is installed and running, the modules are");
+            println!("  loaded, and you are in the 'omen' group.\n");
+        }
+
+        println!("  How it will ask: {}", asker.describe());
+        if offered > 0 {
+            println!("  To run one:      omenctl fix <name>");
+        }
+        return Ok(());
+    };
+
+    let action = Action::parse(name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown: {name}\n  one of: {}",
+            Action::all()
+                .iter()
+                .map(|a| a.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        )
+    })?;
+
+    // Shown before the prompt, not after: somebody about to type a password
+    // should be able to see what it is for.
+    println!("{}", action.title());
+    println!("  $ {}", action.command());
+    println!("  asking through {}\n", Asker::detect().describe());
+
+    match omen_core::elevate::run(action) {
+        Ok(message) => {
+            println!("{message}");
+            Ok(())
+        }
+        Err(e) => bail!("{e}"),
     }
 }
 
