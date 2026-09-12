@@ -94,14 +94,38 @@
         </div>
 
         <nav class="device-list" role="tablist">
-          <button class="device-link is-active" data-view="vitals"      role="tab">System Vitals</button>
-          <button class="device-link"           data-view="performance" role="tab">Performance Control</button>
-          <button class="device-link"           data-view="fan"         role="tab">Fan Control</button>
-          <button class="device-link"           data-view="automation"  role="tab">Game Profiles</button>
-          <button class="device-link"           data-view="graphics"    role="tab">Graphics</button>
-          <button class="device-link"           data-view="lighting"    role="tab">Lighting</button>
-          <button class="device-link"           data-view="diagnosis"   role="tab">Diagnosis</button>
-          <button class="device-link"           data-view="settings"    role="tab">Settings</button>
+          <button class="device-link is-active" data-view="vitals" role="tab">
+            <svg class="device-link__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+            <span>System Vitals</span>
+          </button>
+          <button class="device-link" data-view="performance" role="tab">
+            <svg class="device-link__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
+            <span>Performance Control</span>
+          </button>
+          <button class="device-link" data-view="fan" role="tab">
+            <svg class="device-link__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM12 8.5V3M12 21v-5.5M8.5 12H3M21 12h-5.5"/></svg>
+            <span>Fan Control</span>
+          </button>
+          <button class="device-link" data-view="automation" role="tab">
+            <svg class="device-link__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2zM7 12h4M9 10v4M16 11h.01M18 13h.01"/></svg>
+            <span>Game Profiles</span>
+          </button>
+          <button class="device-link" data-view="graphics" role="tab">
+            <svg class="device-link__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v11H3zM9 20h6M12 16v4"/></svg>
+            <span>Graphics</span>
+          </button>
+          <button class="device-link" data-view="lighting" role="tab">
+            <svg class="device-link__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21.5h4M12 2.5a6 6 0 0 0-4 10.4c.9.8 1 1.6 1 2.1h6c0-.5.1-1.3 1-2.1a6 6 0 0 0-4-10.4z"/></svg>
+            <span>Lighting</span>
+          </button>
+          <button class="device-link" data-view="diagnosis" role="tab">
+            <svg class="device-link__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20.5 20.5 16 16"/></svg>
+            <span>Diagnosis</span>
+          </button>
+          <button class="device-link" data-view="settings" role="tab">
+            <svg class="device-link__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L14.9 3H9.1l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L4.6 11a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1c.5.4 1.1.8 1.7 1l.4 2.6h5.8l.4-2.6c.6-.2 1.2-.6 1.7-1l2.4 1 2-3.4z"/></svg>
+            <span>Settings</span>
+          </button>
         </nav>
       </div>
       <div class="sidebar__footer">
@@ -114,15 +138,14 @@
 
     <!-- ── Main ───────────────────────────────────────────────── -->
     <main class="main">
-      <div class="main-tabs" role="tablist">
-        <button class="main-tab is-active" data-view="vitals"      role="tab">System Vitals</button>
-        <button class="main-tab"           data-view="performance" role="tab">Performance Control</button>
-        <button class="main-tab"           data-view="fan"         role="tab">Fan Control</button>
-        <button class="main-tab"           data-view="automation"  role="tab">Game Profiles</button>
-        <button class="main-tab"           data-view="graphics"    role="tab">Graphics</button>
-        <button class="main-tab"           data-view="lighting"    role="tab">Lighting</button>
-        <button class="main-tab"           data-view="diagnosis"   role="tab">Diagnosis</button>
-        <button class="main-tab"           data-view="settings"    role="tab">Settings</button>
+      <!-- One navigation, not two. The sidebar and this row listed the same
+           eight destinations; what the space is worth more for is saying
+           which page you are on and what it is for. -->
+      <div class="page-head">
+        <div class="page-head__text">
+          <h1 class="page-head__title" id="page-title">System Vitals</h1>
+          <p class="page-head__sub" id="page-sub"></p>
+        </div>
       </div>
 
       <div class="main-scroll">
@@ -134,7 +157,7 @@
 
           <div class="vitals-grid">
             <div class="card ring-card">
-              <div class="ring-card__head">GPU</div>
+              <div class="ring-card__head">GPU<span class="ring-card__badge" id="gpu-badge" hidden></span></div>
               <div class="ring" id="ring-gpu" style="--p:0">
                 <svg viewBox="0 0 120 120" class="ring__svg">
                   <circle class="ring__track" cx="60" cy="60" r="52"/>
@@ -146,7 +169,6 @@
                   <span class="ring__sub">GPU Temperature</span>
                 </div>
               </div>
-              <div class="ring-card__badge" id="gpu-badge" hidden></div>
               <svg class="spark" viewBox="0 0 200 26" preserveAspectRatio="none" aria-hidden="true">
                 <path class="spark__line spark__line--temp" id="spark-gpu" d=""/>
               </svg>
@@ -154,7 +176,7 @@
             </div>
 
             <div class="card ring-card">
-              <div class="ring-card__head">CPU</div>
+              <div class="ring-card__head">CPU<span class="ring-card__badge" id="cpu-badge" hidden></span></div>
               <div class="ring" id="ring-cpu" style="--p:0">
                 <svg viewBox="0 0 120 120" class="ring__svg">
                   <circle class="ring__track" cx="60" cy="60" r="52"/>
@@ -166,7 +188,6 @@
                   <span class="ring__sub">CPU Utilization</span>
                 </div>
               </div>
-              <div class="ring-card__badge" id="cpu-badge" hidden></div>
               <svg class="spark" viewBox="0 0 200 26" preserveAspectRatio="none" aria-hidden="true">
                 <path class="spark__line spark__line--temp" id="spark-cpu" d=""/>
               </svg>
@@ -392,7 +413,6 @@
 
         <!-- ── Game Profiles ──────────────────────────────────── -->
         <section class="view" data-view="automation" role="tabpanel">
-          <div class="panel-head"><h2 class="panel-head__title">Automatic profiles</h2></div>
           <p class="hint hint--lede">
             Three rules, applied in that order: a running program beats a state
             of the machine, which beats the power source. The more specific
@@ -484,7 +504,6 @@
 
         <!-- ── Graphics ───────────────────────────────────────── -->
         <section class="view" data-view="graphics" role="tabpanel">
-          <div class="panel-head"><h2 class="panel-head__title">Graphics</h2></div>
           <p class="hint hint--lede">
             Which GPU drives the screen, and what the discrete one is doing when
             nothing is asking it to.
@@ -651,7 +670,6 @@
         <section class="view" data-view="diagnosis" role="tabpanel">
           <div class="diag-head">
             <div>
-              <h2 class="panel-head__title">Diagnosis</h2>
               <p class="hint" id="diag-summary">checking…</p>
             </div>
             <div class="btn-row">

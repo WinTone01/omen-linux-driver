@@ -28,6 +28,23 @@ const I18N = {
     "Diagnosis": "Tanılama",
     "Settings": "Ayarlar",
     "connecting…": "bağlanılıyor…",
+
+    /* ── page headers ───────────────────────────────────────── */
+    "What the machine is doing right now.": "Makinenin şu an ne yaptığı.",
+    "The firmware's thermal profile, and what each mode actually does.":
+      "Firmware'in termal profili ve her modun gerçekte ne yaptığı.",
+    "The curve, the mode, and a log of every setpoint the service chose.":
+      "Eğri, mod ve servisin seçtiği her hedefin kaydı.",
+    "Rules that run the machine for you: a program, a state, a power source.":
+      "Makineyi senin yerine çalıştıran kurallar: bir program, bir durum, bir güç kaynağı.",
+    "Which GPU drives the screen, and what the discrete one is doing.":
+      "Ekranı hangi GPU sürüyor ve ayrık olan ne yapıyor.",
+    "Four zones, effects, and colours that survive a reboot.":
+      "Dört bölge, efektler ve yeniden başlatmadan sağ çıkan renkler.",
+    "Every part of the installation, checked, with what to do about anything wrong.":
+      "Kurulumun her parçası denetlenir, yanlış olan için ne yapılacağıyla birlikte.",
+    "This window, the machine's defaults, versions and firmware.":
+      "Bu pencere, makinenin varsayılanları, sürümler ve firmware.",
     "omend connected": "omend bağlı",
     "omend unreachable": "omend'e ulaşılamıyor",
 

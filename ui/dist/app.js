@@ -306,6 +306,29 @@ const LAST_VIEW_KEY = "omen.view";
  * Hanging it off the click meant those three showed a page that said
  * "checking..." and never did.
  */
+/* What each page is called, and what it is for.
+ *
+ * Here rather than in the markup because the header is one element that
+ * changes, not eight that are hidden - and because these are the strings the
+ * window translates, so they belong next to the rest of the copy.
+ */
+const PAGES = {
+  vitals: ["System Vitals", "What the machine is doing right now."],
+  performance: ["Performance Control", "The firmware's thermal profile, and what each mode actually does."],
+  fan: ["Fan Control", "The curve, the mode, and a log of every setpoint the service chose."],
+  automation: ["Game Profiles", "Rules that run the machine for you: a program, a state, a power source."],
+  graphics: ["Graphics", "Which GPU drives the screen, and what the discrete one is doing."],
+  lighting: ["Lighting", "Four zones, effects, and colours that survive a reboot."],
+  diagnosis: ["Diagnosis", "Every part of the installation, checked, with what to do about anything wrong."],
+  settings: ["Settings", "This window, the machine's defaults, versions and firmware."],
+};
+
+function renderPageHead(id) {
+  const [title, sub] = PAGES[id] ?? PAGES.vitals;
+  $("#page-title").textContent = t(title);
+  $("#page-sub").textContent = t(sub);
+}
+
 function onViewShown(id) {
   if (id === "diagnosis") runDiagnosis(false);
   if (id === "settings") scanFirmware(false);
@@ -319,6 +342,7 @@ function selectView(id) {
     else el.classList.toggle("is-active", match);
   });
   $(".main-scroll").scrollTop = 0;
+  renderPageHead(id);
   onViewShown(id);
   // Remembered per machine, not in the settings file: which tab you had open
   // is a property of this window on this screen, not something to sync or
@@ -331,7 +355,7 @@ function selectView(id) {
   }
 }
 
-$$(".device-link, .main-tab").forEach((el) =>
+$$(".device-link").forEach((el) =>
   el.addEventListener("click", () => selectView(el.dataset.view)),
 );
 
@@ -340,18 +364,21 @@ $$(".device-link, .main-tab").forEach((el) =>
  * version, or a hash someone typed, may not be a tab at all. */
 function openInitialView() {
   const wanted = location.hash.replace(/^#/, "");
-  if (wanted && $(`.main-tab[data-view="${wanted}"]`)) {
+  if (wanted && $(`.device-link[data-view="${wanted}"]`)) {
     selectView(wanted);
     return;
   }
   try {
     const last = localStorage.getItem(LAST_VIEW_KEY);
-    if (last && $(`.main-tab[data-view="${last}"]`)) selectView(last);
+    if (last && $(`.device-link[data-view="${last}"]`)) selectView(last);
   } catch {
     /* first run, or storage is off */
   }
 }
 openInitialView();
+// openInitialView only calls selectView when it has somewhere to go; the
+// default page needs its header filled in as well.
+renderPageHead($(".view.is-active")?.dataset.view ?? "vitals");
 window.addEventListener("hashchange", openInitialView);
 
 /* ── keyboard graphic ────────────────────────────────────────── */
@@ -928,9 +955,7 @@ function renderNow(s) {
   // two halves of the question "what are the fans being told to do".
   let fan = "—";
   if (d?.mode) {
-    const mode = d.mode.mode === "manual" ? `${d.mode.rpm} RPM` : t(d.mode.mode);
-    const target = d.target_rpm;
-    fan = target && d.mode.mode !== "manual" ? `${mode} · ${target} RPM` : mode;
+    fan = d.mode.mode === "manual" ? `${d.mode.rpm} RPM` : t(d.mode.mode);
   } else if (d) {
     fan = t("no fan control");
   }
@@ -2923,7 +2948,7 @@ function setVisible(next) {
 /* `omen-ui --tab graphics`, from a launcher or a shortcut. */
 window.__TAURI__?.event?.listen?.("omen://open-tab", (e) => {
   const wanted = String(e.payload ?? "");
-  if ($(`.main-tab[data-view="${wanted}"]`)) selectView(wanted);
+  if ($(`.device-link[data-view="${wanted}"]`)) selectView(wanted);
 });
 
 document.addEventListener("visibilitychange", () => setVisible(!document.hidden));
