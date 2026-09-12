@@ -55,6 +55,15 @@ USAGE:
                                    named curve while it is open
     omenctl app remove <PROCESS>   Drop one
 
+    omenctl trigger                List the state triggers
+    omenctl trigger add <WHEN> [VALUE] [PROFILE] [FAN]
+                                   WHEN is temp-above / battery-below / idle /
+                                   lid-closed. e.g.
+                                     omenctl trigger add temp-above 88 performance
+                                     omenctl trigger add idle 30 low-power curve:quiet
+                                     omenctl trigger add lid-closed low-power
+    omenctl trigger remove <WHEN>  Drop one
+
     omenctl gpu mux [MODE]         Which GPU drives the screen from the next
                                    boot: hybrid / discrete / uma
     omenctl gpu [auto|on]          Discrete GPU: may it suspend when idle?
@@ -66,6 +75,10 @@ USAGE:
     omenctl power ac|battery <PROFILE|none> [FAN]
                                    e.g. omenctl power battery low-power curve:quiet
                                    'none' clears that rule
+
+    omenctl battery [PERCENT|off]  Stop charging at PERCENT, on a machine whose
+                                   kernel offers the control. Without an
+                                   argument, shows the charge and the limit.
 
     omenctl clean [SECONDS]        Run the fans at full power to clear dust
                                    (default 20s, 5-120), then back to normal
@@ -95,9 +108,11 @@ fn main() -> ExitCode {
         "set" => set_mode(&args),
         "effect" => set_effect(&args),
         "app" => app_profiles(&args),
+        "trigger" | "triggers" => triggers(&args),
         "gpu" => gpu_power(&args),
         "power" => power_rules(&args),
         "clean" => clean_fans(&args),
+        "battery" => battery(&args),
         "profile" => set_profile(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
         "version" | "--version" | "-V" => versions(),
@@ -512,6 +527,187 @@ fn clean_fans(args: &[String]) -> Result<()> {
         None => 20,
     };
     client::report(client::send(&Request::CleanFans { seconds })?)
+}
+
+/// The battery's charge, and the limit if this machine has one.
+///
+/// It reads sysfs directly for the report and goes through the daemon to
+/// change anything, like everything else here: the threshold file is
+/// root-owned, and the daemon is also what puts the limit back after a
+/// suspend.
+fn battery(args: &[String]) -> Result<()> {
+    use omen_core::battery::Battery;
+
+    let Some(bat) = Battery::discover() else {
+        bail!("no battery was found - is this a desktop?");
+    };
+
+    let Some(arg) = args.get(1).map(String::as_str) else {
+        field(
+            "charge",
+            match omen_core::power::battery_percent() {
+                Some(p) => format!("{p}%"),
+                None => "unknown".into(),
+            },
+        );
+        field(
+            "on",
+            match omen_core::power::on_ac() {
+                Some(true) => "mains",
+                Some(false) => "battery",
+                None => "unknown",
+            },
+        );
+        match (bat.supports_limit(), bat.limit()) {
+            (true, Some(100)) | (true, None) => field("charge limit", "off (charges to full)"),
+            (true, Some(p)) => field("charge limit", format!("charging stops at {p}%")),
+            (false, _) => {
+                field("charge limit", "not available");
+                println!("\n  {}", bat.unsupported_reason());
+            }
+        }
+        return Ok(());
+    };
+
+    let percent = match arg {
+        "off" | "none" | "full" | "100" => None,
+        other => Some(
+            other
+                .trim_end_matches('%')
+                .parse::<u8>()
+                .map_err(|_| anyhow::anyhow!("{other:?} is not a percentage, or 'off'"))?,
+        ),
+    };
+    client::report(client::send(&Request::SetChargeLimit { percent })?)
+}
+
+/// Rules that follow the machine's own state.
+///
+/// The same edit-the-file-not-the-snapshot rule as the application profiles,
+/// and for the same reason: a read-modify-write against a snapshot taken just
+/// after a previous edit resurrects what was removed.
+fn triggers(args: &[String]) -> Result<()> {
+    use omen_core::triggers::{Kind, Trigger};
+
+    let snap = app_snapshot()?;
+    let mut list = match args.get(1).map(String::as_str) {
+        Some("add") | Some("remove") => {
+            let path = snap
+                .config_path
+                .as_deref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(Config::default_path);
+            Config::load(&path)
+                .map(|c| c.triggers)
+                .unwrap_or_else(|_| snap.triggers.clone())
+        }
+        _ => snap.triggers.clone(),
+    };
+
+    // Spelled with a hyphen on the command line and an underscore in the
+    // file. Both are accepted here; nobody should have to remember which.
+    let parse_kind = |raw: &str| -> Result<Kind> {
+        Ok(match raw.replace('-', "_").as_str() {
+            "temp_above" | "hot" => Kind::TempAbove,
+            "battery_below" | "battery" => Kind::BatteryBelow,
+            "idle" => Kind::Idle,
+            "lid_closed" | "lid" => Kind::LidClosed,
+            other => bail!(
+                "unknown trigger: {other}                  (temp-above / battery-below / idle / lid-closed)"
+            ),
+        })
+    };
+
+    match args.get(1).map(String::as_str) {
+        None | Some("list") => {
+            if list.is_empty() {
+                println!("no triggers");
+                println!("  add one with: omenctl trigger add temp-above 88 performance");
+                return Ok(());
+            }
+            println!("triggers  (first matching entry wins; an app profile beats all of them)\n");
+            for t in &list {
+                let active = snap.active_trigger.as_deref() == Some(t.name().as_str());
+                println!(
+                    "  {}{:<24} {}",
+                    if active { "* " } else { "  " },
+                    t.condition(),
+                    t.summary()
+                );
+            }
+            field("\nidle for", format!("{} min", snap.idle_secs / 60));
+            if let Some(active) = &snap.active_trigger {
+                println!("  in force: {active}");
+            }
+            Ok(())
+        }
+
+        Some("add") => {
+            let raw = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("which condition? (temp-above / battery-below / idle / lid-closed)"))?;
+            let when = parse_kind(raw)?;
+
+            let mut entry = Trigger {
+                when,
+                value: None,
+                profile: None,
+                fan: None,
+                curve: None,
+            };
+
+            // The value comes first when the condition takes one, and a
+            // number in any other position is a fan setpoint - same
+            // shape-based parsing as everywhere else here.
+            let mut rest = &args[3..];
+            if when.unit().is_some() {
+                let raw = rest
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("{when} needs a value in {}", when.unit().unwrap_or("")))?;
+                entry.value = Some(
+                    raw.trim_end_matches(['C', 'c', '%'])
+                        .parse::<f32>()
+                        .map_err(|_| anyhow::anyhow!("{raw:?} is not a number"))?,
+                );
+                rest = &rest[1..];
+            }
+
+            for arg in rest {
+                if let Some(name) = parse_curve_arg(arg)? {
+                    entry.curve = Some(name);
+                    entry.fan = Some(ControlMode::Curve);
+                    continue;
+                }
+                match parse_fan(arg) {
+                    Ok(mode) => entry.fan = Some(mode),
+                    Err(_) => entry.profile = Some(arg.clone()),
+                }
+            }
+
+            entry.check().map_err(|e| anyhow::anyhow!("{e}"))?;
+
+            // One entry per condition: two rules watching the same thing can
+            // only disagree, and the second would never fire.
+            list.retain(|t| t.when != when);
+            list.push(entry);
+            client::report(client::send(&Request::SetTriggers { triggers: list })?)
+        }
+
+        Some("remove") => {
+            let raw = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("which condition?"))?;
+            let when = parse_kind(raw)?;
+            let before = list.len();
+            list.retain(|t| t.when != when);
+            if list.len() == before {
+                bail!("no {when} trigger is configured");
+            }
+            client::report(client::send(&Request::SetTriggers { triggers: list })?)
+        }
+
+        Some(other) => bail!("unknown subcommand: {other} (list / add / remove)"),
+    }
 }
 
 fn power_rules(args: &[String]) -> Result<()> {

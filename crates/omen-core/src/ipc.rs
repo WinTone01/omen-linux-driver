@@ -120,6 +120,8 @@ pub enum Request {
     /// Set the keyboard lighting effect. Saved and re-read the same way a
     /// curve is, so it survives a restart.
     SetEffect(crate::anim::EffectSpec),
+    /// Replace the list of state triggers.
+    SetTriggers { triggers: Vec<crate::triggers::Trigger> },
     /// Replace the list of per-application profiles.
     ///
     /// A struct variant rather than a newtype: serde's internally-tagged
@@ -152,6 +154,10 @@ pub enum Request {
     /// Which GPU the panel is wired to from the next boot: hybrid, discrete
     /// or uma. Takes effect at the next boot, not now.
     SetGpuMux { mode: String },
+    /// Stop charging the battery at this percentage. `None` clears the
+    /// limit. Refused on a machine whose kernel exposes no threshold - we do
+    /// not pretend to have a control we do not have.
+    SetChargeLimit { percent: Option<u8> },
     /// Re-read the config from disk.
     Reload,
 }
@@ -217,6 +223,13 @@ pub struct Snapshot {
     /// Battery charge, when there is a battery.
     #[serde(default)]
     pub battery_percent: Option<u8>,
+    /// The charge limit in force, on a machine that has the control.
+    #[serde(default)]
+    pub charge_limit: Option<u8>,
+    /// Whether the control exists at all, so the UI can offer it or say why
+    /// not rather than showing a slider that writes nowhere.
+    #[serde(default)]
+    pub charge_limit_supported: bool,
     /// The rules for each power source.
     #[serde(default)]
     pub power_ac: crate::power::PowerRule,
@@ -235,6 +248,15 @@ pub struct Snapshot {
     /// The application profile in force, if one is.
     #[serde(default)]
     pub active_app: Option<String>,
+    /// The configured state triggers, and which one is in force.
+    #[serde(default)]
+    pub triggers: Vec<crate::triggers::Trigger>,
+    #[serde(default)]
+    pub active_trigger: Option<String>,
+    /// How long the machine has been idle, by the measure in triggers::Idle.
+    /// Reported so a rule built on it can be believed before it fires.
+    #[serde(default)]
+    pub idle_secs: u64,
     /// Whether the keyboard's colours are remembered and put back at start,
     /// and whether the backlight follows the power source.
     #[serde(default)]

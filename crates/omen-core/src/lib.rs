@@ -13,6 +13,7 @@
 pub mod about;
 pub mod anim;
 pub mod apps;
+pub mod battery;
 pub mod config;
 pub mod curve;
 pub mod diagnose;
@@ -25,5 +26,6 @@ pub mod power;
 pub mod profile;
 pub mod sysfs;
 pub mod thermal;
+pub mod triggers;
 
 pub use error::{Error, Result};

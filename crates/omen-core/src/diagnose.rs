@@ -234,6 +234,35 @@ fn hardware() -> Section {
         ),
     ));
 
+    // Not a fault either way. It is here because "can this machine stop
+    // charging at 80%?" is a question with a real answer that is hard to find
+    // out, and the answer on this board - no, it is a BIOS setting - is
+    // exactly the kind of thing people assume is a missing feature.
+    checks.push(match crate::battery::Battery::discover() {
+        None => Check::new(
+            "charge_limit",
+            "Battery charge limit",
+            Verdict::Skip,
+            "no battery",
+        ),
+        Some(b) if b.supports_limit() => Check::new(
+            "charge_limit",
+            "Battery charge limit",
+            Verdict::Ok,
+            match b.limit() {
+                Some(100) | None => "available, not limiting".to_string(),
+                Some(p) => format!("charging stops at {p}%"),
+            },
+        ),
+        Some(b) => Check::new(
+            "charge_limit",
+            "Battery charge limit",
+            Verdict::Skip,
+            "the kernel exposes no threshold for this battery",
+        )
+        .with_fix(b.unsupported_reason()),
+    });
+
     Section {
         title: "Hardware".into(),
         checks,

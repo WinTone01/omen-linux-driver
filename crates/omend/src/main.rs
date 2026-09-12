@@ -15,6 +15,8 @@ mod hotkey;
 mod lighting;
 mod server;
 mod shared;
+mod takeover;
+mod triggerwatch;
 
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -272,6 +274,11 @@ fn run(args: Args) -> Result<()> {
 /// How often the keyboard's colours are compared with the remembered ones.
 const ZONE_REMEMBER_EVERY: Duration = Duration::from_secs(60);
 
+/// How often the battery's charge limit is compared with the configured one.
+/// Nothing changes it quickly; this is here to catch a suspend or a driver
+/// reload putting it back, not to poll for its own sake.
+const CHARGE_LIMIT_EVERY: Duration = Duration::from_secs(30);
+
 /// How many decisions are kept for the UI. At one change every few seconds
 /// under a varying load, this is roughly the last hour of interesting
 /// behaviour; the journal has the rest.
@@ -334,6 +341,9 @@ struct Runtime {
     /// from here, and it should not be - it is not part of fan control.
     lighting_changed: bool,
     apps: appwatch::AppWatch,
+    /// Rules that follow the machine's own state. Outranked by an
+    /// application profile, and outranking the power rules.
+    triggers: triggerwatch::TriggerWatch,
     /// Last known power source, so a rule is applied on the change rather
     /// than on every tick - otherwise it could not be overridden.
     on_ac: Option<bool>,
@@ -361,6 +371,11 @@ struct Runtime {
     /// When the current setpoint was last written, for the keep-alive.
     applied_at: Instant,
     gpu: gpu::Watch,
+    /// The battery, when this machine has one whose charge can be limited.
+    /// Looked up once: batteries do not come and go.
+    battery: Option<omen_core::battery::Battery>,
+    /// When the charge limit was last compared with the configured one.
+    charge_checked: Instant,
     started: Instant,
 }
 
@@ -390,6 +405,7 @@ impl Runtime {
             read_only,
             lighting_changed: false,
             apps: appwatch::AppWatch::new(),
+            triggers: triggerwatch::TriggerWatch::new(),
             on_ac: None,
             curve_preset: None,
             cleaning: None,
@@ -404,6 +420,9 @@ impl Runtime {
             apps_scanned: Instant::now() - Duration::from_secs(3600),
             applied_at: Instant::now(),
             gpu: gpu::Watch::new(),
+            battery: omen_core::battery::Battery::discover(),
+            // Checked on the first tick rather than one interval in.
+            charge_checked: Instant::now() - CHARGE_LIMIT_EVERY,
             started: Instant::now(),
         })
     }
@@ -449,9 +468,13 @@ impl Runtime {
             }
         };
 
-        self.apply_power_rule();
         self.scan_apps();
+        self.scan_triggers(temp.as_ref().map(|(_, c)| *c));
+        // After the two more specific rules, so a power rule cannot overwrite
+        // something one of them has just applied.
+        self.apply_power_rule();
         self.apply_gpu_power();
+        self.apply_charge_limit();
 
         self.last_reading = temp.clone();
 
@@ -679,8 +702,8 @@ impl Runtime {
         if first && self.cfg.automation.startup_profile.is_some() {
             return;
         }
-        if self.apps.active().is_some() {
-            debug!("power source changed, but an application profile is in force");
+        if let Some(what) = self.apps.active().or_else(|| self.triggers.active()) {
+            debug!("power source changed, but {what} is in force");
             return;
         }
 
@@ -711,7 +734,7 @@ impl Runtime {
         // A power rule with no curve of its own puts the configured one back,
         // unless an application profile is holding one - that one is more
         // specific and stays.
-        if self.apps.active().is_none() {
+        if self.apps.active().is_none() && self.triggers.active().is_none() {
             match (&rule.curve, &self.curve_preset) {
                 (Some(name), current) if Some(name) != current.as_ref() => {
                     self.use_curve(Some(name))
@@ -782,6 +805,37 @@ impl Runtime {
         self.gpu.invalidate();
     }
 
+    /// Keeps the battery's charge limit where the configuration says.
+    ///
+    /// Re-asserted rather than set once, for the same reason as the dGPU
+    /// policy above: a suspend, a driver reload or the firmware's own idea
+    /// can put the threshold back, and a limit that quietly stopped applying
+    /// is the one failure this setting cannot tolerate - nobody watches a
+    /// battery limit, that is the whole point of it.
+    fn apply_charge_limit(&mut self) {
+        if self.read_only || self.charge_checked.elapsed() < CHARGE_LIMIT_EVERY {
+            return;
+        }
+        self.charge_checked = Instant::now();
+
+        let Some(want) = self.cfg.battery.charge_limit else {
+            return;
+        };
+        let Some(battery) = &self.battery else { return };
+        if !battery.supports_limit() {
+            // Configured on a machine that cannot do it. Said once per
+            // start, not every half minute.
+            return;
+        }
+        if battery.limit() == Some(want) {
+            return;
+        }
+        match battery.set_limit(Some(want)) {
+            Ok(()) => info!("battery charge limit -> {want}%"),
+            Err(e) => warn!("could not set the battery charge limit to {want}%: {e}"),
+        }
+    }
+
     fn scan_apps(&mut self) {
         if self.cfg.apps.is_empty() || self.apps_scanned.elapsed() < self.cfg.app_scan_interval() {
             return;
@@ -789,6 +843,31 @@ impl Runtime {
         self.apps_scanned = Instant::now();
 
         let actions = self.apps.poll(&self.cfg.apps, self.mode);
+        self.take_actions(actions);
+    }
+
+    /// Evaluates the state triggers.
+    ///
+    /// Sampling happens on every tick even when nothing is configured: the
+    /// idle counter is a running measurement, and one that only started when
+    /// a rule was added would read zero for the first half hour after an edit.
+    ///
+    /// An application profile outranks every trigger, so while one is in
+    /// force the triggers are released rather than merely ignored - leaving
+    /// one applied underneath would mean its settings quietly outlive it.
+    fn scan_triggers(&mut self, temp_c: Option<f32>) {
+        let reading = self.triggers.sample(temp_c);
+        let actions = if self.apps.active().is_some() {
+            self.triggers.release(self.mode)
+        } else {
+            self.triggers.poll(&self.cfg.triggers, &reading, self.mode)
+        };
+        self.take_actions(actions);
+    }
+
+    /// Applies what a rule asked for. The mode is not written here - setting
+    /// `self.mode` is enough, and the loop does the writing.
+    fn take_actions(&mut self, actions: takeover::Actions) {
         if let Some(mode) = actions.mode {
             if mode != self.mode {
                 self.mode = mode;
@@ -1169,12 +1248,20 @@ impl Runtime {
             drift: self.drift.clone(),
             on_ac: self.on_ac,
             battery_percent: omen_core::power::battery_percent(),
+            charge_limit: self.battery.as_ref().and_then(|b| b.limit()),
+            charge_limit_supported: self
+                .battery
+                .as_ref()
+                .is_some_and(|b| b.supports_limit()),
             power_ac: self.cfg.automation.on_ac.clone(),
             power_battery: self.cfg.automation.on_battery.clone(),
             curve_preset: self.curve_preset.clone(),
             startup_profile: self.cfg.automation.startup_profile.clone(),
             apps: self.cfg.apps.clone(),
             active_app: self.apps.active().map(str::to_owned),
+            triggers: self.cfg.triggers.clone(),
+            active_trigger: self.triggers.active().map(str::to_owned),
+            idle_secs: self.triggers.idle_secs(),
             lighting_restore: self.cfg.lighting.restore_on_start,
             lighting_off_on_battery: self.cfg.lighting.off_on_battery,
             effect: Some(self.cfg.lighting.spec()),

@@ -17,6 +17,7 @@ use crate::error::{Error, Result};
 use crate::fan::{DEFAULT_MAX_RPM, DEFAULT_MIN_RPM};
 use crate::gpu::DgpuPower;
 use crate::power::PowerRule;
+use crate::triggers::Trigger;
 
 pub const DEFAULT_PATH: &str = "/etc/omen/omend.toml";
 
@@ -44,11 +45,36 @@ pub struct Config {
     #[serde(default, rename = "app")]
     pub apps: Vec<AppProfile>,
 
+    /// Rules that follow the machine's own state - temperature, idleness,
+    /// the lid, the charge left. Same priority rule as the applications: the
+    /// first one whose condition holds wins, and an application profile
+    /// beats all of them.
+    #[serde(default, rename = "trigger")]
+    pub triggers: Vec<Trigger>,
+
     #[serde(default)]
     pub automation: AutomationConfig,
 
     #[serde(default)]
     pub graphics: GraphicsConfig,
+
+    #[serde(default)]
+    pub battery: BatteryConfig,
+}
+
+/// The battery charge limit, on a machine whose kernel offers one.
+///
+/// Kept here rather than left to whatever wrote it last because the threshold
+/// does not always survive a suspend or a driver reload, and a limit that
+/// quietly stops applying is worse than one that was never set - the whole
+/// point is that it holds for months without being looked at.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BatteryConfig {
+    /// Stop charging at this percentage. `None` - the default - means the
+    /// machine's own setting is left alone, including a limit set in BIOS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charge_limit: Option<u8>,
 }
 
 /// Discrete GPU power. Not a graphics switch - this board has no mux; see
@@ -392,6 +418,9 @@ impl Config {
                 ));
             }
         }
+        for trigger in &self.triggers {
+            trigger.check().map_err(Error::Curve)?;
+        }
         for (what, rule) in [
             ("on_ac", &self.automation.on_ac),
             ("on_battery", &self.automation.on_battery),
@@ -400,6 +429,14 @@ impl Config {
                 if p.trim().is_empty() {
                     return Err(Error::Curve(format!("{what}.profile is empty")));
                 }
+            }
+        }
+        if let Some(limit) = self.battery.charge_limit {
+            if !(crate::battery::MIN_LIMIT..=100).contains(&limit) {
+                return Err(Error::Curve(format!(
+                    "battery.charge_limit must be between {} and 100, got {limit}",
+                    crate::battery::MIN_LIMIT
+                )));
             }
         }
         if self.automation.app_scan_secs == 0 {

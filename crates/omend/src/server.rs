@@ -264,6 +264,36 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             }
         }
 
+        Request::SetTriggers { triggers } => {
+            info!("request: {} trigger(s)", triggers.len());
+            let mut cfg = match Config::load(config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("the current configuration could not be read: {e}"),
+                    }
+                }
+            };
+            // Checked here as well as in validate(), so the error names the
+            // trigger the client just sent rather than arriving as "the
+            // configuration could not be saved".
+            for t in &triggers {
+                if let Err(e) = t.check() {
+                    return Response::Error { message: e };
+                }
+            }
+            cfg.triggers = triggers;
+            if let Err(e) = cfg.save(config_path) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+            shared.request_reload();
+            Response::Done {
+                message: format!("{} trigger(s) saved", cfg.triggers.len()),
+            }
+        }
+
         Request::SetDgpuPower(want) => {
             info!("request: dGPU runtime power -> {want}");
             let mut cfg = match Config::load(config_path) {
@@ -431,6 +461,50 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                 }
                 Err(e) => Response::Error {
                     message: e.to_string(),
+                },
+            }
+        }
+
+        Request::SetChargeLimit { percent } => {
+            // Refused up front on a machine without the control, rather than
+            // saved and silently never applied. A setting that is stored but
+            // has no effect is the failure mode this project keeps finding in
+            // other tools.
+            let Some(battery) = omen_core::battery::Battery::discover() else {
+                return Response::Error {
+                    message: "no battery was found".into(),
+                };
+            };
+            if !battery.supports_limit() {
+                return Response::Error {
+                    message: battery.unsupported_reason(),
+                };
+            }
+            if let Err(e) = battery.set_limit(percent) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+
+            let mut cfg = match Config::load(config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("the current configuration could not be read: {e}"),
+                    }
+                }
+            };
+            cfg.battery.charge_limit = percent;
+            if let Err(e) = cfg.save(config_path) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+            shared.request_reload();
+            Response::Done {
+                message: match percent {
+                    Some(p) => format!("charging stops at {p}%"),
+                    None => "the charge limit is off; the battery charges to full".into(),
                 },
             }
         }
