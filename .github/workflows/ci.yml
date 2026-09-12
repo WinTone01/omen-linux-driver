@@ -23,7 +23,7 @@ jobs:
     name: build, test, lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The window needs webkit2gtk; the daemon and the CLI do not. Both are
       # built here because the workspace is built as a whole and a UI that
@@ -48,7 +48,7 @@ jobs:
     name: checkpatch
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # checkpatch --codespell needs codespell's dictionary; without it the
       # flag prints "no typos will be found" and checks nothing.
@@ -104,7 +104,7 @@ jobs:
     name: shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # install.sh is the first thing anyone runs, and it runs as root half
       # way through. A quoting mistake in it is the most expensive kind of
       # bug this project can ship.
