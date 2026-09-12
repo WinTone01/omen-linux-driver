@@ -153,7 +153,11 @@ impl Caps {
         // The fan is the thing this project exists for, so it decides the top
         // level. A profile without it is still useful - that is the whole
         // point of having a level below "full" rather than a boolean.
-        match (self.fan_setpoint, self.profile, self.temps || self.fan_tacho) {
+        match (
+            self.fan_setpoint,
+            self.profile,
+            self.temps || self.fan_tacho,
+        ) {
             (true, true, _) => Level::Full,
             // A setpoint with no profile is unusual enough to be worth not
             // claiming "full", but it is still fan control.
@@ -241,9 +245,7 @@ impl Caps {
     /// How much this machine resembles the one everything was measured on.
     pub fn confidence(&self) -> String {
         match (self.verified_board, self.omen_family) {
-            (true, _) => format!(
-                "board {VERIFIED_BOARD} - the one this was built and verified on"
-            ),
+            (true, _) => format!("board {VERIFIED_BOARD} - the one this was built and verified on"),
             (false, true) => format!(
                 "board {}, an OMEN or Victus but not the verified {VERIFIED_BOARD} - \
                  the fan and profile protocol is shared across the family, the rest is not",
@@ -347,7 +349,9 @@ mod tests {
         let mut c = caps();
         c.leds = false;
         let lines = c.lines();
-        assert!(lines.iter().any(|(name, ok, _)| *name == "keyboard lighting" && !ok));
+        assert!(lines
+            .iter()
+            .any(|(name, ok, _)| *name == "keyboard lighting" && !ok));
         assert_eq!(lines.len(), 7);
     }
 

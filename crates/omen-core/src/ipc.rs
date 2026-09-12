@@ -144,7 +144,9 @@ pub enum Request {
     /// curve is, so it survives a restart.
     SetEffect(crate::anim::EffectSpec),
     /// Replace the list of state triggers.
-    SetTriggers { triggers: Vec<crate::triggers::Trigger> },
+    SetTriggers {
+        triggers: Vec<crate::triggers::Trigger>,
+    },
     /// Replace the list of per-application profiles.
     ///
     /// A struct variant rather than a newtype: serde's internally-tagged

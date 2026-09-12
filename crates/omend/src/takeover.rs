@@ -257,7 +257,10 @@ mod tests {
     #[test]
     fn taking_over_asks_for_the_fan_mode_and_remembers_the_old_one() {
         let mut t = Takeover::new(Voice::App);
-        let actions = t.poll(Some(("cs2".into(), want("performance"))), ControlMode::Curve);
+        let actions = t.poll(
+            Some(("cs2".into(), want("performance"))),
+            ControlMode::Curve,
+        );
         assert_eq!(actions.mode, Some(ControlMode::Max));
         assert_eq!(t.active(), Some("cs2"));
 
@@ -274,7 +277,10 @@ mod tests {
     #[test]
     fn a_mode_changed_by_hand_is_not_undone() {
         let mut t = Takeover::new(Voice::Trigger);
-        t.poll(Some(("above 85 C".into(), want("performance"))), ControlMode::Curve);
+        t.poll(
+            Some(("above 85 C".into(), want("performance"))),
+            ControlMode::Curve,
+        );
         // The user asked for something else while it held.
         let actions = t.poll(None, ControlMode::Auto);
         assert_eq!(actions.mode, None, "their choice is newer than ours");
@@ -304,8 +310,14 @@ mod tests {
     #[test]
     fn one_rule_replacing_another_restores_before_it_takes_over() {
         let mut t = Takeover::new(Voice::Trigger);
-        t.poll(Some(("the lid is shut".into(), want("low-power"))), ControlMode::Curve);
-        let actions = t.poll(Some(("above 85 C".into(), want("performance"))), ControlMode::Max);
+        t.poll(
+            Some(("the lid is shut".into(), want("low-power"))),
+            ControlMode::Curve,
+        );
+        let actions = t.poll(
+            Some(("above 85 C".into(), want("performance"))),
+            ControlMode::Max,
+        );
         assert_eq!(t.active(), Some("above 85 C"));
         assert_eq!(actions.mode, Some(ControlMode::Max));
     }

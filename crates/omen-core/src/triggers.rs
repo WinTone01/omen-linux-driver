@@ -389,7 +389,10 @@ mod tests {
         let t = trigger(Kind::TempAbove, Some(85.0));
         let blind = Reading::default();
         assert!(t.holds(&blind, true), "engaged: keep what was applied");
-        assert!(!t.holds(&blind, false), "not engaged: do not invent a reason");
+        assert!(
+            !t.holds(&blind, false),
+            "not engaged: do not invent a reason"
+        );
     }
 
     #[test]
@@ -464,10 +467,14 @@ mod tests {
         };
         assert_eq!(active(&list, &now, None), Some(0));
         assert_eq!(
-            active(&list, &Reading {
-                lid_closed: Some(true),
-                ..Default::default()
-            }, None),
+            active(
+                &list,
+                &Reading {
+                    lid_closed: Some(true),
+                    ..Default::default()
+                },
+                None
+            ),
             Some(1)
         );
     }

@@ -126,22 +126,27 @@ fn machine() -> String {
     let distro = std::fs::read_to_string("/etc/os-release")
         .ok()
         .and_then(|text| {
-            text.lines()
-                .find_map(|l| l.strip_prefix("PRETTY_NAME=").map(|v| v.trim_matches('"').to_owned()))
+            text.lines().find_map(|l| {
+                l.strip_prefix("PRETTY_NAME=")
+                    .map(|v| v.trim_matches('"').to_owned())
+            })
         });
-    let _ = writeln!(out, "{:<16} {}", "distribution", distro.unwrap_or_else(missing));
+    let _ = writeln!(
+        out,
+        "{:<16} {}",
+        "distribution",
+        distro.unwrap_or_else(missing)
+    );
     let _ = writeln!(
         out,
         "{:<16} {}",
         "cpu",
         std::fs::read_to_string("/proc/cpuinfo")
             .ok()
-            .and_then(|text| text
-                .lines()
-                .find_map(|l| l
-                    .strip_prefix("model name")
-                    .and_then(|v| v.split_once(':'))
-                    .map(|(_, name)| name.trim().to_owned())))
+            .and_then(|text| text.lines().find_map(|l| l
+                .strip_prefix("model name")
+                .and_then(|v| v.split_once(':'))
+                .map(|(_, name)| name.trim().to_owned())))
             .unwrap_or_else(missing)
     );
     out
@@ -218,10 +223,7 @@ fn configuration(snapshot: Option<&Snapshot>) -> String {
 fn fan_and_thermal() -> String {
     let mut out = String::new();
 
-    match crate::fan::Fan::discover(
-        crate::fan::DEFAULT_MIN_RPM,
-        crate::fan::DEFAULT_MAX_RPM,
-    ) {
+    match crate::fan::Fan::discover(crate::fan::DEFAULT_MIN_RPM, crate::fan::DEFAULT_MAX_RPM) {
         Ok(fan) => {
             let dir = fan.hwmon_path().to_owned();
             let _ = writeln!(out, "hwmon: {}", dir.display());
@@ -240,10 +242,7 @@ fn fan_and_thermal() -> String {
     let _ = writeln!(out);
     for (label, path) in [
         ("platform_profile", "/sys/firmware/acpi/platform_profile"),
-        (
-            "choices",
-            "/sys/firmware/acpi/platform_profile_choices",
-        ),
+        ("choices", "/sys/firmware/acpi/platform_profile_choices"),
     ] {
         let _ = writeln!(out, "{label:<18} {}", read(path).unwrap_or_else(missing));
     }
@@ -256,12 +255,14 @@ fn fan_and_thermal() -> String {
         read("/sys/firmware/acpi/platform_profile_handlers")
             .or_else(|| {
                 // Newer kernels moved them under the class directory.
-                std::fs::read_dir("/sys/class/platform-profile").ok().map(|d| {
-                    d.flatten()
-                        .filter_map(|e| read(e.path().join("name").to_str()?))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
+                std::fs::read_dir("/sys/class/platform-profile")
+                    .ok()
+                    .map(|d| {
+                        d.flatten()
+                            .filter_map(|e| read(e.path().join("name").to_str()?))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
             })
             .unwrap_or_else(missing)
     );

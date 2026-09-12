@@ -162,7 +162,11 @@ fn run(args: Args) -> Result<()> {
         }
         Err(e) => {
             warn!("no fan control on this machine: {e}");
-            warn!("running in {} mode - {}", caps.level(), caps.level().describe());
+            warn!(
+                "running in {} mode - {}",
+                caps.level(),
+                caps.level().describe()
+            );
             if let Some(remedy) = caps.remedy() {
                 warn!("{remedy}");
             }
@@ -1362,7 +1366,8 @@ impl Runtime {
             Applied::Max => {
                 warn!("{why} -> FANS AT FULL POWER");
                 if !self.read_only {
-                    if let Err(e) = self.with_fan(|fan| fan.set_mode(omen_core::fan::PwmMode::Max)) {
+                    if let Err(e) = self.with_fan(|fan| fan.set_mode(omen_core::fan::PwmMode::Max))
+                    {
                         error!("could not switch to full power: {e}");
                         return;
                     }
@@ -1449,10 +1454,7 @@ impl Runtime {
             on_ac: self.on_ac,
             battery_percent: omen_core::power::battery_percent(),
             charge_limit: self.battery.as_ref().and_then(|b| b.limit()),
-            charge_limit_supported: self
-                .battery
-                .as_ref()
-                .is_some_and(|b| b.supports_limit()),
+            charge_limit_supported: self.battery.as_ref().is_some_and(|b| b.supports_limit()),
             power_ac: self.cfg.automation.on_ac.clone(),
             power_battery: self.cfg.automation.on_battery.clone(),
             curve_preset: self.curve_preset.clone(),

@@ -314,6 +314,7 @@ enable_service
 printf '\n%s  Done.%s\n\n' "$C_GREEN$C_BOLD" "$C_OFF"
 printf '  %somenctl status%s     what the machine is doing now\n' "$C_BOLD" "$C_OFF"
 printf '  %somenctl doctor%s     check the whole installation\n' "$C_BOLD" "$C_OFF"
+printf '  %somenctl caps%s       what this machine can be asked to do\n' "$C_BOLD" "$C_OFF"
 (( BUILD_GUI )) && printf '  %somen-ui%s            the window\n' "$C_BOLD" "$C_OFF"
 printf '\n  %sThe RGB module and hp-wmi keep the build that is loaded until you\n' "$C_DIM"
 printf '  reboot or reload them; omenctl version says when that matters.%s\n\n' "$C_OFF"

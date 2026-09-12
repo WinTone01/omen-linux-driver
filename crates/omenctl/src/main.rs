@@ -407,13 +407,25 @@ fn capabilities() -> Result<()> {
     let caps = omen_core::caps::Caps::detect();
 
     println!("{}\n", caps.confidence());
-    field("vendor", caps.vendor.clone().unwrap_or_else(|| "unknown".into()));
-    field("model", caps.model.clone().unwrap_or_else(|| "unknown".into()));
-    field("board", caps.board.clone().unwrap_or_else(|| "unknown".into()));
+    field(
+        "vendor",
+        caps.vendor.clone().unwrap_or_else(|| "unknown".into()),
+    );
+    field(
+        "model",
+        caps.model.clone().unwrap_or_else(|| "unknown".into()),
+    );
+    field(
+        "board",
+        caps.board.clone().unwrap_or_else(|| "unknown".into()),
+    );
 
     println!();
     for (name, present, detail) in caps.lines() {
-        println!("  {} {name:<22} {detail}", if present { "yes" } else { " no" });
+        println!(
+            "  {} {name:<22} {detail}",
+            if present { "yes" } else { " no" }
+        );
     }
 
     println!("\n{}: {}", caps.level(), caps.level().describe());
@@ -576,7 +588,10 @@ fn report(args: &[String]) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("could not write {}: {e}", path.display()))?;
 
     println!("{}", path.display());
-    println!("  {} lines. Read it before posting it anywhere - it describes", text.lines().count());
+    println!(
+        "  {} lines. Read it before posting it anywhere - it describes",
+        text.lines().count()
+    );
     println!("  your machine's hardware and configuration, and nothing else.");
     if !omen_core::ipc::client::send(&Request::Status).is_ok() {
         println!("\n  The daemon did not answer, so the report has no live state in it.");
@@ -637,9 +652,7 @@ fn calibrate(args: &[String]) -> Result<()> {
 
     let snap = app_snapshot()?;
     if snap.mode.is_none() {
-        bail!(
-            "this machine has no fan setpoint to measure - see 'omenctl caps'"
-        );
+        bail!("this machine has no fan setpoint to measure - see 'omenctl caps'");
     }
     let before = snap.mode.unwrap_or(ControlMode::Curve);
 
@@ -656,7 +669,12 @@ fn calibrate(args: &[String]) -> Result<()> {
     };
 
     if !args.iter().any(|a| a == "--yes" || a == "-y") {
-        println!("This runs the fans at {} setpoints for {}s each - about {} minute(s) of", steps.len(), SETTLE.as_secs(), (steps.len() as u64 * SETTLE.as_secs()).div_ceil(60));
+        println!(
+            "This runs the fans at {} setpoints for {}s each - about {} minute(s) of",
+            steps.len(),
+            SETTLE.as_secs(),
+            (steps.len() as u64 * SETTLE.as_secs()).div_ceil(60)
+        );
         println!("noise - and puts the fan back to {before} afterwards.\n");
         println!("Re-run with --yes to go ahead.");
         return Ok(());
@@ -673,8 +691,10 @@ fn calibrate(args: &[String]) -> Result<()> {
         // The guard has taken over, or the machine is hot. Either way this is
         // not the time to be holding a fan at a fixed speed for science.
         if now.safety_fallback {
-            println!("\nstopped: a safety override is active ({})",
-                now.safety_reason.as_deref().unwrap_or("no reason given"));
+            println!(
+                "\nstopped: a safety override is active ({})",
+                now.safety_reason.as_deref().unwrap_or("no reason given")
+            );
             break;
         }
         if let Some(temp) = now.driver_temp_c {
@@ -686,8 +706,12 @@ fn calibrate(args: &[String]) -> Result<()> {
 
         println!(
             "{rpm:>10}  {:>10}  {:>10}",
-            now.fan1_rpm.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
-            now.fan2_rpm.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+            now.fan1_rpm
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into()),
+            now.fan2_rpm
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into()),
         );
         measured.push((*rpm, now.fan1_rpm, now.fan2_rpm));
     }
@@ -697,11 +721,14 @@ fn calibrate(args: &[String]) -> Result<()> {
     client::send(&Request::SetMode(before))?;
     println!("\nfan back to {before}");
 
-    let real: Vec<u32> = measured.iter().filter_map(|(_, a, b)| match (a, b) {
-        (Some(a), Some(b)) => Some((*a).max(*b)),
-        (Some(v), None) | (None, Some(v)) => Some(*v),
-        _ => None,
-    }).collect();
+    let real: Vec<u32> = measured
+        .iter()
+        .filter_map(|(_, a, b)| match (a, b) {
+            (Some(a), Some(b)) => Some((*a).max(*b)),
+            (Some(v), None) | (None, Some(v)) => Some(*v),
+            _ => None,
+        })
+        .collect();
 
     let (Some(low), Some(high)) = (real.iter().min(), real.iter().max()) else {
         println!("nothing was measured - the tachometers read nothing at all");
@@ -724,7 +751,10 @@ fn calibrate(args: &[String]) -> Result<()> {
             cfg.fan.min_rpm
         );
     } else {
-        println!("  That matches the configured {}-{} RPM range.", cfg.fan.min_rpm, cfg.fan.max_rpm);
+        println!(
+            "  That matches the configured {}-{} RPM range.",
+            cfg.fan.min_rpm, cfg.fan.max_rpm
+        );
     }
     Ok(())
 }
@@ -843,9 +873,9 @@ fn triggers(args: &[String]) -> Result<()> {
         }
 
         Some("add") => {
-            let raw = args
-                .get(2)
-                .ok_or_else(|| anyhow::anyhow!("which condition? (temp-above / battery-below / idle / lid-closed)"))?;
+            let raw = args.get(2).ok_or_else(|| {
+                anyhow::anyhow!("which condition? (temp-above / battery-below / idle / lid-closed)")
+            })?;
             let when = parse_kind(raw)?;
 
             let mut entry = Trigger {
@@ -861,9 +891,9 @@ fn triggers(args: &[String]) -> Result<()> {
             // shape-based parsing as everywhere else here.
             let mut rest = &args[3..];
             if when.unit().is_some() {
-                let raw = rest
-                    .first()
-                    .ok_or_else(|| anyhow::anyhow!("{when} needs a value in {}", when.unit().unwrap_or("")))?;
+                let raw = rest.first().ok_or_else(|| {
+                    anyhow::anyhow!("{when} needs a value in {}", when.unit().unwrap_or(""))
+                })?;
                 entry.value = Some(
                     raw.trim_end_matches(['C', 'c', '%'])
                         .parse::<f32>()

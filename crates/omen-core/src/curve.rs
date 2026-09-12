@@ -376,16 +376,18 @@ pub mod code {
             ));
         };
 
-        let body = format!("{PREFIX}:{}:{points}", match interpolation {
-            Interpolation::Step => "s",
-            Interpolation::Linear => "l",
-        });
+        let body = format!(
+            "{PREFIX}:{}:{points}",
+            match interpolation {
+                Interpolation::Step => "s",
+                Interpolation::Linear => "l",
+            }
+        );
         let want = u8::from_str_radix(sum.trim(), 16)
             .map_err(|_| Error::Curve(format!("{sum:?} is not a checksum")))?;
         if checksum(&body) != want {
             return Err(Error::Curve(
-                "the checksum does not match - the code was altered or cut short in transit"
-                    .into(),
+                "the checksum does not match - the code was altered or cut short in transit".into(),
             ));
         }
 
@@ -708,8 +710,14 @@ mod tests {
     fn interpolation_travels_with_the_code() {
         let curve = Curve::with_interpolation(
             vec![
-                Point { temp_c: 50.0, rpm: 0 },
-                Point { temp_c: 80.0, rpm: 4000 },
+                Point {
+                    temp_c: 50.0,
+                    rpm: 0,
+                },
+                Point {
+                    temp_c: 80.0,
+                    rpm: 4000,
+                },
             ],
             Interpolation::Linear,
         )
@@ -724,7 +732,10 @@ mod tests {
         // The failure this format actually has: a chat client eats the tail.
         let cut = &text[..text.len() - 6];
         let err = code::decode(cut).unwrap_err().to_string();
-        assert!(err.contains("cut short") || err.contains("checksum"), "{err}");
+        assert!(
+            err.contains("cut short") || err.contains("checksum"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -738,8 +749,14 @@ mod tests {
         // Descending speeds are invalid wherever they come from.
         let bad = code::encode(
             &Curve::new(vec![
-                Point { temp_c: 50.0, rpm: 1800 },
-                Point { temp_c: 70.0, rpm: 2400 },
+                Point {
+                    temp_c: 50.0,
+                    rpm: 1800,
+                },
+                Point {
+                    temp_c: 70.0,
+                    rpm: 2400,
+                },
             ])
             .unwrap(),
         )

@@ -198,3 +198,54 @@ app_scan_secs = 5
 # process = "steam"
 # profile = "balanced"
 # fan = { mode = "curve" }
+
+# ── Triggers ─────────────────────────────────────────────────────────
+#
+# Rules that follow the machine's own state rather than a program. They sit
+# between the two rules above in precedence: an application profile beats a
+# trigger, a trigger beats the power source. The more specific statement wins.
+#
+# Like the application profiles, a trigger applies its settings once when the
+# condition starts and puts back what was there when it ends - unless the
+# settings were changed in the meantime, in which case that decision is newer
+# and stands.
+#
+# Conditions:
+#
+#   temp_above     value in C     the hottest sensor is above it
+#   battery_below  value in %     the charge has fallen below it
+#   idle           value in min   nothing much has happened for that long
+#   lid_closed     no value       the lid is shut
+#
+# Each one lets go a little past where it engaged (3 degrees, 3 points), so a
+# machine sitting exactly on a threshold does not flap between applied and
+# restored every couple of seconds.
+#
+# "Idle" is measured from CPU time in /proc/stat, not from the keyboard: this
+# daemon runs as root outside any login session and cannot see input without
+# becoming a D-Bus client of whichever session happens to be current. A machine
+# compiling something unattended is not idle; one at a login screen is.
+#
+# [[trigger]]
+# when = "temp_above"
+# value = 88.0
+# profile = "performance"
+# curve = "performance"
+#
+# [[trigger]]
+# when = "lid_closed"
+# profile = "low-power"
+
+[battery]
+# Stop charging at this percentage, where the kernel offers the control
+# (charge_control_end_threshold under the battery's power supply). The daemon
+# re-asserts it every half minute, because a suspend or a driver reload can
+# put the threshold back and nobody watches a battery limit - that is the whole
+# point of having one.
+#
+# THIS BOARD DOES NOT HAVE IT. HP keeps the setting in firmware instead: BIOS
+# setup, "Battery Health Manager", F10 at boot. 'omenctl battery' says so on a
+# machine where the file is absent rather than pretending to have written
+# something.
+#
+# charge_limit = 80
