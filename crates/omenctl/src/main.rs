@@ -56,6 +56,8 @@ USAGE:
                                    curve:quiet / curve:performance to run a
                                    named curve while it is open
     omenctl app remove <PROCESS>   Drop one
+    omenctl app running            What you are running now, by the name a
+                                   profile has to match
 
     omenctl trigger                List the state triggers
     omenctl trigger add <WHEN> [VALUE] [PROFILE] [FAN]
@@ -400,7 +402,26 @@ fn app_profiles(args: &[String]) -> Result<()> {
             client::report(client::send(&Request::SetAppProfiles { apps })?)
         }
 
-        Some(other) => bail!("unknown subcommand: {other} (list / add / remove)"),
+        Some("running") => {
+            // The same list the window offers as completions for the process
+            // name. Here because "what is this game's process called" is the
+            // one thing about application profiles that people get wrong, and
+            // the answer is "start it, then look".
+            let names = omen_core::apps::user_programs();
+            if names.is_empty() {
+                println!("nothing of yours is running that has a name to match");
+                return Ok(());
+            }
+            println!("your running programs  ({} of them)\n", names.len());
+            for name in &names {
+                let known = apps.iter().any(|a| a.matches(name));
+                println!("  {}{name}", if known { "* " } else { "  " });
+            }
+            println!("\n  * already has a profile");
+            Ok(())
+        }
+
+        Some(other) => bail!("unknown subcommand: {other} (list / add / remove / running)"),
     }
 }
 

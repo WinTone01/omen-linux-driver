@@ -95,6 +95,8 @@ const I18N = {
     "that condition needs a number": "bu koşul bir sayı ister",
 
     /* ── battery ────────────────────────────────────────────── */
+    "The warning is a desktop notification, and it arrives with the window in the tray too — a closed window keeps a slow watch for that one event rather than stopping altogether.":
+      "Uyarı bir masaüstü bildirimi olarak gelir ve pencere tepsideyken de gelir — kapalı pencere tamamen durmak yerine yalnızca bu olay için yavaş bir gözlem sürdürür.",
     "Battery": "Pil",
     "A laptop that lives on its charger sits at 100%, which is the one state a lithium cell ages fastest in. Stopping short of full trades a little runtime for a longer life.":
       "Sürekli şarjda duran dizüstü %100'de kalır; lityum hücrenin en hızlı yaşlandığı durum budur. Tam dolmadan kesmek, biraz kullanım süresini daha uzun ömre takas eder.",
@@ -104,6 +106,7 @@ const I18N = {
       "Bu çekirdek bu pil için bir şarj eşiği sunmuyor. HP dizüstülerde bu ayar genellikle BIOS'ta durur — açılışta F10, Battery Health Manager.",
     "hp-bioscfg is loaded, but this firmware does not publish the setting through it either, so there is nothing for the system to write.":
       "hp-bioscfg yüklü, ama bu firmware ayarı onun üzerinden de yayınlamıyor; yani sistemin yazabileceği bir şey yok.",
+    "fans forced to full power": "fanlar tam güce zorlandı",
     "on mains": "prizde",
 
     /* ── what this machine can do ───────────────────────────── */
@@ -140,6 +143,8 @@ const I18N = {
     "Application profiles": "Uygulama profilleri",
     "While one of these programs is running, the machine switches to the settings you give it and goes back to what it was doing when the program exits. The first entry that is running wins.":
       "Bu programlardan biri çalışırken makine ona verdiğin ayarlara geçer, program kapanınca eskisine döner. Çalışanlardan listede ilk sırada olan kazanır.",
+    "The name has to be what the kernel calls the program, which is often not what the launcher is called. Start the game, then pick it from the box below — it lists what you have running now.":
+      "İsim, çekirdeğin programa verdiği ad olmalı; bu çoğu zaman başlatıcının adı değildir. Oyunu başlat, sonra aşağıdaki kutudan seç — şu an çalışanları listeliyor.",
     "Add": "Ekle",
     "profile: leave alone": "profil: dokunma",
     "fan: leave alone": "fan: dokunma",

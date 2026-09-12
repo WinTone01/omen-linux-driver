@@ -241,6 +241,7 @@ omenctl app                   # per-application profiles
 omenctl app add cs2 performance curve:performance
                               # or a fixed target: omenctl app add cs2 3000
 omenctl app remove cs2
+omenctl app running           # what you are running, by the name to match
 omenctl trigger               # rules that follow the machine's own state
 omenctl trigger add temp-above 88 performance
 omenctl trigger add idle 30 low-power curve:quiet
@@ -310,6 +311,26 @@ instead — BIOS setup, "Battery Health Manager", F10 at boot — so on the
 implemented because the same code is right on every machine whose driver does
 expose the threshold, and because "the kernel offers no control here" is a
 more useful answer than silence.
+
+### Naming the process a profile should match
+
+The one thing people get wrong about application profiles: the name has to be
+what the kernel calls the program, which is usually not what the launcher is
+called. Rather than guess from an installed-games list - Steam's manifests
+name the game, not the binary - start the game and look:
+
+```console
+$ omenctl app running
+your running programs  (52 of them)
+
+  * steam
+    cs2
+    Discord
+```
+
+Programs from a home directory, `/opt`, a Steam library or a flatpak are
+listed first, the desktop's own plumbing after. The window offers the same
+list as completions on the process box.
 
 ### The things that need root, and how it asks
 

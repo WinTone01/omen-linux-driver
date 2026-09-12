@@ -564,6 +564,49 @@ async fn save_report() -> Result<String, String> {
     .unwrap_or_else(|e| Err(e.to_string()))
 }
 
+/// What this user is running, for the application-profile picker.
+///
+/// From this process rather than from the daemon: the daemon runs as root and
+/// sees every process on the machine, which is a longer and less useful list
+/// than "the programs you have open".
+#[tauri::command]
+fn running_programs() -> Vec<String> {
+    omen_core::apps::user_programs()
+}
+
+/// A desktop notification, for the one thing worth interrupting somebody for.
+///
+/// Through `notify-send` rather than the WebView's Notification API: that one
+/// needs a permission grant, and in a WebKitGTK window it goes nowhere unless
+/// the host application forwards it - so the alert people had switched on was
+/// arriving as a toast in a window they could not see. This goes to the
+/// desktop's own notification service, which is where an alert about the fans
+/// belongs.
+///
+/// Best effort by design: a machine without notify-send gets nothing extra,
+/// and the in-window toast still happens either way.
+#[tauri::command]
+fn notify(title: String, body: String) -> Result<(), String> {
+    std::process::Command::new("notify-send")
+        .args([
+            "--app-name=OMEN Control",
+            // The fans being forced to full power is not a "by the way".
+            "--urgency=critical",
+            "--icon=omen-control",
+            &title,
+            &body,
+        ])
+        .status()
+        .map_err(|e| format!("notify-send: {e}"))
+        .and_then(|s| {
+            if s.success() {
+                Ok(())
+            } else {
+                Err("notify-send refused".into())
+            }
+        })
+}
+
 /// The things this machine needs done as root, if any.
 ///
 /// Only what is actually out of step - a list of what *could* be run as root
@@ -918,6 +961,8 @@ fn main() {
             curve_code,
             import_curve_code,
             save_report,
+            notify,
+            running_programs,
             privileged_actions,
             privileged_asker,
             run_privileged,

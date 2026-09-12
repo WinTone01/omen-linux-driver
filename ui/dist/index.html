@@ -363,9 +363,16 @@
               settings you give it and goes back to what it was doing when the
               program exits. The first entry that is running wins.
             </p>
+            <p class="hint">
+              The name has to be what the kernel calls the program, which is
+              often not what the launcher is called. Start the game, then pick
+              it from the box below — it lists what you have running now.
+            </p>
             <div id="apps-list" class="app-list"></div>
             <div class="app-add">
-              <input type="text" id="app-process" placeholder="process name, e.g. cs2" spellcheck="false">
+              <input type="text" id="app-process" list="running-programs"
+                     placeholder="process name, e.g. cs2" spellcheck="false">
+              <datalist id="running-programs"></datalist>
               <select id="app-profile"></select>
               <select id="app-fan"></select>
               <button class="btn btn--sm" id="btn-app-add">Add</button>
@@ -659,6 +666,11 @@
               <dt>Start hidden in the tray</dt>
               <dd><label class="switch"><input type="checkbox" id="set-hidden"><span></span></label></dd>
             </dl>
+            <p class="hint">
+              The warning is a desktop notification, and it arrives with the
+              window in the tray too — a closed window keeps a slow watch for
+              that one event rather than stopping altogether.
+            </p>
             <p class="hint" id="set-hidden-note" hidden>
               There is no tray icon in this session, so starting hidden would leave
               you with a running program and no way back to it. Install

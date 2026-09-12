@@ -1329,7 +1329,35 @@ function renderApps(s) {
   }
 }
 
+/* The programs running now, offered as completions for the process name.
+ *
+ * Refreshed when the page is opened rather than on every poll: it walks
+ * /proc, and the list only matters while somebody is typing into the box.
+ */
+async function fillRunningPrograms() {
+  const list = $("#running-programs");
+  if (!list) return;
+  let names = [];
+  try {
+    names = await invoke("running_programs");
+  } catch {
+    return;
+  }
+  list.replaceChildren();
+  for (const name of names) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    list.append(opt);
+  }
+}
+
 function bindApps() {
+  // Typing into the box is the moment the list is wanted, and it is also
+  // cheap enough to refresh then - a game started a minute ago should be in
+  // it without reopening the page.
+  $("#app-process").addEventListener("focus", fillRunningPrograms);
+  fillRunningPrograms();
+
   const add = () => {
     const process = $("#app-process").value.trim();
     if (!process) {
@@ -1745,10 +1773,14 @@ function maybeAlert(s) {
   const now = !!s.daemon?.safety_fallback;
   if (now && !lastFallback && settings?.alerts) {
     const reason = s.daemon?.safety_reason ?? "the temperature went too high";
-    if (window.Notification?.permission === "granted") {
-      new Notification("OMEN Control: fans forced to full power", { body: reason });
-    }
-    toast(`fans forced to full power - ${reason}`, true);
+    // The desktop's own notification, not the WebView's: this is the one
+    // event worth interrupting somebody for, and the window is very often
+    // not the thing they are looking at when it happens.
+    invoke("notify", {
+      title: t("fans forced to full power"),
+      body: reason,
+    }).catch(() => {});
+    toast(`${t("fans forced to full power")} - ${reason}`, true);
   }
   lastFallback = now;
 }
@@ -1768,7 +1800,9 @@ function bindSettings() {
     saveSettings({ poll_ms: Number(e.target.value) }));
   $("#set-alerts").addEventListener("change", (e) => {
     saveSettings({ alerts: e.target.checked });
-    if (e.target.checked) window.Notification?.requestPermission?.();
+    // Turning it on while the window is hidden should start the heartbeat
+    // that makes it work, not wait for the next time the window is opened.
+    startPolling();
   });
   $("#set-autostart").addEventListener("change", (e) =>
     saveSettings({ autostart: e.target.checked }));
@@ -2703,10 +2737,20 @@ loadSettings();
 renderVersions();
 refresh();
 seedHistory();
+/* How often a hidden window still looks, when alerts are on.
+ *
+ * Closed to the tray used to mean polling stopped altogether, which also
+ * meant the "warn me when the fans are forced to full" setting did nothing in
+ * exactly the case it was for: the window in the tray, the machine
+ * overheating, nobody looking. A slow heartbeat costs one socket round trip
+ * every fifteen seconds and keeps that promise. */
+const WATCH_MS = 15000;
+
 function startPolling() {
   clearInterval(pollTimer);
-  if (!visible) return;
-  pollTimer = setInterval(() => { if (Date.now() > holdUntil) refresh(); }, POLL_MS);
+  const interval = visible ? POLL_MS : settings?.alerts ? WATCH_MS : 0;
+  if (!interval) return;
+  pollTimer = setInterval(() => { if (Date.now() > holdUntil) refresh(); }, interval);
 }
 startPolling();
 
@@ -2720,11 +2764,10 @@ function setVisible(next) {
   visible = next;
   if (visible) {
     refresh();
-    startPolling();
-  } else {
-    clearInterval(pollTimer);
-    pollTimer = null;
   }
+  // Hidden is not "stopped" any more - see WATCH_MS. startPolling decides
+  // whether there is anything to watch for.
+  startPolling();
 }
 
 /* `omen-ui --tab graphics`, from a launcher or a shortcut. */

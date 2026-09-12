@@ -124,6 +124,71 @@ pub fn running_processes() -> Vec<String> {
     names
 }
 
+/// The programs this user is running, as names you could put in a profile.
+///
+/// For the "which process is my game?" problem, which is the one thing about
+/// application profiles that people get wrong: the name has to match what the
+/// kernel calls it, and a launcher usually spawns something else entirely.
+/// Rather than guess from an installed-games list - Steam's manifests name
+/// the game, not the binary - this lists what is actually running now, so the
+/// answer is "start the game, then pick it from the list".
+///
+/// Filtered to this user's own programs with a real executable: kernel
+/// threads have none, and system daemons belong to other users. That leaves
+/// roughly what a person would recognise.
+pub fn user_programs() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let me = std::fs::metadata("/proc/self").map(|m| {
+        use std::os::unix::fs::MetadataExt;
+        m.uid()
+    });
+    let Ok(me) = me else { return Vec::new() };
+
+    // (from the system's own directories?, name). Games live in a home
+    // directory, /opt, a Steam library or a flatpak; the desktop's own
+    // plumbing lives in /usr. Both are listed - a denylist of session
+    // daemons would be guesswork that goes stale - but the ones somebody is
+    // actually looking for come first.
+    let mut names: Vec<(bool, String)> = Vec::new();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
+            continue;
+        }
+        // Ours?
+        let owned = std::fs::metadata(&dir)
+            .map(|m| {
+                use std::os::unix::fs::MetadataExt;
+                m.uid() == me
+            })
+            .unwrap_or(false);
+        if !owned {
+            continue;
+        }
+        // A real executable on disk. This is what drops kernel threads, and
+        // it is also the name a profile should match.
+        let Ok(exe) = std::fs::read_link(dir.join("exe")) else {
+            continue;
+        };
+        let Some(name) = exe.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // Deleted binaries come back as "thing (deleted)".
+        let name = name.trim_end_matches(" (deleted)").to_owned();
+        if name.is_empty() || names.iter().any(|(_, n)| *n == name) {
+            continue;
+        }
+        let system = ["/usr/", "/bin/", "/sbin/"]
+            .iter()
+            .any(|prefix| exe.to_string_lossy().starts_with(prefix));
+        names.push((system, name));
+    }
+    names.sort_by_key(|(system, name)| (*system, name.to_ascii_lowercase()));
+    names.into_iter().map(|(_, name)| name).collect()
+}
+
 /// The first configured profile whose process is running.
 ///
 /// First rather than best: the order in the config file is the user's own
@@ -175,6 +240,22 @@ mod tests {
         let running = vec!["beta".to_string(), "alpha".to_string()];
         assert_eq!(active(&list, &running).unwrap().process, "alpha");
         assert!(active(&list, &["gamma".to_string()]).is_none());
+    }
+
+    #[test]
+    fn the_running_programs_are_ours_and_named() {
+        // Whatever this machine is running, the list must contain no empty
+        // names, no duplicates, and nothing with a path in it - these go
+        // straight into a profile's process field.
+        let names = user_programs();
+        let mut seen = names.clone();
+        seen.dedup();
+        assert_eq!(seen.len(), names.len(), "duplicates");
+        for name in &names {
+            assert!(!name.is_empty());
+            assert!(!name.contains('/'), "{name} is a path, not a name");
+            assert!(!name.ends_with("(deleted)"), "{name}");
+        }
     }
 
     #[test]
