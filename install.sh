@@ -188,10 +188,23 @@ have_pwm1() {
     return 1
 }
 
+# Where the loaded hp_wmi came from: DKMS puts its modules under /updates,
+# ahead of the in-tree one. Worth telling apart, because "you already have
+# fan control" and "the stock kernel gives you fan control" are different
+# statements and only one of them is true here.
+hp_wmi_is_ours() {
+    modinfo -n hp_wmi 2>/dev/null | grep -q '/updates/'
+}
+
 install_hp_wmi() {
     if have_pwm1; then
-        ok "the kernel's own hp-wmi already drives this board's fans"
-        info "nothing to patch; pwm1 is already there"
+        if hp_wmi_is_ours; then
+            ok "fan control is already there, from the module this project installed"
+            info "rebuild it only when the kernel changes: kernel/hp-wmi-8d24/build-module.sh --install"
+        else
+            ok "the kernel's own hp-wmi already drives this board's fans"
+            info "nothing to patch; pwm1 is already there"
+        fi
         return 0
     fi
 
