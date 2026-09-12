@@ -18,6 +18,10 @@ use omen_core::profile::PlatformProfile;
 
 use crate::shared::Shared;
 
+/// The most readings a client can ask for at once. The daemon keeps this
+/// many; asking for more would only pad the reply.
+const SAMPLE_MAX: usize = 900;
+
 /// How long a synchronous mode change waits for a loop iteration.
 const APPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -151,7 +155,17 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             decisions: shared.history(limit.min(500)),
         },
 
+        Request::Samples { limit } => Response::Samples {
+            samples: shared.samples(limit.min(SAMPLE_MAX)),
+        },
+
         Request::SetMode(mode) => {
+            // Answered here rather than queued, so a machine with no pwm1
+            // says why instead of timing out and reporting that the loop did
+            // not respond - which would be true and useless.
+            if let Some(why) = no_fan_here() {
+                return Response::Error { message: why };
+            }
             info!("request: mode -> {mode}");
             // We wait for a loop iteration so the reply describes what is
             // actually in effect. Two intervals is plenty; past that the
@@ -439,6 +453,9 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
         }
 
         Request::CleanFans { seconds } => {
+            if let Some(why) = no_fan_here() {
+                return Response::Error { message: why };
+            }
             let seconds = seconds.clamp(5, 120);
             shared.request_clean(seconds);
             Response::Done {
@@ -516,6 +533,23 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             }
         }
     }
+}
+
+/// The reason a fan request cannot be honoured here, when there is one.
+///
+/// The message names the remedy, because on an unverified OMEN there is a
+/// real one: this board is missing from hp-wmi's DMI table, and that is a
+/// one-line change.
+fn no_fan_here() -> Option<String> {
+    if omen_core::caps::fan_setpoint_present() {
+        return None;
+    }
+    let caps = omen_core::caps::Caps::detect();
+    Some(format!(
+        "there is no fan setpoint on this machine ({}). {}",
+        caps.level().describe(),
+        caps.remedy().unwrap_or_default()
+    ))
 }
 
 /// Validates a curve, writes it to the config file and asks the loop to

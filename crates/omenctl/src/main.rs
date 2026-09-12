@@ -90,6 +90,8 @@ USAGE:
                                    Which profile to select when the daemon
                                    starts. 'none' leaves it to the firmware.
     omenctl reload                 Make the daemon re-read its configuration
+    omenctl caps                   What this machine can be asked to do, and
+                                   why anything missing is missing
     omenctl version                Versions, and whether anything running is
                                    older than what is installed
     omenctl report [PATH]          Write one file with everything a bug report
@@ -121,6 +123,7 @@ fn main() -> ExitCode {
         "battery" => battery(&args),
         "profile" => set_profile(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
+        "caps" | "capabilities" => capabilities(),
         "version" | "--version" | "-V" => versions(),
         "doctor" | "check" => doctor(&args),
         "report" => report(&args),
@@ -269,7 +272,9 @@ fn app_snapshot() -> Result<Box<omen_core::ipc::Snapshot>> {
         Response::Ok(snap) => Ok(snap),
         Response::Error { message } => bail!("{message}"),
         Response::Done { message } => bail!("unexpected reply: {message}"),
-        Response::History { .. } => bail!("unexpected reply: a history"),
+        Response::History { .. } | Response::Samples { .. } => {
+            bail!("unexpected reply: a log, not a status")
+        }
     }
 }
 
@@ -385,6 +390,36 @@ fn app_profiles(args: &[String]) -> Result<()> {
 
         Some(other) => bail!("unknown subcommand: {other} (list / add / remove)"),
     }
+}
+
+/// What this machine can do, and why not the rest.
+///
+/// A separate command rather than a line in `status` because it answers a
+/// different question: status is about right now, this is about the machine.
+/// It is also the first thing to run on a board that is not the verified one,
+/// which is the case this project has to handle more honestly than most - on
+/// an unverified OMEN some of it works and some of it cannot.
+fn capabilities() -> Result<()> {
+    let caps = omen_core::caps::Caps::detect();
+
+    println!("{}\n", caps.confidence());
+    field("vendor", caps.vendor.clone().unwrap_or_else(|| "unknown".into()));
+    field("model", caps.model.clone().unwrap_or_else(|| "unknown".into()));
+    field("board", caps.board.clone().unwrap_or_else(|| "unknown".into()));
+
+    println!();
+    for (name, present, detail) in caps.lines() {
+        println!("  {} {name:<22} {detail}", if present { "yes" } else { " no" });
+    }
+
+    println!("\n{}: {}", caps.level(), caps.level().describe());
+    if let Some(remedy) = caps.remedy() {
+        println!();
+        for line in wrap(&remedy, 72) {
+            println!("  {line}");
+        }
+    }
+    Ok(())
 }
 
 /// Versions of everything, and what is out of date with respect to what.

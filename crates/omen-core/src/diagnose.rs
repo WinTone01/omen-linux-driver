@@ -188,6 +188,35 @@ type DaemonView = Result<crate::ipc::Snapshot, String>;
 fn hardware() -> Section {
     let mut checks = Vec::new();
 
+    // First, because it frames everything below it: on a board that is not
+    // the verified one, half these checks are expected to fail and the
+    // difference between "broken" and "not applicable here" is the whole
+    // point.
+    let caps = crate::caps::Caps::detect();
+    checks.push(match caps.level() {
+        crate::caps::Level::Full => Check::new(
+            "caps",
+            "What this machine can do",
+            Verdict::Ok,
+            caps.level().describe(),
+        ),
+        level => {
+            let check = Check::new(
+                "caps",
+                "What this machine can do",
+                // Not a failure: a machine that cannot drive its fan is
+                // working exactly as its firmware allows, and calling that
+                // broken teaches people to ignore the report.
+                Verdict::Warn,
+                level.describe(),
+            );
+            match caps.remedy() {
+                Some(remedy) => check.with_fix(remedy),
+                None => check,
+            }
+        }
+    });
+
     let board = read("/sys/class/dmi/id/board_name").unwrap_or_else(|| "unknown".into());
     checks.push(if board == "8D24" {
         Check::new(

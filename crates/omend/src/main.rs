@@ -138,17 +138,37 @@ fn run(args: Args) -> Result<()> {
     })?;
 
     let thermal = Thermal::discover().context("no temperature source found")?;
-    let fan =
-        Fan::discover(cfg.fan.min_rpm, cfg.fan.max_rpm).context("could not set up fan control")?;
 
-    info!(
-        "hwmon: {}  fan range: {}-{} RPM  step: {} RPM  interval: {}s",
-        fan.hwmon_path().display(),
-        fan.min_rpm(),
-        fan.max_rpm(),
-        cfg.fan.step_rpm,
-        cfg.fan.interval_secs
-    );
+    // A machine without a fan setpoint is not a reason to refuse to start.
+    // The profile, the automation, the lighting and the graph all work
+    // without one, and on an OMEN whose board is not in hp-wmi's DMI table
+    // that is most of this project - refusing would hand those users nothing
+    // for a missing line in a table. What we do NOT do is pretend: the mode
+    // reads as unavailable, every fan request is answered with why, and the
+    // curve is not run.
+    let caps = omen_core::caps::Caps::detect();
+    info!("this machine: {}", caps.confidence());
+    let fan = match Fan::discover(cfg.fan.min_rpm, cfg.fan.max_rpm) {
+        Ok(fan) => {
+            info!(
+                "hwmon: {}  fan range: {}-{} RPM  step: {} RPM  interval: {}s",
+                fan.hwmon_path().display(),
+                fan.min_rpm(),
+                fan.max_rpm(),
+                cfg.fan.step_rpm,
+                cfg.fan.interval_secs
+            );
+            Some(fan)
+        }
+        Err(e) => {
+            warn!("no fan control on this machine: {e}");
+            warn!("running in {} mode - {}", caps.level(), caps.level().describe());
+            if let Some(remedy) = caps.remedy() {
+                warn!("{remedy}");
+            }
+            None
+        }
+    };
     info!(
         "temperature sources: {}",
         thermal
@@ -184,17 +204,26 @@ fn run(args: Args) -> Result<()> {
     }
 
     let hot_above_c = cfg.safety.stall_temp_c;
+    let has_fan = fan.is_some();
     let mut rt = Runtime::new(fan.clone(), thermal, cfg, read_only, &args.config)?;
-    rt.log_curve();
+    rt.caps = Some(caps);
+    if has_fan {
+        rt.log_curve();
+    }
     rt.apply_startup_profile();
 
-    let mut keeper = AutoRestore::new(
-        fan,
-        Thermal::discover().context("no temperature source found")?,
-        hot_above_c,
-    );
+    // Nothing to restore on exit when nothing was ever driven.
+    let mut keeper = fan.map(|fan| {
+        AutoRestore::new(
+            fan,
+            Thermal::discover().expect("a temperature source was found a moment ago"),
+            hot_above_c,
+        )
+    });
     if read_only {
-        keeper.disarm();
+        if let Some(keeper) = keeper.as_mut() {
+            keeper.disarm();
+        }
     }
 
     let shared = Shared::new();
@@ -284,6 +313,13 @@ const CHARGE_LIMIT_EVERY: Duration = Duration::from_secs(30);
 /// behaviour; the journal has the rest.
 const HISTORY_MAX: usize = 200;
 
+/// How many readings are kept for the graph.
+///
+/// At the default two-second interval this is the last half hour, which is
+/// long enough to cover a game session's warm-up and the spike that made
+/// somebody open the window.
+const SAMPLE_MAX: usize = 900;
+
 /// How often a setpoint we already hold is written again. See apply().
 const SETPOINT_KEEPALIVE: Duration = Duration::from_secs(10);
 
@@ -325,7 +361,9 @@ enum Applied {
 }
 
 struct Runtime {
-    fan: Fan,
+    /// `None` on a machine with no `pwm1`. Everything that drives the fan
+    /// checks first; nothing here invents a substitute.
+    fan: Option<Fan>,
     thermal: Thermal,
     cfg: Config,
     governor: Governor,
@@ -360,6 +398,9 @@ struct Runtime {
     /// The last few setpoint decisions, for the UI. Bounded: this is a
     /// daemon that runs for weeks.
     history: std::collections::VecDeque<omen_core::ipc::Decision>,
+    /// Every tick's readings, for the graph. See ipc::Sample for why this is
+    /// not the same thing as the decision log.
+    samples: std::collections::VecDeque<omen_core::ipc::Sample>,
     /// The most recent sensor reading, so a decision can record what drove
     /// it without the temperature being passed through four call sites.
     last_reading: Option<(String, f32)>,
@@ -371,6 +412,18 @@ struct Runtime {
     /// When the current setpoint was last written, for the keep-alive.
     applied_at: Instant,
     gpu: gpu::Watch,
+    /// What this machine can do, detected once at startup. Not re-detected
+    /// per tick: the answer changes only when a module is loaded, and the one
+    /// place that matters - a fan appearing - notices for itself.
+    caps: Option<omen_core::caps::Caps>,
+    /// The platform profile as it was last seen, and when the machine was
+    /// last hot enough for the firmware to reset it. See watch_profile.
+    last_profile: Option<String>,
+    hot_since: Option<Instant>,
+    /// How many times the firmware has been caught resetting the profile.
+    /// Reported rather than only logged: it is the kind of thing you want a
+    /// number for before believing it happens.
+    profile_resets: u32,
     /// The battery, when this machine has one whose charge can be limited.
     /// Looked up once: batteries do not come and go.
     battery: Option<omen_core::battery::Battery>,
@@ -381,7 +434,7 @@ struct Runtime {
 
 impl Runtime {
     fn new(
-        fan: Fan,
+        fan: Option<Fan>,
         thermal: Thermal,
         cfg: Config,
         read_only: bool,
@@ -412,6 +465,7 @@ impl Runtime {
             zones_checked: Instant::now(),
             drift: None,
             history: std::collections::VecDeque::new(),
+            samples: std::collections::VecDeque::new(),
             last_reading: None,
             drift_since: None,
             config_path: config_path.to_owned(),
@@ -420,6 +474,10 @@ impl Runtime {
             apps_scanned: Instant::now() - Duration::from_secs(3600),
             applied_at: Instant::now(),
             gpu: gpu::Watch::new(),
+            caps: None,
+            last_profile: None,
+            hot_since: None,
+            profile_resets: 0,
             battery: omen_core::battery::Battery::discover(),
             // Checked on the first tick rather than one interval in.
             charge_checked: Instant::now() - CHARGE_LIMIT_EVERY,
@@ -455,7 +513,7 @@ impl Runtime {
                 // flying blind. Full power is the only state we can be sure
                 // about; the EC cannot be trusted to take over (see
                 // Emergency).
-                if self.emergency.is_none() {
+                if self.emergency.is_none() && self.fan.is_some() {
                     // Nothing to compare against, so resume as soon as a
                     // reading comes back.
                     self.declare_emergency(
@@ -475,17 +533,21 @@ impl Runtime {
         self.apply_power_rule();
         self.apply_gpu_power();
         self.apply_charge_limit();
+        self.watch_profile(temp.as_ref().map(|(_, c)| *c));
 
         self.last_reading = temp.clone();
 
         if let Some((label, celsius)) = &temp {
-            if self.guard(label, *celsius) {
+            if self.fan.is_some() && self.guard(label, *celsius) {
                 self.drive(label, *celsius);
             }
         }
 
+        self.record_sample(temp.as_ref().map(|(_, c)| *c));
+
         shared.publish(self.snapshot(temp));
         shared.publish_history(self.history(HISTORY_MAX));
+        shared.publish_samples(self.samples.iter().copied().collect());
         shared.finish_tick();
     }
 
@@ -517,6 +579,40 @@ impl Runtime {
         }
     }
 
+    /// Adds this tick's readings to the graph.
+    ///
+    /// Every tick, including the ones where nothing changed - that is the
+    /// difference between this and the decision log, and the reason a graph
+    /// drawn from it has the shape the machine actually had.
+    fn record_sample(&mut self, temp_c: Option<f32>) {
+        let Some(temp_c) = temp_c else {
+            // A tick with no temperature is a gap in the record rather than a
+            // zero. Drawing it as a reading would put a cliff in the graph
+            // where there was only a failed read.
+            return;
+        };
+        self.samples.push_back(omen_core::ipc::Sample {
+            uptime_secs: self.started.elapsed().as_secs(),
+            temp_c,
+            fan_rpm: match (
+                self.fan.as_ref().and_then(|f| f.rpm(1).ok()),
+                self.fan.as_ref().and_then(|f| f.rpm(2).ok()),
+            ) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (one, two) => one.or(two),
+            },
+            target_rpm: match self.applied {
+                Applied::Rpm(rpm) => Some(rpm),
+                Applied::Idle => Some(0),
+                Applied::Max => Some(self.cfg.fan.max_rpm),
+                _ => None,
+            },
+        });
+        while self.samples.len() > SAMPLE_MAX {
+            self.samples.pop_front();
+        }
+    }
+
     /// Looks for the hwmon again, for when the one we had went away.
     ///
     /// hp-wmi's hwmon is numbered by registration order, so rebuilding and
@@ -537,15 +633,23 @@ impl Runtime {
         let Ok(found) = Fan::discover(self.cfg.fan.min_rpm, self.cfg.fan.max_rpm) else {
             return false;
         };
-        if found.hwmon_path() == self.fan.hwmon_path() {
+        let Some(current) = &self.fan else {
+            // There was none at startup and now there is: a module loaded
+            // after us. Take it.
+            warn!("fan control appeared at {}", found.hwmon_path().display());
+            self.fan = Some(found);
+            self.applied = Applied::Unknown;
+            return true;
+        };
+        if found.hwmon_path() == current.hwmon_path() {
             return false;
         }
         warn!(
             "the fan moved from {} to {} - the module was probably reloaded",
-            self.fan.hwmon_path().display(),
+            current.hwmon_path().display(),
             found.hwmon_path().display()
         );
-        self.fan = found;
+        self.fan = Some(found);
         self.applied = Applied::Unknown;
         true
     }
@@ -570,8 +674,9 @@ impl Runtime {
         if self.read_only {
             return;
         }
+        let Some(fan) = &self.fan else { return };
         let want = match self.applied {
-            Applied::Rpm(rpm) => Some(self.fan.rpm_to_pwm(rpm)),
+            Applied::Rpm(rpm) => Some(fan.rpm_to_pwm(rpm)),
             Applied::Idle => Some(0),
             // Max and Auto are modes rather than setpoints; pwm1 is not
             // meaningful in them.
@@ -583,7 +688,7 @@ impl Runtime {
             return;
         };
 
-        let hw = match (self.fan.pwm(), self.fan.mode()) {
+        let hw = match (fan.pwm(), fan.mode()) {
             (Ok(pwm), Ok(mode)) => Some((pwm, mode)),
             _ => None,
         };
@@ -805,6 +910,71 @@ impl Runtime {
         self.gpu.invalidate();
     }
 
+    /// Notices the firmware putting the platform profile back.
+    ///
+    /// Several HP boards silently reset the profile to balanced when the CPU
+    /// reaches its PROCHOT threshold, which throws away a performance setting
+    /// mid-session with nothing said. Re-applying it blindly would be worse
+    /// than the bug: someone who changes the profile in GNOME's power panel
+    /// means it, and a daemon that undid that every two seconds would be
+    /// unusable.
+    ///
+    /// So the temperature decides. A profile that changes on its own while
+    /// the machine is at the top of its thermal range is the firmware; the
+    /// same change on a cool machine is a person, and their choice is adopted
+    /// as the new intent without comment.
+    fn watch_profile(&mut self, temp_c: Option<f32>) {
+        // How close to the critical cutout counts as "hot enough that the
+        // firmware might intervene". PROCHOT sits near Tjmax, above our own
+        // cutout's neighbourhood.
+        const NEAR_PROCHOT_C: f32 = 5.0;
+        // How long after that a profile change is still attributed to it.
+        const BLAME_WINDOW: Duration = Duration::from_secs(30);
+
+        if let Some(c) = temp_c {
+            if c >= self.cfg.safety.critical_c - NEAR_PROCHOT_C {
+                self.hot_since = Some(Instant::now());
+            }
+        }
+
+        let Some(pp) = PlatformProfile::discover() else {
+            return;
+        };
+        let Ok(now) = pp.get() else { return };
+
+        let Some(before) = self.last_profile.clone() else {
+            self.last_profile = Some(now);
+            return;
+        };
+        if now == before {
+            return;
+        }
+
+        let recently_hot = self
+            .hot_since
+            .is_some_and(|when| when.elapsed() < BLAME_WINDOW);
+
+        if recently_hot && !self.read_only {
+            self.profile_resets += 1;
+            warn!(
+                "the firmware reset the platform profile {before} -> {now} while the machine \
+                 was at the top of its thermal range; putting {before} back"
+            );
+            match pp.set(&before) {
+                Ok(()) => return,
+                Err(e) => {
+                    warn!("could not put the {before} profile back: {e}");
+                    // It stands as the new state; there is nothing else to do
+                    // and pretending otherwise would make the next tick try
+                    // again forever.
+                }
+            }
+        } else {
+            debug!("the platform profile changed {before} -> {now}");
+        }
+        self.last_profile = Some(now);
+    }
+
     /// Keeps the battery's charge limit where the configuration says.
     ///
     /// Re-asserted rather than set once, for the same reason as the dGPU
@@ -1009,7 +1179,10 @@ impl Runtime {
         // deliberately about BEHAVIOUR rather than about a particular mode -
         // whatever the reason the fans are stopped, stopped fans at this
         // temperature are wrong.
-        let stopped = matches!((self.fan.rpm(1), self.fan.rpm(2)), (Ok(0), Ok(0)));
+        let stopped = self
+            .fan
+            .as_ref()
+            .is_some_and(|fan| matches!((fan.rpm(1), fan.rpm(2)), (Ok(0), Ok(0))));
         if stopped && temp >= self.cfg.safety.stall_temp_c {
             let since = *self.stall_since.get_or_insert_with(Instant::now);
             if since.elapsed() >= self.cfg.stall_grace() {
@@ -1095,6 +1268,11 @@ impl Runtime {
     }
 
     fn apply(&mut self, want: Applied, why: &str) {
+        // Nothing to write to. Reached only through the emergency paths,
+        // which can be entered before the fan is known to be absent.
+        if self.fan.is_none() {
+            return;
+        }
         // Re-assert a setpoint we already hold, from time to time.
         //
         // We are not the only thing that can change it: the EC has a watchdog
@@ -1121,15 +1299,18 @@ impl Runtime {
                 if repeat {
                     debug!("{why} -> {rpm} RPM (re-asserted)");
                 } else {
-                    info!("{why} -> {rpm} RPM (pwm {})", self.fan.rpm_to_pwm(rpm));
+                    info!(
+                        "{why} -> {rpm} RPM (pwm {})",
+                        self.fan.as_ref().map(|f| f.rpm_to_pwm(rpm)).unwrap_or(0)
+                    );
                 }
                 if self.read_only {
                     self.applied = want;
                     return;
                 }
-                let mut result = self.fan.set_target_rpm(rpm);
+                let mut result = self.with_fan(|fan| fan.set_target_rpm(rpm));
                 if result.is_err() && self.rediscover_fan() {
-                    result = self.fan.set_target_rpm(rpm);
+                    result = self.with_fan(|fan| fan.set_target_rpm(rpm));
                 }
                 match result {
                     Ok(actual) => {
@@ -1154,10 +1335,10 @@ impl Runtime {
                     info!("{why} -> fans off (setpoint 0, still ours)");
                 }
                 if !self.read_only {
-                    if self.fan.set_idle().is_err() {
+                    if self.with_fan(|fan| fan.set_idle()).is_err() {
                         self.rediscover_fan();
                     }
-                    if let Err(e) = self.fan.set_idle() {
+                    if let Err(e) = self.with_fan(|fan| fan.set_idle()) {
                         // Same reasoning as a failed setpoint write: we no
                         // longer know what the fan is doing, and the EC will
                         // not pick it up for us.
@@ -1171,7 +1352,7 @@ impl Runtime {
             Applied::Auto => {
                 info!("{why} -> automatic (control with the EC)");
                 if !self.read_only {
-                    if let Err(e) = self.fan.restore_auto() {
+                    if let Err(e) = self.with_fan(|fan| fan.restore_auto()) {
                         error!("could not switch to automatic: {e}");
                         return;
                     }
@@ -1181,7 +1362,7 @@ impl Runtime {
             Applied::Max => {
                 warn!("{why} -> FANS AT FULL POWER");
                 if !self.read_only {
-                    if let Err(e) = self.fan.set_mode(omen_core::fan::PwmMode::Max) {
+                    if let Err(e) = self.with_fan(|fan| fan.set_mode(omen_core::fan::PwmMode::Max)) {
                         error!("could not switch to full power: {e}");
                         return;
                     }
@@ -1189,6 +1370,18 @@ impl Runtime {
                 self.applied = want;
             }
             Applied::Unknown => {}
+        }
+    }
+
+    /// Runs something against the fan, or reports that there is none.
+    ///
+    /// The error is deliberately the same shape as a failed write, so the
+    /// callers do not need a second path: a machine with no fan and a fan
+    /// that refused a write are both "the setpoint did not happen".
+    fn with_fan<T>(&self, f: impl FnOnce(&Fan) -> omen_core::Result<T>) -> omen_core::Result<T> {
+        match &self.fan {
+            Some(fan) => f(fan),
+            None => Err(omen_core::Error::PwmUnsupported),
         }
     }
 
@@ -1208,8 +1401,14 @@ impl Runtime {
 
     fn snapshot(&self, driver: Option<(String, f32)>) -> Snapshot {
         Snapshot {
-            mode: Some(self.mode),
-            hw_mode: self.fan.mode().ok().map(|m| m.to_string()),
+            // No fan means no mode: a UI showing "curve" on a machine where
+            // nothing is being driven would be a lie in one word.
+            mode: self.fan.is_some().then_some(self.mode),
+            hw_mode: self
+                .fan
+                .as_ref()
+                .and_then(|f| f.mode().ok())
+                .map(|m| m.to_string()),
             driver_label: driver.as_ref().map(|(l, _)| l.clone()),
             driver_temp_c: driver.as_ref().map(|(_, c)| *c),
             target_rpm: match self.applied {
@@ -1219,9 +1418,9 @@ impl Runtime {
                 Applied::Idle => Some(0),
                 _ => None,
             },
-            fan1_rpm: self.fan.rpm(1).ok(),
-            fan2_rpm: self.fan.rpm(2).ok(),
-            pwm: self.fan.pwm().ok(),
+            fan1_rpm: self.fan.as_ref().and_then(|f| f.rpm(1).ok()),
+            fan2_rpm: self.fan.as_ref().and_then(|f| f.rpm(2).ok()),
+            pwm: self.fan.as_ref().and_then(|f| f.pwm().ok()),
             profile: PlatformProfile::discover().and_then(|p| p.get().ok()),
             safety_fallback: self.emergency.is_some(),
             safety_reason: self.emergency.as_ref().map(|e| e.reason.clone()),
@@ -1235,6 +1434,7 @@ impl Runtime {
                 points: self.governor.curve().points().to_vec(),
                 interpolation: self.governor.curve().interpolation(),
             }),
+            caps: self.caps.clone(),
             version: Some(omen_core::about::VERSION.to_owned()),
             config_path: self.config_path.to_str().map(str::to_owned),
             cleaning_secs_left: self.cleaning.as_ref().map(|(until, _)| {
@@ -1262,6 +1462,7 @@ impl Runtime {
             triggers: self.cfg.triggers.clone(),
             active_trigger: self.triggers.active().map(str::to_owned),
             idle_secs: self.triggers.idle_secs(),
+            profile_resets: self.profile_resets,
             lighting_restore: self.cfg.lighting.restore_on_start,
             lighting_off_on_battery: self.cfg.lighting.off_on_battery,
             effect: Some(self.cfg.lighting.spec()),

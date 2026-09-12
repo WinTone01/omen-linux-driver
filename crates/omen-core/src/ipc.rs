@@ -89,6 +89,29 @@ pub struct Decision {
     pub reason: String,
 }
 
+/// One tick's readings, for drawing a graph.
+///
+/// Separate from [`Decision`], which records the moments the setpoint
+/// changed. A decision log answers "why is it doing that"; this answers "what
+/// has it been doing", and the two questions want different data - a graph
+/// with a point only where something changed draws a straight line through
+/// the twenty minutes the temperature was climbing.
+///
+/// Deliberately four small numbers per tick. At two seconds apart, half an
+/// hour of history is a few kilobytes, which is the right price for being
+/// able to see the last spike after it has passed.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Sample {
+    /// Seconds since the daemon started, like Decision - same reasoning.
+    pub uptime_secs: u64,
+    /// The sensor driving the curve.
+    pub temp_c: f32,
+    /// The faster of the two fans, which is the one you hear.
+    pub fan_rpm: Option<u32>,
+    /// The setpoint in force. `None` means control was with the EC.
+    pub target_rpm: Option<u32>,
+}
+
 /// A curve as it travels over the wire: the points plus how to read between
 /// them. Same shape as the `[fan]` section of the config file, so an editor
 /// round-trips without a translation layer in the middle.
@@ -137,6 +160,8 @@ pub enum Request {
         on_ac: crate::power::PowerRule,
         on_battery: crate::power::PowerRule,
     },
+    /// The recent readings, newest last, for a graph.
+    Samples { limit: usize },
     /// The recent setpoint decisions, newest last.
     ///
     /// A separate request rather than part of the status: the status is
@@ -172,6 +197,9 @@ pub enum Response {
     History {
         decisions: Vec<Decision>,
     },
+    Samples {
+        samples: Vec<Sample>,
+    },
     Done {
         message: String,
     },
@@ -201,6 +229,11 @@ pub struct Snapshot {
     #[serde(default)]
     pub safety_reason: Option<String>,
     pub temps: Vec<(String, f32)>,
+    /// What this machine can be asked to do, detected once at startup.
+    /// Carried in the status so a window can offer what is there and say why
+    /// the rest is absent, without probing sysfs itself.
+    #[serde(default)]
+    pub caps: Option<crate::caps::Caps>,
     /// The daemon's own version, so a client can notice it is talking to a
     /// build older than the one installed - which after an upgrade means the
     /// service has not been restarted.
@@ -253,6 +286,10 @@ pub struct Snapshot {
     pub triggers: Vec<crate::triggers::Trigger>,
     #[serde(default)]
     pub active_trigger: Option<String>,
+    /// How many times the firmware has been caught putting the platform
+    /// profile back while the machine was at the top of its thermal range.
+    #[serde(default)]
+    pub profile_resets: u32,
     /// How long the machine has been idle, by the measure in triggers::Idle.
     /// Reported so a rule built on it can be believed before it fires.
     #[serde(default)]

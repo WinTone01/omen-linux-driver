@@ -31,6 +31,8 @@ pub struct Inner {
     /// The decision log. Kept here rather than read from the loop's own copy
     /// because the listener thread must not borrow the loop's state.
     pub history: Vec<omen_core::ipc::Decision>,
+    /// The readings behind the graph, published the same way.
+    pub samples: Vec<omen_core::ipc::Sample>,
     /// Incremented on every completed loop iteration, so synchronous requests
     /// can answer "has my turn been processed yet".
     pub tick_seq: u64,
@@ -127,6 +129,15 @@ impl Shared {
 
     pub fn publish_history(&self, history: Vec<omen_core::ipc::Decision>) {
         self.lock().history = history;
+    }
+
+    pub fn samples(&self, limit: usize) -> Vec<omen_core::ipc::Sample> {
+        let log = &self.lock().samples;
+        log.iter().rev().take(limit).rev().cloned().collect()
+    }
+
+    pub fn publish_samples(&self, samples: Vec<omen_core::ipc::Sample>) {
+        self.lock().samples = samples;
     }
 
     pub fn snapshot(&self) -> Snapshot {

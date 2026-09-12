@@ -81,7 +81,9 @@ fn snapshot() -> (Option<Snapshot>, Option<String>, Option<String>) {
         Ok(Response::Error { message }) | Ok(Response::Done { message }) => {
             (None, Some(message), None)
         }
-        Ok(Response::History { .. }) => (None, Some("unexpected reply".into()), None),
+        Ok(Response::History { .. }) | Ok(Response::Samples { .. }) => {
+            (None, Some("unexpected reply".into()), None)
+        }
         Err(e) => {
             let hint = daemon_hint(&e);
             (None, Some(e.to_string()), hint)
@@ -303,7 +305,7 @@ fn talk(req: Request) -> Result<String, String> {
     match client::send(&req).map_err(|e| e.to_string())? {
         Response::Done { message } => Ok(message),
         Response::Error { message } => Err(message),
-        Response::Ok(_) | Response::History { .. } => Ok(String::new()),
+        Response::Ok(_) | Response::History { .. } | Response::Samples { .. } => Ok(String::new()),
     }
 }
 

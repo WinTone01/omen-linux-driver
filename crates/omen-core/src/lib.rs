@@ -15,6 +15,7 @@ pub mod anim;
 pub mod apps;
 pub mod battery;
 pub mod bundle;
+pub mod caps;
 pub mod config;
 pub mod curve;
 pub mod diagnose;
