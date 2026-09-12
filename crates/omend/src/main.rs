@@ -324,6 +324,29 @@ const HISTORY_MAX: usize = 200;
 /// somebody open the window.
 const SAMPLE_MAX: usize = 900;
 
+/// How long a fan may sit away from its setpoint before that counts as the
+/// setpoint not having stuck. Long enough to cover a ramp and a tachometer
+/// that lags it; short enough that a setpoint which never lands is noticed
+/// while it still matters.
+const DRIFT_SETTLE: Duration = Duration::from_secs(30);
+
+/// How far from the setpoint a fan may be and still count as obeying.
+///
+/// Proportional, with a floor: the EC's own target is in hundreds of RPM, the
+/// tachometer rounds, and a fan at 4000 RPM holds its speed less precisely
+/// than one at 1800. A fifth of the setpoint or 400 RPM, whichever is more.
+///
+/// A setpoint of zero is its own case. The fans cannot turn slower than
+/// `min_rpm` - below that they are spinning down or stopped - so anything
+/// under it is the fan obeying, and only a fan still running at a real speed
+/// means the request did not land.
+fn drift_slack(want_rpm: u32, min_rpm: u32) -> u32 {
+    if want_rpm == 0 {
+        return min_rpm;
+    }
+    (want_rpm / 5).max(400)
+}
+
 /// How often a setpoint we already hold is written again. See apply().
 const SETPOINT_KEEPALIVE: Duration = Duration::from_secs(10);
 
@@ -689,27 +712,51 @@ impl Runtime {
             return;
         }
         let Some(fan) = &self.fan else { return };
-        let want = match self.applied {
-            Applied::Rpm(rpm) => Some(fan.rpm_to_pwm(rpm)),
+
+        // The mode is the unambiguous half: manual is where we put it, and
+        // anything else means the fan is no longer ours - the EC's watchdog
+        // took it back, another tool wrote pwm1_enable, or a resume
+        // re-initialised the controller.
+        let Ok(mode) = fan.mode() else { return };
+
+        let want_rpm = match self.applied {
+            Applied::Rpm(rpm) => Some(rpm),
             Applied::Idle => Some(0),
-            // Max and Auto are modes rather than setpoints; pwm1 is not
-            // meaningful in them.
+            // Max and Auto are modes rather than setpoints; there is no
+            // number to compare in them.
             _ => None,
         };
-        let Some(want) = want else {
+        let Some(want_rpm) = want_rpm else {
             self.drift_since = None;
             self.drift = None;
             return;
         };
 
-        let hw = match (fan.pwm(), fan.mode()) {
-            (Ok(pwm), Ok(mode)) => Some((pwm, mode)),
-            _ => None,
+        // Measured, not commanded. This is the correction: `pwm1` on this
+        // driver does NOT read back the setpoint that was written to it - it
+        // converts the CURRENT fan speed. Measured here, 2026-09-12: at a
+        // setpoint of 1800 RPM the fans turned at 1700 and pwm1 read 90
+        // (90/255 x 4800 = 1694); a moment later, ramping, 2300 RPM and 122
+        // (2296). Comparing what we wrote against that number reports a
+        // disagreement on every ramp and most of the steady state, which is
+        // what it did: a "the setpoint did not stick" warning every few
+        // seconds, and - worse - the setpoint marked unknown and rewritten on
+        // every tick, so the status had no target to report.
+        //
+        // So the question this asks had to change. Not "did the number come
+        // back" but "is the fan still ours, and is it turning at something
+        // like what we asked for".
+        let measured = match self.rpms {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (one, two) => one.or(two),
         };
-        let Some((pwm, mode)) = hw else { return };
+        let Some(measured) = measured else { return };
 
-        let agrees = pwm == want && mode == omen_core::fan::PwmMode::Manual;
-        if agrees {
+        let slack = drift_slack(want_rpm, fan.min_rpm());
+        let close = measured.abs_diff(want_rpm) <= slack;
+        let ours = mode == omen_core::fan::PwmMode::Manual;
+
+        if ours && close {
             if self.drift.is_some() {
                 info!("the setpoint is being honoured again");
             }
@@ -718,11 +765,28 @@ impl Runtime {
             return;
         }
 
+        // A mode change is immediate; a speed that has not arrived yet is
+        // given time to. Fans take several seconds to reach a new setpoint,
+        // and a dusty one takes longer, so the window is generous - this is
+        // meant to catch a setpoint that never lands, not one that is still
+        // on its way.
+        let settle = if ours {
+            DRIFT_SETTLE
+        } else {
+            Duration::from_secs(0)
+        };
+
         match self.drift_since {
             None => self.drift_since = Some(Instant::now()),
-            Some(since) if since.elapsed() >= self.cfg.interval() => {
-                let message =
-                    format!("wrote pwm {want} in manual, hardware reports pwm {pwm} in {mode}");
+            Some(since) if since.elapsed() >= settle => {
+                let message = if ours {
+                    format!(
+                        "asked for {want_rpm} RPM, the fans have been at {measured} RPM for {}s",
+                        since.elapsed().as_secs()
+                    )
+                } else {
+                    format!("we drive the fan in manual, the hardware reports {mode}")
+                };
                 if self.drift.as_deref() != Some(message.as_str()) {
                     warn!("the fan setpoint did not stick: {message}");
                 }
@@ -1483,5 +1547,36 @@ impl Runtime {
             gpu: self.gpu.get(),
             uptime_secs: self.started.elapsed().as_secs(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fan_near_its_setpoint_is_obeying() {
+        // Measured on the machine: a setpoint of 1800 RPM turns the fans at
+        // 1700. That is the fan doing as it was told, not drift.
+        let slack = drift_slack(1800, 1800);
+        assert!(1700u32.abs_diff(1800) <= slack);
+        // A fan stuck near idle while 1800 was asked for is not.
+        assert!(900u32.abs_diff(1800) > slack);
+    }
+
+    #[test]
+    fn the_slack_grows_with_the_setpoint() {
+        assert!(drift_slack(4800, 1800) > drift_slack(1800, 1800));
+    }
+
+    #[test]
+    fn stopped_fans_are_what_a_setpoint_of_zero_asked_for() {
+        // The fans cannot turn below min_rpm, so anything under it is them
+        // spinning down - only a fan still running properly means the request
+        // did not land.
+        let slack = drift_slack(0, 1800);
+        assert!(0u32.abs_diff(0) <= slack);
+        assert!(1200u32.abs_diff(0) <= slack, "still spinning down");
+        assert!(2400u32.abs_diff(0) > slack, "that is not stopping");
     }
 }

@@ -331,6 +331,27 @@ line in a DMI table would help nobody. What it cannot do, it says it cannot
 do — the status reports no fan mode, and a fan request is answered with the
 reason and the remedy instead of being queued.
 
+### `pwm1` reads back the speed, not the setpoint
+
+Worth knowing before building anything on this interface. Writing `pwm1` sets
+the fan target; reading it returns the fan's **current speed** converted back
+through the same scale, not the target that was written:
+
+```console
+$ cat pwm1 fan1_input        # setpoint 1800 RPM
+90
+1700                         # 90/255 x 4800 = 1694
+$ cat pwm1 fan1_input        # a moment later, still ramping
+122
+2300                         # 122/255 x 4800 = 2296
+```
+
+So a readback check written as "did the number we wrote come back" disagrees
+on every ramp and most of the steady state. `omend` asks the two questions
+that are actually answerable instead: is `pwm1_enable` still manual (the fan
+is still ours), and are the fans turning at something like what was asked for,
+for long enough that they cannot still be on their way.
+
 ## Safety
 
 A wrong EC write can stop the fans entirely, and thermal protection does not
