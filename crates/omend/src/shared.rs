@@ -88,9 +88,36 @@ impl Shared {
         guard.snapshot.mode
     }
 
-    pub fn request_reload(&self) {
-        self.lock().reload = true;
+    /// Asks for a reload and waits for the loop to have done it.
+    ///
+    /// Same reasoning as `request_mode`: a client that writes the config file
+    /// and is told "saved" will very often ask what the state is next, and
+    /// with an asynchronous reload that answer is a tick out of date - the
+    /// entry it just added is not in the list yet. One interval of waiting
+    /// buys a reply that is true when it arrives.
+    ///
+    /// Returns false if the loop did not get to it in time; the reload stays
+    /// queued either way, so the only consequence is the old answer.
+    pub fn request_reload_sync(&self, timeout: Duration) -> bool {
+        let mut guard = self.lock();
+        guard.reload = true;
+        let seq = guard.tick_seq;
         self.0 .1.notify_all();
+
+        let deadline = Instant::now() + timeout;
+        while guard.tick_seq == seq {
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let (next, _) = self
+                .0
+                 .1
+                .wait_timeout(guard, deadline - now)
+                .unwrap_or_else(|e| e.into_inner());
+            guard = next;
+        }
+        true
     }
 
     /// Marks a loop iteration complete and wakes anyone waiting.

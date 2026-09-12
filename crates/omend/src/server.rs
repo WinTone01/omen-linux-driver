@@ -247,7 +247,7 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                     message: e.to_string(),
                 };
             }
-            shared.request_reload();
+            shared.request_reload_sync(APPLY_TIMEOUT);
             Response::Done {
                 message: match spec.effect {
                     omen_core::anim::Effect::None => "lighting effects off".into(),
@@ -272,7 +272,7 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                     message: e.to_string(),
                 };
             }
-            shared.request_reload();
+            shared.request_reload_sync(APPLY_TIMEOUT);
             Response::Done {
                 message: format!("{} application profile(s) saved", cfg.apps.len()),
             }
@@ -302,7 +302,7 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                     message: e.to_string(),
                 };
             }
-            shared.request_reload();
+            shared.request_reload_sync(APPLY_TIMEOUT);
             Response::Done {
                 message: format!("{} trigger(s) saved", cfg.triggers.len()),
             }
@@ -324,7 +324,7 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                     message: e.to_string(),
                 };
             }
-            shared.request_reload();
+            shared.request_reload_sync(APPLY_TIMEOUT);
             Response::Done {
                 message: match want {
                     omen_core::gpu::DgpuPower::Auto => {
@@ -371,7 +371,7 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                     message: e.to_string(),
                 };
             }
-            shared.request_reload();
+            shared.request_reload_sync(APPLY_TIMEOUT);
             Response::Done {
                 message: match profile {
                     Some(p) => format!("{p} will be selected at startup"),
@@ -421,7 +421,7 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                     message: e.to_string(),
                 };
             }
-            shared.request_reload();
+            shared.request_reload_sync(APPLY_TIMEOUT);
             Response::Done {
                 message: "power rules saved".into(),
             }
@@ -446,7 +446,7 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                     message: e.to_string(),
                 };
             }
-            shared.request_reload();
+            shared.request_reload_sync(APPLY_TIMEOUT);
             Response::Done {
                 message: "lighting options saved".into(),
             }
@@ -517,7 +517,7 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                     message: e.to_string(),
                 };
             }
-            shared.request_reload();
+            shared.request_reload_sync(APPLY_TIMEOUT);
             Response::Done {
                 message: match percent {
                     Some(p) => format!("charging stops at {p}%"),
@@ -526,12 +526,15 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             }
         }
 
-        Request::Reload => {
-            shared.request_reload();
-            Response::Done {
-                message: "the configuration will be re-read".into(),
-            }
-        }
+        Request::Reload => Response::Done {
+            message: if shared.request_reload_sync(APPLY_TIMEOUT) {
+                "the configuration has been re-read".into()
+            } else {
+                // The loop is busy or wedged. The request stays queued, so
+                // say what is true rather than claiming it is done.
+                "the configuration will be re-read on the next tick".into()
+            },
+        },
     }
 }
 
@@ -588,8 +591,9 @@ fn write_curve(config_path: &Path, shared: &Shared, spec: Option<CurveSpec>) -> 
     }
 
     // Only now does it take effect: the loop owns the governor, and the loop
-    // is the only thread that touches the fan.
-    shared.request_reload();
+    // is the only thread that touches the fan. Waited for, so the reply is
+    // true when it arrives rather than one tick later.
+    shared.request_reload_sync(APPLY_TIMEOUT);
 
     let points = match &spec {
         Some(spec) => spec.points.len(),
