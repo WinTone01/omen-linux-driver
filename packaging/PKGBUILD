@@ -79,5 +79,8 @@ package() {
   install -Dm644 docs/usage.md        "$pkgdir/usr/share/doc/$pkgname/usage.md"
   install -Dm644 docs/research/rgb-protocol.md \
     "$pkgdir/usr/share/doc/$pkgname/rgb-protocol.md"
-  install -Dm644 ../LICENSE     "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # Repo-root relative like everything else here: package() has already cd'd
+  # to $_root, and the ../ this used to carry pointed one level above the
+  # checkout, where there is no LICENSE. It failed the package every time.
+  install -Dm644 LICENSE        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
