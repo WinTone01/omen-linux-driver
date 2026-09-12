@@ -382,8 +382,10 @@ fn fan() -> Section {
         }
         Err(e) => checks.push(
             Check::new("pwm", "Fan control", Verdict::Fail, e.to_string()).with_fix(
-                "pwm1 appears only when hp-wmi knows this board. Build the patched \
-                 module: kernel/hp-wmi-8d24/build-module.sh --install",
+                "pwm1 appears only when hp-wmi has a DMI entry for this board. The \
+                 installer adds the board this machine reports and builds the module: \
+                 ./install.sh, or on its own 'bash kernel/hp-wmi-8d24/build-module.sh \
+                 --install --board auto'.",
             ),
         ),
     }

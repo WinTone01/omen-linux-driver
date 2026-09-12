@@ -271,11 +271,13 @@ impl Caps {
                  keeps running until it is reloaded. Check with kernel/hp-wmi-8d24/verify.sh, \
                  and 'omenctl version' says whether what is loaded is what is installed."
             )),
+            // The installer does this now, so the remedy is a command rather
+            // than an explanation of the change somebody would have to make.
             Level::ProfileOnly if self.omen_family => Some(format!(
-                "hp-wmi has no entry for board {}. The 8D24 patch in kernel/hp-wmi-8d24/ \
-                 is one line in a DMI table; adding this board to it is the same change, \
-                 and the fan protocol is shared across the family. Nothing else here \
-                 needs to change.",
+                "hp-wmi has no entry for board {}, which is the only reason pwm1 is \
+                 missing - the fan protocol is shared across this family. The installer \
+                 adds this board and builds the module: ./install.sh, or on its own \
+                 'bash kernel/hp-wmi-8d24/build-module.sh --install --board auto'.",
                 self.board.as_deref().unwrap_or("unknown")
             )),
             Level::ProfileOnly => Some(

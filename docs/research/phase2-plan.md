@@ -117,7 +117,7 @@ Kernel 7.3+ — into `hp_wmi_feature_boards[]`:
 ```
 
 A script that detects and applies either form:
-[`kernel/hp-wmi-8d24/add-8d24.sh`](../scripts/add-8d24.sh)
+[`kernel/hp-wmi-8d24/add-board.sh`](../../kernel/hp-wmi-8d24/add-board.sh)
 
 The fan hwmon interface hangs off this match. In 7.2 the gate is:
 
@@ -205,7 +205,7 @@ patched module.
 ### Applying
 
 1. Run `verify.sh` **before** patching, so the patch's effect is measurable.
-2. Add the entry with `add-8d24.sh`, build `hp_wmi` on its own
+2. Add the entry with `add-board.sh`, build `hp_wmi` on its own
    (`make -C /lib/modules/$(uname -r)/build M=$PWD modules`), try it with
    `insmod`.
 3. If it works, move it into **DKMS** so it survives kernel updates.
