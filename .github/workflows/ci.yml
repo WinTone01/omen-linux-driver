@@ -50,6 +50,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # checkpatch --codespell needs codespell's dictionary; without it the
+      # flag prints "no typos will be found" and checks nothing.
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y codespell
+
       # The hp-wmi change is meant to be sent upstream, and upstream's first
       # gate is checkpatch. Failing it here is cheaper than failing it on a
       # mailing list.
@@ -72,10 +77,28 @@ jobs:
             echo "no patches to check"
             exit 0
           fi
-          # --no-tree because this repository is not a kernel tree; the
-          # style checks that matter do not need one.
+
+          # The files are kept exactly as 'git format-patch' produced them,
+          # ready to send - which means each one ends with the mail signature
+          # separator, a line containing "-- " with the trailing space that
+          # convention requires. checkpatch reads that as part of the diff and
+          # calls it trailing whitespace. The signature is not part of the
+          # patch, so it is dropped from the copy that gets checked and the
+          # file itself is left alone.
+          mkdir -p .ci/patches
+          for patch in "${patches[@]}"; do
+            sed '/^-- $/,$d' "$patch" > ".ci/patches/$(basename "$patch")"
+          done
+
+          # --no-tree because this repository is not a kernel tree; the style
+          # checks that matter do not need one. The two ignores are the checks
+          # that DO need one: FILE_PATH_CHANGES wants MAINTAINERS, and
+          # UNKNOWN_COMMIT_ID resolves the upstream commit ids the message
+          # cites - which are real, and simply not in this repository's
+          # history. A maintainer running this against a kernel tree gets both
+          # checks for free.
           perl .ci/checkpatch.pl --no-tree --strict --codespell \
-            --ignore FILE_PATH_CHANGES "${patches[@]}"
+            --ignore FILE_PATH_CHANGES,UNKNOWN_COMMIT_ID .ci/patches/*.patch
 
   shell:
     name: shellcheck

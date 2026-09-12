@@ -15,7 +15,11 @@
 
 set -uo pipefail
 
-readonly REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Assigned first, made readonly second: in one statement the exit status
+# would be readonly's, not the subshell's, so a failure to find our own
+# directory would pass silently.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly REPO
 readonly VERSION="0.1.0"
 
 # ── output ───────────────────────────────────────────────────────────
@@ -183,28 +187,37 @@ install_hp_wmi() {
 
 install_module() {
     if have makepkg && [[ $(pkg_manager) == pacman ]]; then
-        ( cd "$REPO/kernel/omen-kbd-rgb" && makepkg -sfi --noconfirm ) \
-            && ok "omen-kbd-rgb installed (DKMS)" \
-            || die "the RGB module package failed to build"
+        if ( cd "$REPO/kernel/omen-kbd-rgb" && makepkg -sfi --noconfirm ); then
+            ok "omen-kbd-rgb installed (DKMS)"
+        else
+            die "the RGB module package failed to build"
+        fi
     else
-        ( cd "$REPO/kernel/omen-kbd-rgb" && sudo make dkms-install ) \
-            && ok "omen-kbd-rgb installed (DKMS)" \
-            || die "the RGB module failed to build"
+        if ( cd "$REPO/kernel/omen-kbd-rgb" && sudo make dkms-install ); then
+            ok "omen-kbd-rgb installed (DKMS)"
+        else
+            die "the RGB module failed to build"
+        fi
     fi
 }
 
 install_userspace() {
     if have makepkg && [[ $(pkg_manager) == pacman ]]; then
-        ( cd "$REPO/packaging" && makepkg -sfi --noconfirm ) \
-            && ok "omen-control installed" \
-            || die "the omen-control package failed to build"
+        if ( cd "$REPO/packaging" && makepkg -sfi --noconfirm ); then
+            ok "omen-control installed"
+        else
+            die "the omen-control package failed to build"
+        fi
     else
         info "building (this takes a few minutes the first time)"
         local args=(--release)
         (( BUILD_GUI )) || args+=(--workspace --exclude omen-ui)
         ( cd "$REPO" && cargo build "${args[@]}" ) || die "the build failed"
-        ( cd "$REPO" && sudo bash packaging/install.sh ) \
-            && ok "installed" || die "installing the files failed"
+        if ( cd "$REPO" && sudo bash packaging/install.sh ); then
+            ok "installed"
+        else
+            die "installing the files failed"
+        fi
     fi
 }
 
@@ -232,12 +245,19 @@ uninstall() {
     STEPS=3
     banner
     step "Stopping the service"
-    sudo systemctl disable --now omend >/dev/null 2>&1 && ok "omend stopped" || info "was not running"
+    if sudo systemctl disable --now omend >/dev/null 2>&1; then
+        ok "omend stopped"
+    else
+        info "was not running"
+    fi
 
     step "Removing packages"
     if have pacman; then
-        sudo pacman -Rns --noconfirm omen-control omen-kbd-rgb-dkms 2>/dev/null \
-            && ok "packages removed" || info "nothing to remove with pacman"
+        if sudo pacman -Rns --noconfirm omen-control omen-kbd-rgb-dkms 2>/dev/null; then
+            ok "packages removed"
+        else
+            info "nothing to remove with pacman"
+        fi
     else
         sudo rm -f /usr/bin/{omend,omenctl,omen-ui} \
                    /usr/lib/systemd/system/omend.service \
