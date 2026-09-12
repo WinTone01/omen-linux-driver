@@ -32,6 +32,25 @@ git clone https://github.com/WinTone01/omen-linux-driver.git && cd omen-linux-dr
 It identifies the machine before touching anything, and stops if it is not an
 HP OMEN or Victus. [What it installs, and the flags →](#what-installsh-does)
 
+## Which machines
+
+Everything here was **measured on one board** — 8D24, the OMEN 16-ap0xxx — and
+that is the only machine anything is verified on. It is built to work across
+the family anyway, and the installer adapts to the machine it runs on:
+
+| | On any OMEN / Victus |
+|---|---|
+| Fan setpoint | `hp-wmi` exposes `pwm1` only for boards in its DMI table. If yours is missing, the installer adds **your** board and builds the module; if the kernel already has it, nothing is patched. |
+| Performance profiles | ACPI `platform_profile`, nothing board-specific. |
+| Temperatures | AMD (`k10temp`, `zenpower`) and Intel (`coretemp`, and the `x86_pkg_temp` zone when that is all there is). |
+| Keyboard lighting | The module asks the firmware whether the lighting group answers, rather than matching a board list. |
+| Graphics mux | Asked of the firmware the same way; absent machines simply do not show it. |
+| Discrete GPU temperature | One EC register, read on OMEN and Victus only — corroborated across the family, measured on one of them. |
+
+What stays board-specific: the fan's real RPM range (`omenctl calibrate`
+measures yours), and the four-zone keyboard layout. `omenctl caps` says what
+your machine can be asked to do, and why anything missing is missing.
+
 ## The window
 
 <table>

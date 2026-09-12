@@ -1,15 +1,33 @@
 #!/usr/bin/env bash
-# Builds an out-of-tree hp-wmi module with the 8D24 entry added.
+# Builds an out-of-tree hp-wmi module with this machine's board entry added.
 #
 # Why out-of-tree: Arch/CachyOS do not package the kernel SOURCE, only the
 # headers. So we fetch hp-wmi.c from the upstream tag matching the running
 # kernel and build it as a single module.
 #
 # Usage:
-#   bash build-module.sh              # fetch, patch, build
-#   bash build-module.sh --install    # also register it with DKMS (permanent)
+#   bash build-module.sh                 # fetch, patch, build
+#   bash build-module.sh --install       # also register it with DKMS
+#   bash build-module.sh --board 8BCA    # a board other than this machine's
+#
+# The board defaults to the one this machine reports. It was 8D24 while there
+# was only one machine; hard-coding it meant every other OMEN and Victus got a
+# module identical to the stock one, which is to say nothing at all.
 #
 # Nothing is loaded automatically; it tells you what to do at the end.
+
+BOARD=auto
+INSTALL=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    --install)  INSTALL=1 ;;
+    --board)    BOARD=${2:?--board expects a board name}; shift ;;
+    --board=*)  BOARD=${1#--board=} ;;
+    -h|--help)  sed -n '2,14p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    *)          echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -79,8 +97,23 @@ if [ -n "$KO" ] && command -v strings >/dev/null; then
   echo "  (they are not expected to match exactly; a large gap suggests a distro patch)"
 fi
 
-say "3. Adding the 8D24 entry"
-bash "$HERE/add-8d24.sh" "$WORK/hp-wmi.c"
+say "3. Adding the board entry"
+ADD_RC=0
+bash "$HERE/add-board.sh" "$WORK/hp-wmi.c" "$BOARD" || ADD_RC=$?
+case $ADD_RC in
+  0) ;;
+  3)
+    # The stock driver already has this board. Building a module identical to
+    # the one already loaded, and then keeping it alive through DKMS for every
+    # future kernel, is maintenance for nothing.
+    echo
+    echo "  Nothing to patch: the kernel's own hp-wmi already covers this board."
+    echo "  If fan control still does not work, the module may simply need loading:"
+    echo "      sudo modprobe hp_wmi   # then: omenctl doctor"
+    exit 3
+    ;;
+  *) die "the board entry could not be added" ;;
+esac
 
 say "4. Building"
 cat > "$WORK/Makefile" <<MK
@@ -125,7 +158,7 @@ cat <<EOF
     bash $0 --install
 EOF
 
-[ "${1:-}" = "--install" ] || exit 0
+[ "$INSTALL" = 1 ] || exit 0
 
 say "6. DKMS registration"
 command -v dkms >/dev/null || die "dkms is missing. Install it: 'sudo pacman -S dkms'."

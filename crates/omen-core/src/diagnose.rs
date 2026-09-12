@@ -388,6 +388,31 @@ fn fan() -> Section {
         ),
     }
 
+    // Every RPM number in this project came off one board. On another one the
+    // bounds are a guess, and a curve built on a maximum the fans cannot
+    // reach does nothing at the top of its range.
+    let caps = crate::caps::Caps::detect();
+    if caps.fan_setpoint && !caps.verified_board {
+        checks.push(
+            Check::new(
+                "fan_range",
+                "Fan speed range",
+                Verdict::Skip,
+                format!(
+                    "{}-{} RPM, which was measured on board {}",
+                    crate::fan::DEFAULT_MIN_RPM,
+                    crate::fan::DEFAULT_MAX_RPM,
+                    crate::caps::VERIFIED_BOARD
+                ),
+            )
+            .with_fix(
+                "This board may not have the same range. 'omenctl calibrate --yes' holds \
+                 each setpoint for a few seconds and reports what the fans actually did, \
+                 then says which numbers to put in /etc/omen/omend.toml.",
+            ),
+        );
+    }
+
     Section {
         title: "Fan".into(),
         checks,

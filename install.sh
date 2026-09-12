@@ -170,19 +170,50 @@ check_deps() {
 
 # ── the pieces ───────────────────────────────────────────────────────
 
+# Does this machine already have fan control?
+#
+# The question that decides whether there is anything to patch at all. hp-wmi
+# exposes pwm1 only for boards it has a DMI entry for; if one is already
+# there, the stock in-tree driver is doing the job and an out-of-tree copy of
+# it would be maintenance for nothing.
+have_pwm1() {
+    local hwmon name
+    for hwmon in /sys/class/hwmon/hwmon*; do
+        [ -r "$hwmon/name" ] || continue
+        name=$(cat "$hwmon/name" 2>/dev/null)
+        case $name in
+            hp|hp_wmi) [ -e "$hwmon/pwm1" ] && return 0 ;;
+        esac
+    done
+    return 1
+}
+
 install_hp_wmi() {
+    if have_pwm1; then
+        ok "the kernel's own hp-wmi already drives this board's fans"
+        info "nothing to patch; pwm1 is already there"
+        return 0
+    fi
+
     if dkms status 2>/dev/null | grep -q '^hp-wmi-8d24'; then
         ok "already installed via DKMS"
         return 0
     fi
 
-    info "fetching the upstream hp-wmi source and adding the board entry"
-    if bash "$REPO/kernel/hp-wmi-8d24/build-module.sh" --install; then
-        ok "hp-wmi patched and installed"
-    else
-        die "could not build the patched hp-wmi" \
-            "Run kernel/hp-wmi-8d24/build-module.sh on its own to see why."
-    fi
+    info "fetching the upstream hp-wmi source and adding this board's entry"
+
+    # 3 means the entry was already in the source: the board is supported
+    # upstream and this kernel simply predates it, or the module is not
+    # loaded. Neither is a failure, and neither is worth a DKMS package.
+    local rc=0
+    bash "$REPO/kernel/hp-wmi-8d24/build-module.sh" --install --board auto || rc=$?
+    case $rc in
+        0) ok "hp-wmi patched for this board and installed" ;;
+        3) warn "this board is already in the kernel source; nothing was patched"
+           info "if the fans are still not controllable: sudo modprobe hp_wmi" ;;
+        *) die "could not build the patched hp-wmi" \
+               "Run kernel/hp-wmi-8d24/build-module.sh on its own to see why." ;;
+    esac
 }
 
 install_module() {

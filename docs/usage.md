@@ -387,6 +387,28 @@ What may be run is a closed list, written in `crates/omen-core/src/elevate.rs`.
 Nothing accepts a command from a caller, a config file or the window: an API
 that runs a string as root is a root shell with extra steps.
 
+### Other OMEN and Victus machines
+
+`hp-wmi` exposes `pwm1` only for boards it has a DMI entry for, and HP ships
+boards faster than they reach the kernel. The installer handles both cases:
+
+* **The kernel already covers your board.** Nothing is patched and no DKMS
+  package is installed - the in-tree driver is doing the job, and an
+  out-of-tree copy of it would be maintenance for nothing.
+* **It does not.** `kernel/hp-wmi-8d24/add-board.sh` adds *your* board to the
+  same table, against the parameters the rest of the family uses, and the
+  module is built and registered with DKMS.
+
+It refuses to do that on anything that is not an OMEN or a Victus, and a board
+name that is not a short alphanumeric id is rejected before it reaches the C
+source.
+
+This is reasonable rather than verified: the fan protocol (the WMI 0x2E
+setpoint, the thermal profile) is shared across the family and upstream gives
+nearly all of these boards the same parameters. What it is not is measured on
+your machine - so `omenctl doctor` says the RPM range came off 8D24, and
+`omenctl calibrate` measures yours.
+
 ### Machines that can only do part of this
 
 `omenctl caps` asks each interface separately — fan setpoint, tachometers,
