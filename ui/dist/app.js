@@ -1400,6 +1400,8 @@ const TRIGGER_KINDS = [
   ["battery_below", "when the battery falls below", "%", 20],
   ["idle", "when nothing has happened for", "min", 30],
   ["lid_closed", "when the lid is shut", null, null],
+  ["time_between", "between these times", "time", null],
+  ["wifi_ssid", "when on this network", "ssid", null],
 ];
 
 function triggerKind(when) {
@@ -1412,6 +1414,8 @@ function triggerCondition(tr) {
     case "temp_above": return `${t("above")} ${Math.round(tr.value)} C`;
     case "battery_below": return `${t("battery below")} ${Math.round(tr.value)}%`;
     case "idle": return `${t("idle for")} ${Math.round(tr.value)} ${t("min")}`;
+    case "time_between": return `${t("between")} ${tr.from} ${t("and")} ${tr.to}`;
+    case "wifi_ssid": return `${t("on the network")} ${tr.ssid}`;
     default: return t("the lid is shut");
   }
 }
@@ -1497,12 +1501,19 @@ function renderTriggers(s) {
   }
 }
 
-/** The value box follows the condition: a shut lid has no number. */
+/** The inputs follow the condition: a shut lid has nothing to fill in, a
+ *  window has two times, a network has a name. */
 function syncTriggerValue() {
   const [, , unit, preset] = triggerKind($("#trigger-when").value);
-  const box = $("#trigger-value");
-  box.hidden = unit === null;
-  if (unit !== null) {
+  const number = unit !== null && unit !== "time" && unit !== "ssid";
+
+  $("#trigger-value").hidden = !number;
+  $("#trigger-from").hidden = unit !== "time";
+  $("#trigger-to").hidden = unit !== "time";
+  $("#trigger-ssid").hidden = unit !== "ssid";
+
+  if (number) {
+    const box = $("#trigger-value");
     box.value = preset;
     box.max = unit === "C" ? 110 : unit === "%" ? 100 : 600;
   }
@@ -1521,15 +1532,30 @@ function bindTriggers() {
       toast(t("pick a profile, a fan mode, or both - otherwise there is nothing to apply"), true);
       return;
     }
-    const value = unit === null ? null : Number($("#trigger-value").value);
-    if (unit !== null && !(value > 0)) {
+    const number = unit !== null && unit !== "time" && unit !== "ssid";
+    const value = number ? Number($("#trigger-value").value) : null;
+    if (number && !(value > 0)) {
       toast(t("that condition needs a number"), true);
       return;
     }
+
+    const from = unit === "time" ? $("#trigger-from").value : null;
+    const to = unit === "time" ? $("#trigger-to").value : null;
+    if (unit === "time" && (!from || !to || from === to)) {
+      toast(t("give two different times"), true);
+      return;
+    }
+
+    const ssid = unit === "ssid" ? $("#trigger-ssid").value.trim() : null;
+    if (unit === "ssid" && !ssid) {
+      toast(t("which network?"), true);
+      return;
+    }
+
     const { fan, curve } = fanRuleFromValue(fanRaw);
 
     const triggers = (state?.daemon?.triggers ?? []).filter((x) => x.when !== when);
-    triggers.push({ when, value, profile, fan, curve });
+    triggers.push({ when, value, profile, fan, curve, from, to, ssid });
     saveTriggers(triggers, t("trigger added"));
   });
 }

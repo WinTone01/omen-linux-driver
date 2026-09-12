@@ -246,6 +246,8 @@ omenctl trigger               # rules that follow the machine's own state
 omenctl trigger add temp-above 88 performance
 omenctl trigger add idle 30 low-power curve:quiet
 omenctl trigger add lid-closed low-power
+omenctl trigger add time-between 23:00 07:00 low-power curve:quiet
+omenctl trigger add wifi-ssid Office balanced curve:quiet
 omenctl trigger remove idle
 omen-ui --tab graphics        # open the window on one page
 omenctl gpu mux               # which GPU drives the screen (hybrid/discrete/uma)
@@ -294,6 +296,13 @@ Each of them applies its settings once, when it starts, and puts back what was
 there when it ends — unless you have changed things in the meantime, in which
 case your change is newer and stands.
 
+The conditions are `temp_above`, `battery_below`, `idle`, `lid_closed`,
+`time_between` (a window that may wrap past midnight) and `wifi_ssid` - the
+network being the only thing on a laptop that knows where it is. The clock and
+the network name are the only readings here that cost a process to find out,
+so they are looked up only when a trigger asks for them and the answer is kept
+for a minute.
+
 `idle` is measured from CPU time in `/proc/stat`, not from the keyboard: the
 daemon runs as root outside any login session and cannot see input without
 becoming a D-Bus client of whichever session happens to be current. A machine
@@ -311,6 +320,23 @@ instead — BIOS setup, "Battery Health Manager", F10 at boot — so on the
 implemented because the same code is right on every machine whose driver does
 expose the threshold, and because "the kernel offers no control here" is a
 more useful answer than silence.
+
+### How the last session ended
+
+A thermal cutout is the one failure this project exists to prevent, and the
+one nobody has evidence of afterwards: the machine goes off, it comes back,
+and nothing says why. `omenctl doctor` reads the previous boot's journal and
+says - and `omenctl report` carries it, along with the setpoints the daemon
+chose before it happened.
+
+It judges by the trail a shutdown leaves (services stopped, filesystems
+unmounted) rather than by systemd's last word, because the journal is stopped
+before the end and that last line usually never reaches the disk. Looking for
+it reports every clean shutdown as a crash, which is what the first version of
+this check did on this very machine.
+
+"It stopped" and "it was hot" are kept separate. The second is only claimed
+when the kernel said so, and then its own line is quoted.
 
 ### Naming the process a profile should match
 

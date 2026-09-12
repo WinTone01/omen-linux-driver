@@ -44,6 +44,13 @@ pub enum Kind {
     Idle,
     /// The lid is shut. Takes no value.
     LidClosed,
+    /// The local clock is inside a window - `from` to `to`, which may wrap
+    /// past midnight.
+    TimeBetween,
+    /// The machine is on a particular wireless network. "At work, stay
+    /// quiet" is the rule people actually want, and the network is the only
+    /// thing on a laptop that knows where it is.
+    WifiSsid,
 }
 
 impl Kind {
@@ -53,6 +60,8 @@ impl Kind {
             Self::BatteryBelow => "battery_below",
             Self::Idle => "idle",
             Self::LidClosed => "lid_closed",
+            Self::TimeBetween => "time_between",
+            Self::WifiSsid => "wifi_ssid",
         }
     }
 
@@ -62,8 +71,15 @@ impl Kind {
             Self::TempAbove => Some("C"),
             Self::BatteryBelow => Some("%"),
             Self::Idle => Some("min"),
-            Self::LidClosed => None,
+            Self::LidClosed | Self::TimeBetween | Self::WifiSsid => None,
         }
+    }
+
+    /// Whether this kind is evaluated against something that costs a process
+    /// to find out. Sampled only when one of these is configured - see
+    /// Reading.
+    pub fn is_expensive(self) -> bool {
+        matches!(self, Self::TimeBetween | Self::WifiSsid)
     }
 }
 
@@ -97,6 +113,18 @@ pub struct Trigger {
     /// swapped in and swapped back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub curve: Option<String>,
+
+    /// The window for `time_between`, as "HH:MM". A `from` later than `to`
+    /// wraps past midnight, which is how anybody would write "23:00 to
+    /// 07:00" and expect it to mean one night rather than nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+
+    /// The network name for `wifi_ssid`. Compared case-insensitively.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssid: Option<String>,
 }
 
 /// Everything a condition can be evaluated against, sampled once per tick.
@@ -113,6 +141,12 @@ pub struct Reading {
     /// `None` on a machine with no lid switch - a desktop, or a kernel that
     /// does not export one. Never guessed.
     pub lid_closed: Option<bool>,
+    /// Minutes since local midnight. `None` unless a time trigger is
+    /// configured: finding out costs a process (see local_minutes).
+    pub minutes: Option<u16>,
+    /// The wireless network this machine is on, if any. Same rule - only
+    /// looked up when something asks about it.
+    pub ssid: Option<String>,
 }
 
 impl Trigger {
@@ -142,7 +176,29 @@ impl Trigger {
             // No hysteresis: a lid is open or it is shut, and there is no
             // noise in between to smooth.
             Kind::LidClosed => now.lid_closed.unwrap_or(false),
+
+            // Nor here. A clock does not wobble across a boundary, and a
+            // network name is a name.
+            Kind::TimeBetween => match (now.minutes, self.window()) {
+                (Some(now), Some((from, to))) => in_window(now, from, to),
+                // The clock could not be read. Hold what was applied rather
+                // than letting go for a reason that is not about the time.
+                _ => engaged,
+            },
+            Kind::WifiSsid => match (&now.ssid, &self.ssid) {
+                (Some(on), Some(want)) => on.eq_ignore_ascii_case(want.trim()),
+                _ => false,
+            },
         }
+    }
+
+    /// The window as minutes since midnight, when this is a time trigger and
+    /// both ends parse.
+    pub fn window(&self) -> Option<(u16, u16)> {
+        Some((
+            parse_hm(self.from.as_deref()?)?,
+            parse_hm(self.to.as_deref()?)?,
+        ))
     }
 
     /// What this trigger is watching, in words.
@@ -152,6 +208,14 @@ impl Trigger {
             (Kind::BatteryBelow, Some(v)) => format!("battery below {v:.0}%"),
             (Kind::Idle, Some(v)) => format!("idle for {v:.0} min"),
             (Kind::LidClosed, _) => "the lid is shut".into(),
+            (Kind::TimeBetween, _) => format!(
+                "between {} and {}",
+                self.from.as_deref().unwrap_or("?"),
+                self.to.as_deref().unwrap_or("?")
+            ),
+            (Kind::WifiSsid, _) => {
+                format!("on the {} network", self.ssid.as_deref().unwrap_or("?"))
+            }
             (kind, None) => kind.as_str().into(),
         }
     }
@@ -185,11 +249,44 @@ impl Trigger {
     /// so a file that cannot do anything is refused at load rather than
     /// discovered as silence.
     pub fn check(&self) -> Result<(), String> {
+        // The two that carry their own fields rather than a number.
+        match self.when {
+            Kind::TimeBetween => {
+                if self.value.is_some() {
+                    return Err("time_between takes from and to, not a value".into());
+                }
+                if self.window().is_none() {
+                    return Err(
+                        "time_between needs from and to as \"HH:MM\", e.g. from = \"23:00\"".into(),
+                    );
+                }
+                if self.from == self.to {
+                    return Err("a time window that starts where it ends is never true".into());
+                }
+            }
+            Kind::WifiSsid => {
+                if self.value.is_some() {
+                    return Err("wifi_ssid takes a network name, not a value".into());
+                }
+                match self.ssid.as_deref().map(str::trim) {
+                    None | Some("") => return Err("wifi_ssid needs a network name".into()),
+                    Some(_) => {}
+                }
+            }
+            _ => {
+                if self.from.is_some() || self.to.is_some() || self.ssid.is_some() {
+                    return Err(format!("{} takes a value, not from/to/ssid", self.when));
+                }
+            }
+        }
+
         match (self.when, self.value) {
             (Kind::LidClosed, Some(_)) => {
                 return Err("lid_closed takes no value".into());
             }
-            (kind, None) if kind != Kind::LidClosed => {
+            (kind, None)
+                if !matches!(kind, Kind::LidClosed | Kind::TimeBetween | Kind::WifiSsid) =>
+            {
                 return Err(format!(
                     "{kind} needs a value in {}",
                     kind.unit().unwrap_or("")
@@ -232,6 +329,150 @@ pub fn active(triggers: &[Trigger], now: &Reading, engaged: Option<usize>) -> Op
         .enumerate()
         .find(|(i, t)| t.holds(now, engaged == Some(*i)))
         .map(|(i, _)| i)
+}
+
+/// "HH:MM" as minutes since midnight.
+fn parse_hm(text: &str) -> Option<u16> {
+    let (h, m) = text.trim().split_once(':')?;
+    let h: u16 = h.trim().parse().ok()?;
+    let m: u16 = m.trim().parse().ok()?;
+    (h < 24 && m < 60).then_some(h * 60 + m)
+}
+
+/// Whether `now` is inside the window, which may wrap past midnight.
+///
+/// "from 23:00 to 07:00" is one night, not an empty set - that is how anyone
+/// writing it means it, and a rule that silently never fired would be a poor
+/// way to find out otherwise.
+fn in_window(now: u16, from: u16, to: u16) -> bool {
+    if from <= to {
+        now >= from && now < to
+    } else {
+        now >= from || now < to
+    }
+}
+
+/// The local clock, as minutes since midnight.
+///
+/// Through `date` rather than a date crate. Two reasons: local time needs the
+/// zone database and the current DST rules, which is exactly what `date`
+/// already does correctly and what a dependency here would only wrap; and the
+/// Rust crates that do it either pull in a large tree or refuse to read the
+/// local offset from a process with threads, which this daemon has.
+///
+/// One process per evaluation is more than this deserves, so it is only
+/// called when a time trigger is configured, and the caller caches it for a
+/// minute - see `Clock`.
+fn local_minutes() -> Option<u16> {
+    let out = std::process::Command::new("date")
+        .arg("+%H:%M")
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| parse_hm(String::from_utf8_lossy(&out.stdout).trim()))?
+}
+
+/// The current wireless network, if there is one.
+///
+/// Three ways of asking, in the order they are likely to work, because no
+/// single one is everywhere: NetworkManager runs most desktops, `iw` is in
+/// every distribution's base wireless tooling, and `iwgetid` is the old
+/// wireless-tools answer that some machines still have and others do not.
+/// A machine with none of them simply has no SSID to match on.
+fn current_ssid() -> Option<String> {
+    // nmcli: the active connection on a wifi device.
+    if let Ok(out) = std::process::Command::new("nmcli")
+        .args(["-t", "-f", "active,ssid", "dev", "wifi"])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Some(ssid) = text
+                .lines()
+                .find_map(|l| l.strip_prefix("yes:").map(str::trim))
+                .filter(|s| !s.is_empty())
+            {
+                return Some(ssid.to_owned());
+            }
+        }
+    }
+
+    // iwgetid, which answers with just the name.
+    if let Ok(out) = std::process::Command::new("iwgetid").arg("-r").output() {
+        if out.status.success() {
+            let name = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+
+    // iw, which needs to be pointed at an interface.
+    let wireless = std::fs::read_dir("/sys/class/net")
+        .ok()?
+        .flatten()
+        .find(|e| e.path().join("wireless").exists())?;
+    let name = wireless.file_name();
+    let out = std::process::Command::new("iw")
+        .args(["dev", name.to_str()?, "link"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .find_map(|l| l.trim().strip_prefix("SSID:"))
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+/// The two readings that cost a process, remembered for a while.
+///
+/// Neither the clock nor the network name changes between two ticks in a way
+/// anybody would notice, and asking every two seconds would mean a process
+/// spawn every two seconds for as long as the machine is on.
+#[derive(Debug, Clone, Default)]
+pub struct Clock {
+    minutes: Option<u16>,
+    ssid: Option<String>,
+    checked: Option<std::time::Instant>,
+}
+
+/// How long those two answers are kept. A minute is the resolution a time
+/// window is written in anyway, and a network change that takes a minute to
+/// notice is a network change nobody was watching.
+const CLOCK_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl Clock {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Samples if anything configured actually asks for it, and if the last
+    /// answer has gone stale.
+    pub fn sample(&mut self, triggers: &[Trigger]) {
+        let wanted = |kind: Kind| triggers.iter().any(|t| t.when == kind);
+        let time = wanted(Kind::TimeBetween);
+        let wifi = wanted(Kind::WifiSsid);
+        if !time && !wifi {
+            self.minutes = None;
+            self.ssid = None;
+            return;
+        }
+        if self.checked.is_some_and(|at| at.elapsed() < CLOCK_TTL) {
+            return;
+        }
+        self.checked = Some(std::time::Instant::now());
+        self.minutes = time.then(local_minutes).flatten();
+        self.ssid = wifi.then(current_ssid).flatten();
+    }
+
+    pub fn minutes(&self) -> Option<u16> {
+        self.minutes
+    }
+
+    pub fn ssid(&self) -> Option<String> {
+        self.ssid.clone()
+    }
 }
 
 /// Whether the lid is shut.
@@ -356,6 +597,9 @@ mod tests {
             profile: Some("performance".into()),
             fan: None,
             curve: None,
+            from: None,
+            to: None,
+            ssid: None,
         }
     }
 
@@ -479,6 +723,127 @@ mod tests {
         );
     }
 
+    fn at(from: &str, to: &str) -> Trigger {
+        Trigger {
+            when: Kind::TimeBetween,
+            value: None,
+            profile: Some("low-power".into()),
+            fan: None,
+            curve: None,
+            from: Some(from.into()),
+            to: Some(to.into()),
+            ssid: None,
+        }
+    }
+
+    #[test]
+    fn a_time_window_that_wraps_past_midnight_is_one_night() {
+        let night = at("23:00", "07:00");
+        let minutes = |h: u16, m: u16| Reading {
+            minutes: Some(h * 60 + m),
+            ..Default::default()
+        };
+        assert!(night.holds(&minutes(23, 30), false));
+        assert!(night.holds(&minutes(2, 0), false));
+        assert!(night.holds(&minutes(6, 59), false));
+        assert!(
+            !night.holds(&minutes(7, 0), false),
+            "the window ends at 07:00"
+        );
+        assert!(!night.holds(&minutes(12, 0), false));
+    }
+
+    #[test]
+    fn a_daytime_window_does_not_wrap() {
+        let work = at("09:00", "17:30");
+        let minutes = |h: u16, m: u16| Reading {
+            minutes: Some(h * 60 + m),
+            ..Default::default()
+        };
+        assert!(work.holds(&minutes(9, 0), false));
+        assert!(work.holds(&minutes(17, 29), false));
+        assert!(!work.holds(&minutes(17, 30), false));
+        assert!(!work.holds(&minutes(8, 59), false));
+    }
+
+    #[test]
+    fn a_clock_that_cannot_be_read_holds_what_was_applied() {
+        let night = at("23:00", "07:00");
+        assert!(night.holds(&Reading::default(), true));
+        assert!(!night.holds(&Reading::default(), false));
+    }
+
+    #[test]
+    fn a_network_name_is_matched_without_case() {
+        let office = Trigger {
+            when: Kind::WifiSsid,
+            value: None,
+            profile: Some("balanced".into()),
+            fan: None,
+            curve: None,
+            from: None,
+            to: None,
+            ssid: Some("Office WiFi".into()),
+        };
+        assert!(office.holds(
+            &Reading {
+                ssid: Some("office wifi".into()),
+                ..Default::default()
+            },
+            false
+        ));
+        assert!(!office.holds(
+            &Reading {
+                ssid: Some("Home".into()),
+                ..Default::default()
+            },
+            false
+        ));
+        // Not on any network is not "on the office network".
+        assert!(!office.holds(&Reading::default(), true));
+    }
+
+    #[test]
+    fn the_new_kinds_refuse_the_wrong_arguments() {
+        let mut t = at("23:00", "07:00");
+        t.value = Some(5.0);
+        assert!(t.check().is_err(), "a value is not what a window takes");
+
+        let mut same = at("09:00", "09:00");
+        same.value = None;
+        assert!(same.check().is_err(), "a window that starts where it ends");
+
+        let mut bad = at("25:00", "07:00");
+        bad.value = None;
+        assert!(bad.check().is_err(), "25:00 is not a time");
+
+        let mut hot = trigger(Kind::TempAbove, Some(85.0));
+        hot.ssid = Some("Office".into());
+        assert!(hot.check().is_err(), "temp_above does not take an ssid");
+
+        let empty = Trigger {
+            when: Kind::WifiSsid,
+            value: None,
+            profile: Some("balanced".into()),
+            fan: None,
+            curve: None,
+            from: None,
+            to: None,
+            ssid: Some("   ".into()),
+        };
+        assert!(empty.check().is_err());
+    }
+
+    #[test]
+    fn nothing_is_sampled_for_triggers_nobody_configured() {
+        // The clock and the network name each cost a process; a machine with
+        // no such trigger must not pay for them.
+        let mut clock = Clock::new();
+        clock.sample(&[trigger(Kind::TempAbove, Some(85.0))]);
+        assert_eq!(clock.minutes(), None);
+        assert_eq!(clock.ssid(), None);
+    }
+
     #[test]
     fn nonsense_entries_are_refused() {
         assert!(trigger(Kind::TempAbove, None).check().is_err());
@@ -493,6 +858,9 @@ mod tests {
             profile: None,
             fan: None,
             curve: None,
+            from: None,
+            to: None,
+            ssid: None,
         };
         assert!(does_nothing.check().is_err());
     }

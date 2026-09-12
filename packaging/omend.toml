@@ -216,6 +216,10 @@ app_scan_secs = 5
 #   battery_below  value in %     the charge has fallen below it
 #   idle           value in min   nothing much has happened for that long
 #   lid_closed     no value       the lid is shut
+#   time_between   from/to HH:MM  the local clock is in that window, which may
+#                                 wrap past midnight ("23:00" to "07:00" is one
+#                                 night, not an empty set)
+#   wifi_ssid      ssid = "name"  the machine is on that wireless network
 #
 # Each one lets go a little past where it engaged (3 degrees, 3 points), so a
 # machine sitting exactly on a threshold does not flap between applied and
@@ -235,6 +239,22 @@ app_scan_secs = 5
 # [[trigger]]
 # when = "lid_closed"
 # profile = "low-power"
+#
+# [[trigger]]
+# when = "time_between"
+# from = "23:00"
+# to = "07:00"
+# profile = "low-power"
+# curve = "quiet"
+#
+# [[trigger]]
+# when = "wifi_ssid"
+# ssid = "Office"
+# curve = "quiet"
+#
+# The clock and the network name are the only two readings here that cost a
+# process to find out, so they are only looked up when a trigger asks for
+# them, and the answer is kept for a minute.
 
 [battery]
 # Stop charging at this percentage, where the kernel offers the control

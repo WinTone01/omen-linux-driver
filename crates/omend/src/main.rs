@@ -1104,7 +1104,7 @@ impl Runtime {
     /// force the triggers are released rather than merely ignored - leaving
     /// one applied underneath would mean its settings quietly outlive it.
     fn scan_triggers(&mut self, temp_c: Option<f32>) {
-        let reading = self.triggers.sample(temp_c);
+        let reading = self.triggers.sample(temp_c, &self.cfg.triggers);
         let actions = if self.apps.active().is_some() {
             self.triggers.release(self.mode)
         } else {

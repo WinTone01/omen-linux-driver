@@ -481,6 +481,48 @@ fn thermal(snapshot: &DaemonView) -> Section {
         ),
     });
 
+    // How the previous session ended. A thermal cutout is the failure this
+    // project exists to prevent and the one nobody has evidence of afterwards
+    // - the machine simply came back. The journal from the boot before still
+    // knows.
+    let boot = crate::lastboot::probe();
+    checks.push(match (boot.ending, &boot.thermal) {
+        (crate::lastboot::Ending::Clean, _) => Check::new(
+            "last_boot",
+            "Previous shutdown",
+            Verdict::Ok,
+            boot.describe(),
+        ),
+        (crate::lastboot::Ending::Unknown, _) => Check::new(
+            "last_boot",
+            "Previous shutdown",
+            Verdict::Skip,
+            boot.describe(),
+        ),
+        (crate::lastboot::Ending::Unclean, Some(_)) => Check::new(
+            "last_boot",
+            "Previous shutdown",
+            Verdict::Fail,
+            boot.describe(),
+        )
+        .with_fix(
+            "That is what a thermal cutout looks like from the outside. Check the \
+                 curve and the safety thresholds, and send 'omenctl report' with a bug \
+                 report - it carries the decisions the daemon made before it happened.",
+        ),
+        (crate::lastboot::Ending::Unclean, None) => Check::new(
+            "last_boot",
+            "Previous shutdown",
+            Verdict::Warn,
+            boot.describe(),
+        )
+        .with_fix(
+            "Nothing in the log blames the temperature, so this is not evidence of \
+                 overheating on its own - a power cut and a held power button look the same. \
+                 Worth knowing about if it repeats.",
+        ),
+    });
+
     Section {
         title: "Thermal".into(),
         checks,

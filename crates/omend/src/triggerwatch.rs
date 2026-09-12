@@ -14,7 +14,7 @@
 use std::time::Instant;
 
 use omen_core::ipc::ControlMode;
-use omen_core::triggers::{self, Idle, Reading, Trigger};
+use omen_core::triggers::{self, Clock, Idle, Reading, Trigger};
 
 use crate::takeover::{Actions, Takeover, Voice, Want};
 
@@ -24,6 +24,9 @@ pub struct TriggerWatch {
     /// Which entry is engaged, so only that one gets the release margin.
     engaged: Option<usize>,
     idle: Idle,
+    /// The two answers that cost a process - the local clock and the network
+    /// name. Only asked for when a trigger wants them.
+    clock: Clock,
     sampled: Instant,
     /// The lid as it was last seen, to notice it opening.
     lid: Option<bool>,
@@ -41,6 +44,7 @@ impl TriggerWatch {
             inner: Takeover::new(Voice::Trigger),
             engaged: None,
             idle: Idle::new(),
+            clock: Clock::new(),
             sampled: Instant::now(),
             lid: None,
         }
@@ -62,10 +66,12 @@ impl TriggerWatch {
     /// `temp_c` comes from the caller rather than being read again here: it
     /// must be the same number the curve was driven from this tick, or a
     /// trigger and the fan can disagree about how hot the machine is.
-    pub fn sample(&mut self, temp_c: Option<f32>) -> Reading {
+    pub fn sample(&mut self, temp_c: Option<f32>, triggers: &[Trigger]) -> Reading {
         let elapsed = self.sampled.elapsed();
         self.sampled = Instant::now();
         self.idle.sample(elapsed);
+
+        self.clock.sample(triggers);
 
         let lid = triggers::lid_closed();
         // Opening the lid is somebody arriving, and /proc/stat may not show
@@ -80,6 +86,8 @@ impl TriggerWatch {
             battery_percent: omen_core::power::battery_percent(),
             idle_secs: self.idle.secs(),
             lid_closed: lid,
+            minutes: self.clock.minutes(),
+            ssid: self.clock.ssid(),
         }
     }
 

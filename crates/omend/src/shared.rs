@@ -104,8 +104,13 @@ impl Shared {
         let seq = guard.tick_seq;
         self.0 .1.notify_all();
 
+        // Both conditions, not just the tick count. The loop takes the
+        // reload flag at the START of a tick, so a write that lands after
+        // that point is not in the tick that finishes next - waiting for one
+        // tick would return before our own change had been read, which is
+        // exactly what a second save in quick succession did.
         let deadline = Instant::now() + timeout;
-        while guard.tick_seq == seq {
+        while guard.tick_seq == seq || guard.reload {
             let now = Instant::now();
             if now >= deadline {
                 return false;

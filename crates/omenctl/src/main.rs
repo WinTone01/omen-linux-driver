@@ -60,12 +60,14 @@ USAGE:
                                    profile has to match
 
     omenctl trigger                List the state triggers
-    omenctl trigger add <WHEN> [VALUE] [PROFILE] [FAN]
+    omenctl trigger add <WHEN> [ARGS] [PROFILE] [FAN]
                                    WHEN is temp-above / battery-below / idle /
-                                   lid-closed. e.g.
+                                   lid-closed / time-between / wifi-ssid. e.g.
                                      omenctl trigger add temp-above 88 performance
                                      omenctl trigger add idle 30 low-power curve:quiet
                                      omenctl trigger add lid-closed low-power
+                                     omenctl trigger add time-between 23:00 07:00 low-power
+                                     omenctl trigger add wifi-ssid Office balanced curve:quiet
     omenctl trigger remove <WHEN>  Drop one
 
     omenctl gpu mux [MODE]         Which GPU drives the screen from the next
@@ -935,6 +937,8 @@ fn triggers(args: &[String]) -> Result<()> {
             "battery_below" | "battery" => Kind::BatteryBelow,
             "idle" => Kind::Idle,
             "lid_closed" | "lid" => Kind::LidClosed,
+            "time_between" | "time" => Kind::TimeBetween,
+            "wifi_ssid" | "wifi" | "ssid" => Kind::WifiSsid,
             other => bail!(
                 "unknown trigger: {other}                  (temp-above / battery-below / idle / lid-closed)"
             ),
@@ -978,12 +982,36 @@ fn triggers(args: &[String]) -> Result<()> {
                 profile: None,
                 fan: None,
                 curve: None,
+                from: None,
+                to: None,
+                ssid: None,
             };
+
+            // The two that carry their own arguments take them first, in the
+            // order anyone would say them out loud.
+            let mut rest = &args[3..];
+            match when {
+                Kind::TimeBetween => {
+                    let (Some(from), Some(to)) = (rest.first(), rest.get(1)) else {
+                        bail!("time-between needs two times, e.g. 23:00 07:00");
+                    };
+                    entry.from = Some(from.clone());
+                    entry.to = Some(to.clone());
+                    rest = &rest[2..];
+                }
+                Kind::WifiSsid => {
+                    let Some(ssid) = rest.first() else {
+                        bail!("wifi-ssid needs a network name");
+                    };
+                    entry.ssid = Some(ssid.clone());
+                    rest = &rest[1..];
+                }
+                _ => {}
+            }
 
             // The value comes first when the condition takes one, and a
             // number in any other position is a fan setpoint - same
             // shape-based parsing as everywhere else here.
-            let mut rest = &args[3..];
             if when.unit().is_some() {
                 let raw = rest.first().ok_or_else(|| {
                     anyhow::anyhow!("{when} needs a value in {}", when.unit().unwrap_or(""))

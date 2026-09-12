@@ -24,6 +24,7 @@ pub mod error;
 pub mod fan;
 pub mod gpu;
 pub mod ipc;
+pub mod lastboot;
 pub mod leds;
 pub mod power;
 pub mod profile;

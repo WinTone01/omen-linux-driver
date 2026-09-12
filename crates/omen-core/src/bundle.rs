@@ -57,6 +57,11 @@ pub fn report() -> String {
     section(&mut out, "FAN AND THERMAL", fan_and_thermal());
     section(&mut out, "LIGHTING", lighting());
     section(&mut out, "GRAPHICS", graphics());
+    section(
+        &mut out,
+        "PREVIOUS SHUTDOWN",
+        crate::lastboot::probe().describe(),
+    );
     section(&mut out, "RECENT DECISIONS", decisions());
     section(&mut out, "JOURNAL", journal());
 
@@ -488,6 +493,7 @@ mod tests {
             "=== MODULES ===",
             "=== DAEMON ===",
             "=== FAN AND THERMAL ===",
+            "=== PREVIOUS SHUTDOWN ===",
             "=== JOURNAL ===",
         ] {
             assert!(text.contains(heading), "missing {heading}");
