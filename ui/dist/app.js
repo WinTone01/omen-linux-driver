@@ -720,13 +720,20 @@ function renderProfiles(s) {
       card.dataset.profile = name;
       card.innerHTML =
         `<svg class="power-card__icon" viewBox="0 0 24 24"><path d="${info.icon}"/></svg>` +
-        `<h3>${name.replace("-", " ")}</h3><p>${info.blurb}</p>`;
+        `<h3>${name.replace("-", " ")}</h3><p>${info.blurb}</p>` +
+        // Said in words as well as in colour: which profile is in force is
+        // the single most important thing on this page, and a border is not
+        // an answer for somebody who cannot see the difference.
+        `<span class="power-card__active">${t("in force")}</span>`;
       card.addEventListener("click", () => act(() => invoke("set_profile", { profile: name })));
       box.append(card);
     });
     box.dataset.built = String(s.profile_choices.length);
   }
-  $$(".power-card").forEach((c) =>
+  // Scoped to this grid. The graphics page draws its mux options with the
+  // same class, and an unscoped selector cleared their selection on every
+  // poll - saved only by the order the two happen to render in.
+  $$("#profile-cards .power-card").forEach((c) =>
     c.classList.toggle("is-active", c.dataset.profile === current),
   );
 }
@@ -833,6 +840,118 @@ function drawHistory() {
     secs >= 60 ? `last ${Math.round(secs / 60)} min` : `last ${secs} s`;
 }
 
+/* ── the live panel and the sparklines ─────────────────────────
+ *
+ * Both are drawn from the same series the History chart uses, so they cannot
+ * disagree with it, and both are cheap: a path string each, on the poll that
+ * was already happening.
+ */
+
+/** A series as a path across its own box, with a little headroom. */
+function sparkPath(values, w = 200, h = 26) {
+  const seen = values.filter((v) => Number.isFinite(v) && v > 0);
+  if (seen.length < 3) return "";
+  // Scaled to what actually happened rather than to a fixed range: a
+  // sparkline is about the shape, and 40-to-100 degrees flattens every real
+  // change into a straight line.
+  const lo = Math.min(...seen);
+  const hi = Math.max(...seen);
+  const span = Math.max(hi - lo, 1);
+  const step = w / (values.length - 1);
+  return values
+    .map((v, i) => {
+      const y = h - ((clamp(v, lo, hi) - lo) / span) * (h - 2) - 1;
+      return `${i ? "L" : "M"}${(i * step).toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
+
+/** Rising, falling or steady, over the last minute or so of a series. */
+function trendOf(values, deadband) {
+  const tail = values.filter(Number.isFinite).slice(-30);
+  if (tail.length < 8) return 0;
+  const half = Math.floor(tail.length / 2);
+  const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const delta = mean(tail.slice(half)) - mean(tail.slice(0, half));
+  if (delta > deadband) return 1;
+  if (delta < -deadband) return -1;
+  return 0;
+}
+
+function setTrend(id, direction) {
+  const el = $(id);
+  if (!el) return;
+  el.hidden = direction === 0;
+  el.textContent = direction > 0 ? "▲" : "▼";
+  el.className = `ring__trend ${direction > 0 ? "is-up" : "is-down"}`;
+}
+
+function drawSparks() {
+  const temps = history.temp;
+  const fans = history.fan;
+  // The GPU has no series of its own - the chart follows the driving sensor -
+  // so both temperature sparklines show the same shape. That is honest: it is
+  // the curve's own view of the machine.
+  for (const id of ["#spark-cpu", "#spark-gpu"]) {
+    $(id)?.setAttribute("d", sparkPath(temps));
+  }
+  $("#spark-fan")?.setAttribute("d", sparkPath(fans));
+  $("#now-spark-line")?.setAttribute("d", sparkPath(temps, 220, 34));
+
+  // Half a degree of movement over a minute is weather, not a trend.
+  setTrend("#cpu-trend", trendOf(temps, 0.6));
+  setTrend("#gpu-trend", trendOf(temps, 0.6));
+}
+
+/** The sidebar panel: what is in force, wherever you are in the app. */
+/** The silicon line under the model name. Written once - it cannot change
+ *  while the window is open. */
+function renderSpec(info) {
+  const el = $("#device-spec");
+  if (!el || el.dataset.done) return;
+  const parts = [];
+  if (info?.cpu_model) parts.push(info.cpu_model);
+  if (info?.mem_total_gb) parts.push(`${Math.round(info.mem_total_gb)} GB`);
+  if (!parts.length) return;
+  el.textContent = parts.join(" · ");
+  el.dataset.done = "1";
+}
+
+function renderNow(s) {
+  const d = s.daemon;
+  const panel = $("#now-panel");
+  if (!panel) return;
+
+  $("#now-profile").textContent = d?.profile ? t(d.profile) : "—";
+
+  // The fan line says the mode and, when there is one, the setpoint - the
+  // two halves of the question "what are the fans being told to do".
+  let fan = "—";
+  if (d?.mode) {
+    const mode = d.mode.mode === "manual" ? `${d.mode.rpm} RPM` : t(d.mode.mode);
+    const target = d.target_rpm;
+    fan = target && d.mode.mode !== "manual" ? `${mode} · ${target} RPM` : mode;
+  } else if (d) {
+    fan = t("no fan control");
+  }
+  if (d?.curve_preset) fan += ` (${t(d.curve_preset)})`;
+  $("#now-fan").textContent = fan;
+
+  const cpu = namedTemp(d, "cpu") ?? d?.driver_temp_c;
+  const gpu = namedTemp(d, "dgpu") ?? namedTemp(d, "igpu");
+  const rpm = Math.max(d?.fan1_rpm ?? 0, d?.fan2_rpm ?? 0);
+
+  const put = (id, value, suffix, hot, warm) => {
+    const el = $(id);
+    el.textContent = value == null ? "—" : `${Math.round(value)}${suffix}`;
+    el.classList.toggle("is-hot", value != null && value >= hot);
+    el.classList.toggle("is-warm", value != null && value >= warm && value < hot);
+  };
+  put("#now-cpu", cpu, "°", 85, 75);
+  put("#now-gpu", gpu, "°", 85, 75);
+  put("#now-rpm", rpm || null, "", Infinity, Infinity);
+}
+
 function pushHistory(temp, fan) {
   history.temp.push(temp ?? 0);
   history.fan.push(fan ?? 0);
@@ -842,6 +961,7 @@ function pushHistory(temp, fan) {
     history.fan.shift();
   }
   drawHistory();
+  drawSparks();
 }
 
 /* The daemon has been watching since it started; this window has not.
@@ -867,6 +987,7 @@ async function seedHistory() {
   // than no label.
   history.spanSecs = Math.max(0, rows[rows.length - 1].uptime_secs - rows[0].uptime_secs);
   drawHistory();
+  drawSparks();
 }
 
 const CURVE_MIN_C = 40, CURVE_MAX_C = 100;
@@ -2395,6 +2516,8 @@ async function renderSystem() {
     return;
   }
 
+  renderSpec(info);
+
   if (info.cpu_percent != null) {
     $("#cpu-util").textContent = `${Math.round(info.cpu_percent)}%`;
     setRing("#ring-cpu", info.cpu_percent, loadHeat(info.cpu_percent));
@@ -2706,6 +2829,7 @@ async function refresh() {
     return;
   }
   renderDaemon(state);
+  renderNow(state);
   renderProfiles(state);
   renderApps(state);
   renderTriggers(state);

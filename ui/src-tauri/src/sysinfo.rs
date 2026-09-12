@@ -16,6 +16,9 @@ use serde::Serialize;
 
 #[derive(Debug, Serialize, Default)]
 pub struct SysInfo {
+    /// What the CPU calls itself, for the sidebar. Read once per call from
+    /// /proc/cpuinfo, which is a page of text and costs nothing.
+    pub cpu_model: Option<String>,
     /// 0-100 across all cores, over the interval since the last call.
     pub cpu_percent: Option<f32>,
     pub mem_used_gb: f32,
@@ -64,10 +67,33 @@ pub fn read() -> SysInfo {
     let (cpu_percent, total_jiffies) = cpu(previous);
 
     SysInfo {
+        cpu_model: cpu_model(),
         cpu_percent,
         processes: processes(previous, total_jiffies),
         ..memory()
     }
+}
+
+/// The CPU's own name, trimmed of the marketing tail.
+///
+/// "AMD Ryzen AI 9 365 w/ Radeon 880M" is two facts in one string, and the
+/// second is the integrated GPU, which this window reports separately. The
+/// sidebar has one line for this.
+fn cpu_model() -> Option<String> {
+    let text = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+    let full = text
+        .lines()
+        .find_map(|l| l.strip_prefix("model name")?.split_once(':'))
+        .map(|(_, name)| name.trim().to_owned())?;
+    Some(
+        full.split(" w/ ")
+            .next()
+            .unwrap_or(&full)
+            .replace("(R)", "")
+            .replace("(TM)", "")
+            .trim()
+            .to_owned(),
+    )
 }
 
 /// Overall CPU busy percentage since the previous call, plus the current

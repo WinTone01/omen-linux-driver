@@ -318,8 +318,6 @@ kbd {
 .ring-card {
   display: flex; flex-direction: column; align-items: center;
   margin-bottom: 0; padding: 18px 16px 16px;
-  /* The temperature badge hangs off the ring, so the card is the frame it
-   * is positioned against. */
   position: relative;
 }
 .ring-card__head {
@@ -359,9 +357,13 @@ kbd {
 /* The badge: a circle at the bottom-left of the ring, green until it is not,
  * exactly as the Hub does it. */
 .ring-card__badge {
+  /* Hung off the RING, not measured from the middle of the card. It used to
+   * be the latter - left:50% and a -94px nudge - which put it outside the
+   * card as soon as the card was narrower than about 190px, i.e. whenever
+   * the window was not wide. Anchored to the thing it belongs to, it cannot
+   * escape at any width. */
   position: absolute;
-  left: 50%; top: 50%;
-  transform: translate(-94px, 30px);
+  left: -12px; bottom: -6px;
   width: 52px; height: 52px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   font-size: 13px; font-variant-numeric: tabular-nums;
@@ -622,6 +624,101 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 }
 .chart--curve.is-editing { cursor: crosshair; }
 .chart-line--curve.is-draft { stroke-dasharray: 5 3; }
+
+/* Which profile is in force, in words. Hidden until it is. */
+.power-card__active {
+  display: none;
+  margin-top: 10px; padding: 3px 0;
+  font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--omen-red);
+  border-top: 1px solid var(--border-soft);
+}
+.power-card.is-active .power-card__active { display: block; }
+
+/* The silicon, under the model name. Static facts, so they are quiet: this
+ * is the answer to "which machine is this report from", not something to
+ * read every day. */
+.device-sidebar__spec {
+  display: block; margin-top: 4px;
+  font-size: 10.5px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── the live panel in the sidebar ─────────────────────────────
+ *
+ * What the machine is doing, visible from every page. Built from the tokens
+ * the rest of the app uses - no new colours, only a quieter surface and the
+ * same hairline border as a card.
+ */
+.now {
+  margin: 0 16px 14px;
+  padding: 11px 12px 9px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.now__row { display: flex; gap: 12px; }
+.now__row--tight { margin-top: 8px; }
+.now__cell { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.now__label {
+  font-size: 9.5px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+.now__value {
+  font-size: 12.5px; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.now__value--num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.now__value.is-hot { color: var(--omen-red); }
+.now__value.is-warm { color: var(--accent-amber); }
+
+/* The last few minutes of temperature, as a line thin enough to read as
+ * texture rather than as a chart - the chart is on the Vitals page. */
+.now__spark { display: block; width: 100%; height: 26px; margin-top: 8px; overflow: visible; }
+.now__spark-line { fill: none; stroke: var(--omen-red); stroke-width: 1.25; opacity: .75; }
+
+/* ── sparklines under the ring gauges ──────────────────────────
+ *
+ * The rings say what is happening now; these say what happened in the last
+ * few minutes, which is the difference between "54 degrees" and "54 degrees
+ * and climbing". Fed from the same series the History chart draws.
+ */
+.spark { display: block; width: 100%; height: 22px; margin-top: 10px; overflow: visible; }
+.spark__line { fill: none; stroke-width: 1.4; opacity: .8; }
+.spark__line--temp { stroke: var(--omen-red); }
+.spark__line--fan  { stroke: var(--accent-teal); }
+
+/* Which way it is going, next to the number itself. */
+.ring__trend {
+  position: absolute; top: 50%; right: -2px;
+  transform: translateY(-130%);
+  font-size: 10px; line-height: 1; color: var(--text-muted);
+}
+.ring__trend.is-up   { color: var(--accent-amber); }
+.ring__trend.is-down { color: var(--accent-teal); }
+
+/* ── the small movements ───────────────────────────────────────
+ *
+ * Enough to make a card feel like a surface and a button feel pressed, and
+ * no more. All of it is off under prefers-reduced-motion, which is not a
+ * courtesy: an animated interface is genuinely unusable for some people.
+ */
+.card { transition: border-color var(--dur-fast) var(--ease-out); }
+.ring-card:hover, .power-card:hover { border-color: var(--border); }
+.btn:active { transform: translateY(1px); }
+
+/* Keyboard users could not see where they were: the platform's own focus
+ * ring is invisible on this ground. */
+:focus-visible {
+  outline: 2px solid var(--omen-red);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+  .btn:active { transform: none; }
+}
 
 /* [hidden] has to beat every display rule in this file.
  *

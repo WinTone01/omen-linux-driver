@@ -56,7 +56,43 @@
         <div class="device-sidebar__head">
           <h2 class="device-sidebar__device-name" id="device-name">OMEN GAMING LAPTOP 16-AP0XXX</h2>
           <span class="device-sidebar__board" id="device-board">BOARD 8D24</span>
+          <span class="device-sidebar__spec" id="device-spec"></span>
         </div>
+        <!-- What the machine is doing, on every page.
+             The sidebar used to be navigation and nothing else, which left
+             the status stranded on System Vitals: changing a fan mode on the
+             Fan page meant switching pages to see the effect. -->
+        <div class="now" id="now-panel">
+          <div class="now__row">
+            <div class="now__cell">
+              <span class="now__label">Profile</span>
+              <span class="now__value" id="now-profile">—</span>
+            </div>
+            <div class="now__cell">
+              <span class="now__label">Fan</span>
+              <span class="now__value" id="now-fan">—</span>
+            </div>
+          </div>
+          <svg class="now__spark" id="now-spark" viewBox="0 0 220 34" preserveAspectRatio="none"
+               aria-hidden="true">
+            <path class="now__spark-line" id="now-spark-line" d=""/>
+          </svg>
+          <div class="now__row now__row--tight">
+            <div class="now__cell">
+              <span class="now__label">CPU</span>
+              <span class="now__value now__value--num" id="now-cpu">—</span>
+            </div>
+            <div class="now__cell">
+              <span class="now__label">GPU</span>
+              <span class="now__value now__value--num" id="now-gpu">—</span>
+            </div>
+            <div class="now__cell">
+              <span class="now__label">RPM</span>
+              <span class="now__value now__value--num" id="now-rpm">—</span>
+            </div>
+          </div>
+        </div>
+
         <nav class="device-list" role="tablist">
           <button class="device-link is-active" data-view="vitals"      role="tab">System Vitals</button>
           <button class="device-link"           data-view="performance" role="tab">Performance Control</button>
@@ -106,10 +142,14 @@
                 </svg>
                 <div class="ring__label">
                   <span class="ring__pct" id="gpu-temp">—</span>
+                  <span class="ring__trend" id="gpu-trend" hidden></span>
                   <span class="ring__sub">GPU Temperature</span>
                 </div>
               </div>
               <div class="ring-card__badge" id="gpu-badge" hidden></div>
+              <svg class="spark" viewBox="0 0 200 26" preserveAspectRatio="none" aria-hidden="true">
+                <path class="spark__line spark__line--temp" id="spark-gpu" d=""/>
+              </svg>
               <div class="ring-card__foot"><span id="gpu-label">—</span></div>
             </div>
 
@@ -122,10 +162,14 @@
                 </svg>
                 <div class="ring__label">
                   <span class="ring__pct" id="cpu-util">—</span>
+                  <span class="ring__trend" id="cpu-trend" hidden></span>
                   <span class="ring__sub">CPU Utilization</span>
                 </div>
               </div>
               <div class="ring-card__badge" id="cpu-badge" hidden></div>
+              <svg class="spark" viewBox="0 0 200 26" preserveAspectRatio="none" aria-hidden="true">
+                <path class="spark__line spark__line--temp" id="spark-cpu" d=""/>
+              </svg>
               <div class="ring-card__foot"><span id="cpu-label">—</span></div>
             </div>
 
@@ -156,6 +200,9 @@
                   <span class="ring__sub">RPM</span>
                 </div>
               </div>
+              <svg class="spark" viewBox="0 0 200 26" preserveAspectRatio="none" aria-hidden="true">
+                <path class="spark__line spark__line--fan" id="spark-fan" d=""/>
+              </svg>
               <div class="ring-card__foot"><span id="fan1-foot">CPU side</span> · <span id="fan2-foot">GPU side</span></div>
             </div>
           </div>

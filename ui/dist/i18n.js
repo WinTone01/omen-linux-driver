@@ -32,6 +32,7 @@ const I18N = {
     "omend unreachable": "omend'e ulaşılamıyor",
 
     /* ── vitals ─────────────────────────────────────────────── */
+    "no fan control": "fan denetimi yok",
     "Package": "Paket",
     "CPU side": "CPU tarafı",
     "GPU side": "GPU tarafı",
