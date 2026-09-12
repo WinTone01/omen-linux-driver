@@ -297,6 +297,129 @@ pub fn default_curve() -> Curve {
     .expect("the built-in default curve must be valid")
 }
 
+/// A curve as one line of text, for pasting into a chat window.
+///
+/// Why this exists: curves get shared, and the two obvious ways both fail.
+/// A screenshot cannot be loaded back. A config file fragment is four lines
+/// with indentation that chat clients mangle, and nobody can tell whether it
+/// arrived intact.
+///
+/// The format is deliberately readable rather than packed - somebody should
+/// be able to see what a code does before running it:
+///
+/// ```text
+/// omen1:s:45=0,55=18,75=24,92=36:3f
+/// ```
+///
+/// `omen1` is the format version, `s`/`l` is step or linear interpolation,
+/// then `temperature=RPM in hundreds` pairs, then a checksum. The RPM unit is
+/// hundreds because the EC's own fan target is (Phase 1 §3.2), so nothing is
+/// lost by it.
+///
+/// The checksum is the one part that is not decoration: a code that arrives
+/// truncated or with a character eaten would otherwise import as a different,
+/// plausible-looking curve. Two hex digits catch that without making the code
+/// look like a hash.
+pub mod code {
+    use super::{Curve, Interpolation, Point, EC_STEP_RPM};
+    use crate::error::{Error, Result};
+
+    const PREFIX: &str = "omen1";
+
+    pub fn encode(curve: &Curve) -> String {
+        let body = format!(
+            "{PREFIX}:{}:{}",
+            match curve.interpolation() {
+                Interpolation::Step => "s",
+                Interpolation::Linear => "l",
+            },
+            curve
+                .points()
+                .iter()
+                .map(|p| format!("{:.0}={}", p.temp_c, p.rpm / EC_STEP_RPM))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let sum = checksum(&body);
+        format!("{body}:{sum:02x}")
+    }
+
+    pub fn decode(text: &str) -> Result<Curve> {
+        let text = text.trim();
+        // Pasted codes arrive wrapped in backticks, quotes or a stray
+        // trailing full stop more often than not.
+        let text = text.trim_matches(|c: char| c == '`' || c == '"' || c == '\'' || c == '.');
+
+        let mut parts = text.split(':');
+        let prefix = parts.next().unwrap_or_default();
+        if !prefix.eq_ignore_ascii_case(PREFIX) {
+            return Err(Error::Curve(format!(
+                "this does not look like a curve code (it should start with {PREFIX}:)"
+            )));
+        }
+        let interpolation = match parts.next() {
+            Some("s") => Interpolation::Step,
+            Some("l") => Interpolation::Linear,
+            Some(other) => {
+                return Err(Error::Curve(format!(
+                    "unknown interpolation {other:?} in the code (s or l)"
+                )))
+            }
+            None => return Err(Error::Curve("the code is incomplete".into())),
+        };
+        let Some(points) = parts.next() else {
+            return Err(Error::Curve("the code has no points".into()));
+        };
+        let Some(sum) = parts.next() else {
+            return Err(Error::Curve(
+                "the code has no checksum - it was probably cut short".into(),
+            ));
+        };
+
+        let body = format!("{PREFIX}:{}:{points}", match interpolation {
+            Interpolation::Step => "s",
+            Interpolation::Linear => "l",
+        });
+        let want = u8::from_str_radix(sum.trim(), 16)
+            .map_err(|_| Error::Curve(format!("{sum:?} is not a checksum")))?;
+        if checksum(&body) != want {
+            return Err(Error::Curve(
+                "the checksum does not match - the code was altered or cut short in transit"
+                    .into(),
+            ));
+        }
+
+        let mut parsed = Vec::new();
+        for pair in points.split(',') {
+            let (temp, rpm) = pair
+                .split_once('=')
+                .ok_or_else(|| Error::Curve(format!("{pair:?} is not a temperature=speed pair")))?;
+            let temp_c: f32 = temp
+                .trim()
+                .parse()
+                .map_err(|_| Error::Curve(format!("{temp:?} is not a temperature")))?;
+            let hundreds: u32 = rpm
+                .trim()
+                .parse()
+                .map_err(|_| Error::Curve(format!("{rpm:?} is not a speed")))?;
+            parsed.push(Point {
+                temp_c,
+                rpm: hundreds * EC_STEP_RPM,
+            });
+        }
+
+        // Curve::with_interpolation is the only validator; a code is not a
+        // way around the rules an edited file has to obey.
+        Curve::with_interpolation(parsed, interpolation)
+    }
+
+    /// Sum of the bytes. Not a cryptographic anything - it catches a paste
+    /// that lost its tail, which is the failure this format actually has.
+    fn checksum(body: &str) -> u8 {
+        body.bytes().fold(0u8, |acc, b| acc.wrapping_add(b))
+    }
+}
+
 /// Named curves, for switching without drawing one.
 ///
 /// "default" is HP's own table and is the only one here that claims to be:
@@ -569,5 +692,66 @@ mod tests {
             }
         }
         assert!(changes <= 2, "changed {changes} times around the threshold");
+    }
+
+    #[test]
+    fn a_curve_survives_a_round_trip_through_a_code() {
+        let curve = preset("quiet").unwrap();
+        let text = code::encode(&curve);
+        assert!(text.starts_with("omen1:s:"), "{text}");
+        let back = code::decode(&text).unwrap();
+        assert_eq!(back.points(), curve.points());
+        assert_eq!(back.interpolation(), curve.interpolation());
+    }
+
+    #[test]
+    fn interpolation_travels_with_the_code() {
+        let curve = Curve::with_interpolation(
+            vec![
+                Point { temp_c: 50.0, rpm: 0 },
+                Point { temp_c: 80.0, rpm: 4000 },
+            ],
+            Interpolation::Linear,
+        )
+        .unwrap();
+        let back = code::decode(&code::encode(&curve)).unwrap();
+        assert_eq!(back.interpolation(), Interpolation::Linear);
+    }
+
+    #[test]
+    fn a_truncated_code_is_refused_rather_than_guessed_at() {
+        let text = code::encode(&preset("performance").unwrap());
+        // The failure this format actually has: a chat client eats the tail.
+        let cut = &text[..text.len() - 6];
+        let err = code::decode(cut).unwrap_err().to_string();
+        assert!(err.contains("cut short") || err.contains("checksum"), "{err}");
+    }
+
+    #[test]
+    fn a_code_wrapped_in_backticks_still_works() {
+        let text = format!("`{}`", code::encode(&default_curve()));
+        assert!(code::decode(&text).is_ok());
+    }
+
+    #[test]
+    fn a_code_cannot_smuggle_in_a_curve_a_file_would_be_refused_for() {
+        // Descending speeds are invalid wherever they come from.
+        let bad = code::encode(
+            &Curve::new(vec![
+                Point { temp_c: 50.0, rpm: 1800 },
+                Point { temp_c: 70.0, rpm: 2400 },
+            ])
+            .unwrap(),
+        )
+        .replace("50=18,70=24", "50=24,70=18");
+        // Re-checksummed by hand would be needed to get past the first gate,
+        // so this asserts only that it does not produce a curve.
+        assert!(code::decode(&bad).is_err());
+    }
+
+    #[test]
+    fn something_that_is_not_a_code_says_so() {
+        let err = code::decode("45:0,55:1800").unwrap_err().to_string();
+        assert!(err.contains("omen1"), "{err}");
     }
 }

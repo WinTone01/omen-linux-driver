@@ -226,8 +226,7 @@ impl Trigger {
 /// priority, the same rule the application profiles follow. `engaged` is the
 /// index of the trigger currently applied, so only that one gets the release
 /// margin.
-pub fn active<'a>(triggers: &'a [Trigger], now: &Reading, engaged: Option<usize>) -> Option<usize> {
-    let _ = triggers.first();
+pub fn active(triggers: &[Trigger], now: &Reading, engaged: Option<usize>) -> Option<usize> {
     triggers
         .iter()
         .enumerate()

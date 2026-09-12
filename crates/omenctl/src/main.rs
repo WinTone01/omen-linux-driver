@@ -32,6 +32,8 @@ USAGE:
                                    only valid at the bottom)
     omenctl curve preset <NAME>    quiet / default / performance
     omenctl curve reset            Back to the built-in OMEN Gaming Hub table
+    omenctl curve code             The curve as one line, to paste to somebody
+    omenctl curve import <CODE>    Load a curve somebody pasted to you
 
     omenctl set curve              Automatic: the curve drives the fan (default)
     omenctl set manual <RPM>       Fixed target
@@ -90,6 +92,10 @@ USAGE:
     omenctl reload                 Make the daemon re-read its configuration
     omenctl version                Versions, and whether anything running is
                                    older than what is installed
+    omenctl report [PATH]          Write one file with everything a bug report
+                                   needs: the diagnosis, the configuration,
+                                   the sysfs state and the daemon's log.
+                                   '-' writes it to stdout instead.
     omenctl doctor [--text]        Check the whole installation and say what
                                    to do about anything that is wrong
 
@@ -117,6 +123,7 @@ fn main() -> ExitCode {
         "reload" => client::send(&Request::Reload).and_then(client::report),
         "version" | "--version" | "-V" => versions(),
         "doctor" | "check" => doctor(&args),
+        "report" => report(&args),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -496,6 +503,45 @@ fn doctor(args: &[String]) -> Result<()> {
     println!("\n{}", report.summary());
     if report.count(Verdict::Fail) > 0 || report.count(Verdict::Warn) > 0 {
         println!("Paste-able version: omenctl doctor --text");
+    }
+    Ok(())
+}
+
+/// Everything a bug report needs, in one file.
+///
+/// Written to a file rather than printed by default, because that is what
+/// happens to it next: it is several hundred lines and it goes into an issue
+/// as an attachment. `-` prints it, for piping.
+fn report(args: &[String]) -> Result<()> {
+    let text = omen_core::bundle::report();
+
+    let target = args.get(1).map(String::as_str).unwrap_or_default();
+    if target == "-" {
+        print!("{text}");
+        return Ok(());
+    }
+
+    let path = if target.is_empty() {
+        std::path::PathBuf::from(format!(
+            "omen-report-{}.txt",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or_default()
+        ))
+    } else {
+        std::path::PathBuf::from(target)
+    };
+
+    std::fs::write(&path, &text)
+        .map_err(|e| anyhow::anyhow!("could not write {}: {e}", path.display()))?;
+
+    println!("{}", path.display());
+    println!("  {} lines. Read it before posting it anywhere - it describes", text.lines().count());
+    println!("  your machine's hardware and configuration, and nothing else.");
+    if !omen_core::ipc::client::send(&Request::Status).is_ok() {
+        println!("\n  The daemon did not answer, so the report has no live state in it.");
+        println!("  For the useful version: sudo omenctl report");
     }
     Ok(())
 }
@@ -1072,6 +1118,47 @@ fn curve(args: &[String]) -> Result<()> {
     match args.get(1).map(String::as_str) {
         Some("set") => return set_curve(args),
         Some("reset") => return client::report(client::send(&Request::ResetCurve)?),
+        Some("code") => {
+            // From the daemon when it is running, so what you share is what
+            // is actually in force - including a preset a game profile swapped
+            // in. Falling back to the file keeps it useful without a daemon.
+            let curve = match client::send(&Request::Status) {
+                Ok(Response::Ok(snap)) => snap.curve.and_then(|c| {
+                    omen_core::curve::Curve::with_interpolation(c.points, c.interpolation).ok()
+                }),
+                _ => None,
+            };
+            let curve = match curve {
+                Some(c) => c,
+                None => Config::load(&Config::default_path())?.curve()?,
+            };
+            println!("{}", omen_core::curve::code::encode(&curve));
+            return Ok(());
+        }
+        Some("import") => {
+            let text = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("paste a code: omenctl curve import omen1:..."))?;
+            let curve = omen_core::curve::code::decode(text)?;
+            // Shown before it is applied. A code is opaque enough that
+            // somebody should see what it does to their fans.
+            println!("importing:");
+            for p in curve.points() {
+                println!(
+                    "  {:>5.0} C  {}",
+                    p.temp_c,
+                    if p.rpm == 0 {
+                        "fans off".to_string()
+                    } else {
+                        format!("{} RPM", p.rpm)
+                    }
+                );
+            }
+            return client::report(client::send(&Request::SetCurve(CurveSpec {
+                points: curve.points().to_vec(),
+                interpolation: curve.interpolation(),
+            }))?);
+        }
         Some("preset") => {
             let Some(name) = args.get(2) else {
                 println!("presets:\n");
