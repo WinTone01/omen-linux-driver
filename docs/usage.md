@@ -241,6 +241,11 @@ omenctl app                   # per-application profiles
 omenctl app add cs2 performance curve:performance
                               # or a fixed target: omenctl app add cs2 3000
 omenctl app remove cs2
+omenctl trigger               # rules that follow the machine's own state
+omenctl trigger add temp-above 88 performance
+omenctl trigger add idle 30 low-power curve:quiet
+omenctl trigger add lid-closed low-power
+omenctl trigger remove idle
 omen-ui --tab graphics        # open the window on one page
 omenctl gpu mux               # which GPU drives the screen (hybrid/discrete/uma)
 omenctl gpu mux discrete      # from the next boot
@@ -251,9 +256,16 @@ omenctl power                 # what happens on mains and on battery
 omenctl power battery low-power curve
 omenctl profile startup balanced
                               # which profile to start the machine on
+omenctl battery               # charge, and the limit if this kernel has one
+omenctl battery 80            # stop charging at 80% (see below)
+omenctl curve code            # the running curve as one line, to share
+omenctl curve import omen1:…  # load one somebody sent you
+omenctl calibrate --yes       # measure what the fans really do at each setpoint
+omenctl caps                  # what this machine can be asked to do, and why
 omenctl version               # what is running vs what is installed
 omenctl doctor                # check the whole installation, with remedies
 omenctl doctor --text         # the same, to paste into a bug report
+omenctl report                # one file with everything a bug report needs
 omenctl reload                # re-read the config
 
 omend --dry-run --once        # show what it would do, writing nothing
@@ -265,6 +277,59 @@ daemon over a unix socket. `status` falls back to reading sysfs when the daemon
 is not running, so it stays useful as a diagnostic tool either way.
 
 Set `OMEND_SOCKET` to run a second instance, or to try things without root.
+
+### Rules, in order of precedence
+
+Three things can decide the profile and how the fan is driven, and they are
+resolved most-specific-first:
+
+| | Answers | Example |
+|---|---|---|
+| Application profiles | what is running | `omenctl app add cs2 performance` |
+| Triggers | what state the machine is in | `omenctl trigger add lid-closed low-power` |
+| Power rules | what it is plugged into | `omenctl power battery low-power` |
+
+Each of them applies its settings once, when it starts, and puts back what was
+there when it ends — unless you have changed things in the meantime, in which
+case your change is newer and stands.
+
+`idle` is measured from CPU time in `/proc/stat`, not from the keyboard: the
+daemon runs as root outside any login session and cannot see input without
+becoming a D-Bus client of whichever session happens to be current. A machine
+compiling something unattended is not idle; one sitting at a login screen is.
+
+### The battery charge limit
+
+`omenctl battery 80` writes the kernel's own `charge_control_end_threshold`,
+the same file GNOME's battery-preservation switch uses, and `omend` puts it
+back after a suspend or a driver reload.
+
+**This board does not have that file.** HP keeps the setting in firmware
+instead — BIOS setup, "Battery Health Manager", F10 at boot — so on the
+16-ap0xxx the command reports exactly that rather than pretending. It is
+implemented because the same code is right on every machine whose driver does
+expose the threshold, and because "the kernel offers no control here" is a
+more useful answer than silence.
+
+### Machines that can only do part of this
+
+`omenctl caps` asks each interface separately — fan setpoint, tachometers,
+platform profile, sensors, lighting, mux, charge threshold — and reports a
+level:
+
+| Level | Means |
+|---|---|
+| `full` | fan control and profiles both work |
+| `profile-only` | profiles work, `pwm1` is absent — usually a board missing from hp-wmi's DMI table |
+| `telemetry-only` | it can be watched but not driven |
+| `unsupported` | no interface of ours is present |
+
+The daemon starts at whatever level it finds rather than refusing to run
+without a fan: on an unverified OMEN the profiles, the automation, the
+lighting and the diagnosis all still work, and withholding them over a missing
+line in a DMI table would help nobody. What it cannot do, it says it cannot
+do — the status reports no fan mode, and a fan request is answered with the
+reason and the remedy instead of being queued.
 
 ## Safety
 

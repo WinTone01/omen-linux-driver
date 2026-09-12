@@ -73,6 +73,55 @@ const I18N = {
       "Hibritte programlar, diğerini istemedikçe tümleşik GPU'da çalışır. İstemesini sağlamak için komutun önüne şunu koy — Steam'de şunun önüne:",
     "Discrete GPU power": "Ayrık GPU gücü",
 
+    /* ── state triggers ─────────────────────────────────────── */
+    "Three rules, applied in that order: a running program beats a state of the machine, which beats the power source. The more specific statement wins — \"this game is open\" says more about what the machine should be doing than \"the charger is in\".":
+      "Üç kural, bu sırayla uygulanır: çalışan program makinenin durumunu, o da güç kaynağını yener. Daha belirli olan kazanır — \"bu oyun açık\", \"şarj takılı\"dan daha çok şey söyler.",
+    "State triggers": "Durum tetikleyicileri",
+    "The machine's own state rather than a program: it got hot, the lid is shut, the battery is low, nothing has happened for a while. The settings go back when the state ends, and the first matching entry wins. A running application profile beats all of these.":
+      "Program değil, makinenin kendi durumu: ısındı, kapak kapandı, pil azaldı, bir süredir bir şey olmuyor. Durum bitince ayarlar geri alınır; eşleşenlerden ilki kazanır. Çalışan bir uygulama profili hepsini yener.",
+    "\"Idle\" is measured from CPU time, not from your keyboard — the service runs outside your session and cannot see it. A machine compiling something unattended is not idle; one sitting at a login screen is.":
+      "\"Boşta\" ölçüsü klavyen değil, CPU zamanıdır — servis oturumunun dışında çalışır ve klavyeni göremez. Arka planda derleme yapan makine boşta değildir; giriş ekranında bekleyen makine boştadır.",
+    "when it is hotter than": "şundan sıcaksa",
+    "when the battery falls below": "pil şunun altına düşerse",
+    "when nothing has happened for": "şu süredir bir şey olmadıysa",
+    "when the lid is shut": "kapak kapalıysa",
+    "above": "üzeri",
+    "battery below": "pil altında",
+    "idle for": "boşta",
+    "min": "dk",
+    "the lid is shut": "kapak kapalı",
+    "in force": "yürürlükte",
+    "trigger added": "tetikleyici eklendi",
+    "that condition needs a number": "bu koşul bir sayı ister",
+
+    /* ── battery ────────────────────────────────────────────── */
+    "Battery": "Pil",
+    "A laptop that lives on its charger sits at 100%, which is the one state a lithium cell ages fastest in. Stopping short of full trades a little runtime for a longer life.":
+      "Sürekli şarjda duran dizüstü %100'de kalır; lityum hücrenin en hızlı yaşlandığı durum budur. Tam dolmadan kesmek, biraz kullanım süresini daha uzun ömre takas eder.",
+    "Stop charging at": "Şarjı şurada kes",
+    "Off — charge to full": "Kapalı — tam doldur",
+    "This kernel exposes no charge threshold for this battery. On HP laptops the setting usually lives in BIOS setup instead — Battery Health Manager, F10 at boot.":
+      "Bu çekirdek bu pil için bir şarj eşiği sunmuyor. HP dizüstülerde bu ayar genellikle BIOS'ta durur — açılışta F10, Battery Health Manager.",
+    "on mains": "prizde",
+
+    /* ── what this machine can do ───────────────────────────── */
+    "Running with what this machine has:": "Bu makinede olanla çalışıyor:",
+    "not available here.": "burada yok.",
+    "omenctl caps says why.": "nedenini 'omenctl caps' söyler.",
+    "fan control": "fan denetimi",
+    "performance profiles": "performans profilleri",
+    "keyboard lighting": "klavye aydınlatması",
+
+    /* ── sharing and reports ────────────────────────────────── */
+    "Copy code": "Kodu kopyala",
+    "Paste code": "Kod yapıştır",
+    "Load": "Yükle",
+    "curve code": "eğri kodu",
+    "curve imported": "eğri alındı",
+    "Save full report": "Tam raporu kaydet",
+    "writing the report…": "rapor yazılıyor…",
+    "Written to": "Şuraya yazıldı:",
+
     "Application profiles": "Uygulama profilleri",
     "While one of these programs is running, the machine switches to the settings you give it and goes back to what it was doing when the program exits. The first entry that is running wins.":
       "Bu programlardan biri çalışırken makine ona verdiğin ayarlara geçer, program kapanınca eskisine döner. Çalışanlardan listede ilk sırada olan kazanır.",

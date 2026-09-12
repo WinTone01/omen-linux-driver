@@ -82,6 +82,9 @@ USAGE:
                                    kernel offers the control. Without an
                                    argument, shows the charge and the limit.
 
+    omenctl calibrate [--yes]      Measure what the fans actually do at each
+                                   setpoint. Takes about a minute and is loud.
+
     omenctl clean [SECONDS]        Run the fans at full power to clear dust
                                    (default 20s, 5-120), then back to normal
 
@@ -120,6 +123,7 @@ fn main() -> ExitCode {
         "gpu" => gpu_power(&args),
         "power" => power_rules(&args),
         "clean" => clean_fans(&args),
+        "calibrate" => calibrate(&args),
         "battery" => battery(&args),
         "profile" => set_profile(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
@@ -608,6 +612,121 @@ fn clean_fans(args: &[String]) -> Result<()> {
         None => 20,
     };
     client::report(client::send(&Request::CleanFans { seconds })?)
+}
+
+/// Measures what the fans actually do at each setpoint.
+///
+/// Why this is worth a command: every RPM number in this project came off one
+/// machine. `min_rpm` and `max_rpm` in the config are HP's own bounds from
+/// OMEN Gaming Hub's profiles.json (1800-4800), and on another board they may
+/// simply be wrong - a curve built on a maximum the fans cannot reach quietly
+/// does nothing at the top, and one built on a minimum below the real
+/// fan-stop threshold makes the machine noisier than it needs to be.
+///
+/// It goes through the daemon like everything else, so the critical cutout,
+/// the stall detector and restore-on-exit all still apply while it runs. It
+/// stops early if the machine gets hot: measuring a fan is never worth
+/// cooking a CPU for.
+fn calibrate(args: &[String]) -> Result<()> {
+    use std::time::Duration;
+
+    /// How long to let the fans settle at each step. The tachometer lags the
+    /// setpoint by several seconds, and a reading taken too early measures
+    /// the previous step.
+    const SETTLE: Duration = Duration::from_secs(8);
+
+    let snap = app_snapshot()?;
+    if snap.mode.is_none() {
+        bail!(
+            "this machine has no fan setpoint to measure - see 'omenctl caps'"
+        );
+    }
+    let before = snap.mode.unwrap_or(ControlMode::Curve);
+
+    let steps: Vec<u32> = {
+        let cfg = Config::load(&Config::default_path()).unwrap_or_default();
+        let (min, max) = (cfg.fan.min_rpm, cfg.fan.max_rpm);
+        let mut v = vec![min];
+        // Five points across the range, on the EC's own hundred-RPM grid.
+        for i in 1..=4 {
+            v.push((min + (max - min) * i / 4) / 100 * 100);
+        }
+        v.dedup();
+        v
+    };
+
+    if !args.iter().any(|a| a == "--yes" || a == "-y") {
+        println!("This runs the fans at {} setpoints for {}s each - about {} minute(s) of", steps.len(), SETTLE.as_secs(), (steps.len() as u64 * SETTLE.as_secs()).div_ceil(60));
+        println!("noise - and puts the fan back to {before} afterwards.\n");
+        println!("Re-run with --yes to go ahead.");
+        return Ok(());
+    }
+
+    println!("{:>10}  {:>10}  {:>10}", "setpoint", "fan 1", "fan 2");
+    let mut measured: Vec<(u32, Option<u32>, Option<u32>)> = Vec::new();
+
+    for rpm in &steps {
+        client::send(&Request::SetMode(ControlMode::Manual { rpm: *rpm }))?;
+        std::thread::sleep(SETTLE);
+
+        let now = app_snapshot()?;
+        // The guard has taken over, or the machine is hot. Either way this is
+        // not the time to be holding a fan at a fixed speed for science.
+        if now.safety_fallback {
+            println!("\nstopped: a safety override is active ({})",
+                now.safety_reason.as_deref().unwrap_or("no reason given"));
+            break;
+        }
+        if let Some(temp) = now.driver_temp_c {
+            if temp >= 85.0 {
+                println!("\nstopped: {temp:.0} C is too hot to keep measuring");
+                break;
+            }
+        }
+
+        println!(
+            "{rpm:>10}  {:>10}  {:>10}",
+            now.fan1_rpm.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+            now.fan2_rpm.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+        );
+        measured.push((*rpm, now.fan1_rpm, now.fan2_rpm));
+    }
+
+    // Always, including after an early stop: leaving somebody's fans pinned
+    // at a measured setpoint is the one outcome this must not have.
+    client::send(&Request::SetMode(before))?;
+    println!("\nfan back to {before}");
+
+    let real: Vec<u32> = measured.iter().filter_map(|(_, a, b)| match (a, b) {
+        (Some(a), Some(b)) => Some((*a).max(*b)),
+        (Some(v), None) | (None, Some(v)) => Some(*v),
+        _ => None,
+    }).collect();
+
+    let (Some(low), Some(high)) = (real.iter().min(), real.iter().max()) else {
+        println!("nothing was measured - the tachometers read nothing at all");
+        return Ok(());
+    };
+
+    println!("\nmeasured range: {low}-{high} RPM");
+    let cfg = Config::load(&Config::default_path()).unwrap_or_default();
+    // A tolerance rather than an exact match: the tachometer is noisy and the
+    // fan does not hold a setpoint to the RPM.
+    const TOLERANCE: u32 = 300;
+    if high + TOLERANCE < cfg.fan.max_rpm {
+        println!(
+            "\n  The fans never reached the configured maximum ({} RPM). The top of any\n               curve above about {high} RPM is doing nothing on this machine. In\n               /etc/omen/omend.toml:\n\n      [fan]\n      max_rpm = {high}",
+            cfg.fan.max_rpm
+        );
+    } else if *low > cfg.fan.min_rpm + TOLERANCE {
+        println!(
+            "\n  The fans never went below {low} RPM, but the configuration says they can\n               reach {}. A curve asking for less than {low} will be quietly clamped.",
+            cfg.fan.min_rpm
+        );
+    } else {
+        println!("  That matches the configured {}-{} RPM range.", cfg.fan.min_rpm, cfg.fan.max_rpm);
+    }
+    Ok(())
 }
 
 /// The battery's charge, and the limit if this machine has one.

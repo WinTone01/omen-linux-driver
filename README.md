@@ -41,7 +41,7 @@ HP OMEN or Victus. [What it installs, and the flags →](#what-installsh-does)
 </tr>
 <tr>
 <td><img src="docs/screenshots/graphics.png" alt="Graphics"><br><b>Graphics</b><br><sub>The mux, the discrete GPU's power state, and what is holding it awake.</sub></td>
-<td><img src="docs/screenshots/automation.png" alt="Game Profiles"><br><b>Game Profiles</b><br><sub>Per-application and per-power-source rules, restored on exit.</sub></td>
+<td><img src="docs/screenshots/automation.png" alt="Game Profiles"><br><b>Game Profiles</b><br><sub>Rules per application, per machine state and per power source, restored on exit.</sub></td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/lighting.png" alt="Lighting"><br><b>Lighting</b><br><sub>Four zones, a hue strip, effects, and colours that survive a reboot.</sub></td>
@@ -163,7 +163,12 @@ omenctl curve set 45:0,55:1800,75:2400,92:3600
 omenctl set max                # or: curve / manual <RPM> / auto
 omenctl clean 20               # fans at full power, to clear dust
 omenctl app add cs2 performance curve:performance
+omenctl trigger add lid-closed low-power
 omenctl power battery low-power curve:quiet
+omenctl calibrate --yes        # measure what the fans really do
+omenctl caps                   # what this machine can be asked to do
+omenctl report                 # one file for a bug report
+omenctl curve code             # the curve as one line, to share
 omenctl effect wave 7          # none / breathing / wave / spectrum
 omenctl gpu                    # what is holding the discrete GPU awake
 omenctl gpu mux discrete       # which GPU drives the screen, from the next boot

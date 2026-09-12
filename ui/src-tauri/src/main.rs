@@ -478,6 +478,86 @@ fn history(limit: usize) -> Vec<omen_core::ipc::Decision> {
     }
 }
 
+/// The readings behind the graph, so a freshly opened window shows the last
+/// half hour rather than starting from a blank chart and filling in from now.
+#[tauri::command]
+fn samples(limit: usize) -> Vec<omen_core::ipc::Sample> {
+    match client::send(&Request::Samples { limit }) {
+        Ok(Response::Samples { samples }) => samples,
+        _ => Vec::new(),
+    }
+}
+
+#[tauri::command]
+fn set_triggers(triggers: Vec<omen_core::triggers::Trigger>) -> Result<String, String> {
+    talk(Request::SetTriggers { triggers })
+}
+
+#[tauri::command]
+fn set_charge_limit(percent: Option<u8>) -> Result<String, String> {
+    talk(Request::SetChargeLimit { percent })
+}
+
+/// The running curve as one line of text, to hand to somebody else.
+#[tauri::command]
+fn curve_code() -> Result<String, String> {
+    let curve = match client::send(&Request::Status) {
+        Ok(Response::Ok(snap)) => snap.curve.and_then(|c| {
+            omen_core::curve::Curve::with_interpolation(c.points, c.interpolation).ok()
+        }),
+        _ => None,
+    };
+    let curve = match curve {
+        Some(c) => c,
+        None => omen_core::config::Config::load(&omen_core::config::Config::default_path())
+            .map_err(|e| e.to_string())?
+            .curve()
+            .map_err(|e| e.to_string())?,
+    };
+    Ok(omen_core::curve::code::encode(&curve))
+}
+
+/// Loads a curve somebody pasted in. Decoded here so an invalid code is
+/// refused with its own message before anything is sent to the daemon.
+#[tauri::command]
+fn import_curve_code(code: String) -> Result<String, String> {
+    let curve = omen_core::curve::code::decode(&code).map_err(|e| e.to_string())?;
+    talk(Request::SetCurve(omen_core::ipc::CurveSpec {
+        points: curve.points().to_vec(),
+        interpolation: curve.interpolation(),
+    }))
+}
+
+/// Writes the full diagnostic report and returns where it went.
+///
+/// Saved rather than copied: it is several hundred lines, and a clipboard
+/// that size is awkward to paste anywhere useful. The path is returned so the
+/// window can show it.
+#[tauri::command]
+async fn save_report() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let text = omen_core::bundle::report();
+        let name = format!(
+            "omen-report-{}.txt",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or_default()
+        );
+        // The user's own directory, because that is where they will look for
+        // it and where the window can always write.
+        let dir = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let path = dir.join(name);
+        std::fs::write(&path, text)
+            .map(|()| path.display().to_string())
+            .map_err(|e| format!("could not write {}: {e}", path.display()))
+    })
+    .await
+    .unwrap_or_else(|e| Err(e.to_string()))
+}
+
 #[tauri::command]
 async fn diagnose() -> omen_core::diagnose::Report {
     // On a worker thread: the checks talk to the daemon, walk /proc and shell
@@ -775,6 +855,12 @@ fn main() {
             set_settings,
             versions,
             history,
+            samples,
+            set_triggers,
+            set_charge_limit,
+            curve_code,
+            import_curve_code,
+            save_report,
             diagnose,
             diagnose_text,
             set_zone,

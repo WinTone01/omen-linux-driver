@@ -94,6 +94,7 @@
         <!-- ── System Vitals ──────────────────────────────────── -->
         <section class="view is-active" data-view="vitals" role="tabpanel">
           <div class="banner" id="daemon-banner" hidden></div>
+          <div class="banner" id="caps-banner" hidden></div>
 
           <div class="vitals-grid">
             <div class="card ring-card">
@@ -266,6 +267,8 @@
                 <button class="btn btn--sm" id="btn-curve-preset-perf" data-preset-curve="performance">Performance</button>
                 <button class="btn btn--sm" id="btn-curve-edit">Edit</button>
                 <button class="btn btn--sm" id="btn-curve-reset">Defaults</button>
+                <button class="btn btn--sm" id="btn-curve-code">Copy code</button>
+                <button class="btn btn--sm" id="btn-curve-import">Paste code</button>
                 <button class="btn btn--sm" id="btn-curve-cancel" hidden>Cancel</button>
                 <button class="btn btn--sm btn--accent" id="btn-curve-save" hidden>Save</button>
               </div>
@@ -278,6 +281,10 @@
             </svg>
             <div class="chart-scale">
               <span>40 °C</span><span>70 °C</span><span>100 °C</span>
+            </div>
+            <div class="app-add" id="curve-import-row" hidden>
+              <input type="text" id="curve-code" placeholder="omen1:s:45=0,55=18,…" spellcheck="false">
+              <button class="btn btn--sm btn--accent" id="btn-curve-code-load">Load</button>
             </div>
             <p class="hint is-warning" id="curve-forced" hidden></p>
             <p class="hint" id="curve-edit-hint" hidden>
@@ -340,8 +347,9 @@
         <section class="view" data-view="automation" role="tabpanel">
           <div class="panel-head"><h2 class="panel-head__title">Automatic profiles</h2></div>
           <p class="hint hint--lede">
-            Two rules, applied in that order: a running program wins over the
-            power source, because "this game is open" says more about what the
+            Three rules, applied in that order: a running program beats a state
+            of the machine, which beats the power source. The more specific
+            statement wins — "this game is open" says more about what the
             machine should be doing than "the charger is in".
           </p>
 
@@ -361,6 +369,33 @@
               <select id="app-profile"></select>
               <select id="app-fan"></select>
               <button class="btn btn--sm" id="btn-app-add">Add</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">State triggers</h2>
+              <span class="panel-head__note" id="triggers-note"></span>
+            </div>
+            <p class="hint">
+              The machine's own state rather than a program: it got hot, the lid
+              is shut, the battery is low, nothing has happened for a while. The
+              settings go back when the state ends, and the first matching entry
+              wins. A running application profile beats all of these.
+            </p>
+            <p class="hint">
+              "Idle" is measured from CPU time, not from your keyboard — the
+              service runs outside your session and cannot see it. A machine
+              compiling something unattended is not idle; one sitting at a login
+              screen is.
+            </p>
+            <div id="triggers-list" class="app-list"></div>
+            <div class="app-add">
+              <select id="trigger-when"></select>
+              <input type="number" id="trigger-value" min="1" max="110" step="1" value="88">
+              <select id="trigger-profile"></select>
+              <select id="trigger-fan"></select>
+              <button class="btn btn--sm" id="btn-trigger-add">Add</button>
             </div>
           </div>
 
@@ -565,9 +600,11 @@
             <div class="btn-row">
               <button class="btn" id="btn-diag-run">Check again</button>
               <button class="btn" id="btn-diag-copy">Copy report</button>
+              <button class="btn" id="btn-diag-save">Save full report</button>
             </div>
           </div>
 
+          <p class="hint" id="diag-saved" hidden></p>
           <div class="diag-counts" id="diag-counts"></div>
           <div id="diag-sections"></div>
         </section>
@@ -627,6 +664,31 @@
               <dt>Profile at startup</dt>
               <dd><select id="set-startup-profile"></select></dd>
             </dl>
+          </div>
+
+          <div class="card" id="battery-card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">Battery</h2>
+              <span class="panel-head__note" id="battery-note"></span>
+            </div>
+            <p class="hint">
+              A laptop that lives on its charger sits at 100%, which is the one
+              state a lithium cell ages fastest in. Stopping short of full trades
+              a little runtime for a longer life.
+            </p>
+            <dl class="kv kv--tight" id="battery-control" hidden>
+              <dt>Stop charging at</dt>
+              <dd>
+                <select id="set-charge-limit">
+                  <option value="">Off — charge to full</option>
+                  <option value="60">60%</option>
+                  <option value="70">70%</option>
+                  <option value="80">80%</option>
+                  <option value="90">90%</option>
+                </select>
+              </dd>
+            </dl>
+            <p class="hint is-warning" id="battery-unsupported" hidden></p>
           </div>
 
           <div class="card">

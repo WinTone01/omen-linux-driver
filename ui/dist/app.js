@@ -784,8 +784,12 @@ function renderLeds(s) {
 /* ── charts ──────────────────────────────────────────────────── */
 
 const NS = "http://www.w3.org/2000/svg";
-const HISTORY_MAX = 60; // 60 samples x 2 s = two minutes
-const history = { temp: [], fan: [] };
+// Half an hour at the daemon's own two-second tick. The window used to hold
+// two minutes and start empty, which meant the graph could never show the
+// spike that made somebody open it - by the time the window is up, the moment
+// has gone. It is seeded from the daemon's own log instead; see seedHistory.
+const HISTORY_MAX = 900;
+const history = { temp: [], fan: [], spanSecs: 0 };
 
 const TEMP_MIN = 30, TEMP_MAX = 100;
 const FAN_MAX = 4800;
@@ -799,7 +803,9 @@ const el = (name, attrs) => {
 /** Maps a series onto an SVG path across the full 600x150 box. */
 function seriesPath(values, min, max, w = 600, h = 150) {
   if (values.length < 2) return "";
-  const step = w / (HISTORY_MAX - 1);
+  // Across the values there are rather than across the maximum: a half-full
+  // buffer should fill the box, not leave the right half blank.
+  const step = w / (values.length - 1);
   return values
     .map((v, i) => {
       const x = i * step;
@@ -818,19 +824,49 @@ function drawGrid(id, rows, w, h) {
   }
 }
 
-function pushHistory(temp, fan) {
-  history.temp.push(temp ?? 0);
-  history.fan.push(fan ?? 0);
-  if (history.temp.length > HISTORY_MAX) {
-    history.temp.shift();
-    history.fan.shift();
-  }
+function drawHistory() {
   drawGrid("#chart-grid", 4, 600, 150);
   $("#line-temp").setAttribute("d", seriesPath(history.temp, TEMP_MIN, TEMP_MAX));
   $("#line-fan").setAttribute("d", seriesPath(history.fan, 0, FAN_MAX));
-  const secs = (history.temp.length - 1) * (POLL_MS / 1000);
+  const secs = Math.round(history.spanSecs);
   $("#chart-window").textContent =
     secs >= 60 ? `last ${Math.round(secs / 60)} min` : `last ${secs} s`;
+}
+
+function pushHistory(temp, fan) {
+  history.temp.push(temp ?? 0);
+  history.fan.push(fan ?? 0);
+  history.spanSecs += POLL_MS / 1000;
+  while (history.temp.length > HISTORY_MAX) {
+    history.temp.shift();
+    history.fan.shift();
+  }
+  drawHistory();
+}
+
+/* The daemon has been watching since it started; this window has not.
+ *
+ * Without this the graph begins blank every time the window is opened, which
+ * makes it useless for the thing people actually open it for - seeing what
+ * just happened. Asked for once, at startup: after that the poll keeps it up
+ * to date, and the two spacings (the daemon's tick and this window's poll)
+ * only differ at the seam. */
+async function seedHistory() {
+  let rows = [];
+  try {
+    rows = await invoke("samples", { limit: HISTORY_MAX });
+  } catch {
+    return;
+  }
+  if (rows.length < 2 || history.temp.length > 2) return;
+
+  history.temp = rows.map((r) => r.temp_c ?? 0);
+  history.fan = rows.map((r) => r.fan_rpm ?? 0);
+  // From the daemon's own clock rather than assumed: its interval is
+  // configurable, and a graph labelled "last 30 min" that covers ten is worse
+  // than no label.
+  history.spanSecs = Math.max(0, rows[rows.length - 1].uptime_secs - rows[0].uptime_secs);
+  drawHistory();
 }
 
 const CURVE_MIN_C = 40, CURVE_MAX_C = 100;
@@ -1094,6 +1130,35 @@ function bindCurveEditor() {
   // Two clicks, because one misclick would throw away a curve someone spent
   // time on. A second button that says "Sure?" is lighter than a dialog and
   // forgets itself if you walk away.
+  $("#btn-curve-code").addEventListener("click", async () => {
+    try {
+      await copyText(await invoke("curve_code"), t("curve code"));
+    } catch (e) {
+      toast(String(e), true);
+    }
+  });
+
+  // A row that appears when asked for rather than a permanent field: pasting
+  // a code is something somebody does once, and a box for it would otherwise
+  // sit there inviting the question of what belongs in it.
+  $("#btn-curve-import").addEventListener("click", () => {
+    const row = $("#curve-import-row");
+    row.hidden = !row.hidden;
+    if (!row.hidden) $("#curve-code").focus();
+  });
+
+  const load = () => {
+    const code = $("#curve-code").value.trim();
+    if (!code) return;
+    act(() => invoke("import_curve_code", { code }), t("curve imported"));
+    $("#curve-code").value = "";
+    $("#curve-import-row").hidden = true;
+  };
+  $("#btn-curve-code-load").addEventListener("click", load);
+  $("#curve-code").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") load();
+  });
+
   $("#btn-curve-reset").addEventListener("click", () => {
     if (!resetArmed) {
       resetArmed = true;
@@ -1289,6 +1354,155 @@ function bindApps() {
   $("#btn-app-add").addEventListener("click", add);
   $("#app-process").addEventListener("keydown", (e) => {
     if (e.key === "Enter") add();
+  });
+}
+
+/* ── state triggers ──────────────────────────────────────────────
+ *
+ * The same list-replaced-wholesale shape as the application profiles above,
+ * for the same reason: the order is meaningful (first match wins), so an
+ * add/remove API would have to express ordering anyway.
+ *
+ * One entry per condition. Two rules watching the same thing could only
+ * disagree, and the second would never fire.
+ */
+
+const TRIGGER_KINDS = [
+  ["temp_above", "when it is hotter than", "C", 88],
+  ["battery_below", "when the battery falls below", "%", 20],
+  ["idle", "when nothing has happened for", "min", 30],
+  ["lid_closed", "when the lid is shut", null, null],
+];
+
+function triggerKind(when) {
+  return TRIGGER_KINDS.find(([id]) => id === when) ?? TRIGGER_KINDS[0];
+}
+
+/** The condition in words - the same wording the daemon and CLI use. */
+function triggerCondition(tr) {
+  switch (tr.when) {
+    case "temp_above": return `${t("above")} ${Math.round(tr.value)} C`;
+    case "battery_below": return `${t("battery below")} ${Math.round(tr.value)}%`;
+    case "idle": return `${t("idle for")} ${Math.round(tr.value)} ${t("min")}`;
+    default: return t("the lid is shut");
+  }
+}
+
+function saveTriggers(triggers, message) {
+  act(() => invoke("set_triggers", { triggers }), message);
+}
+
+function renderTriggers(s) {
+  const list = $("#triggers-list");
+  if (!list) return;
+  const triggers = s.daemon?.triggers ?? [];
+  const active = s.daemon?.active_trigger ?? null;
+
+  list.replaceChildren();
+  for (const tr of triggers) {
+    const condition = triggerCondition(tr);
+    const row = document.createElement("div");
+    row.className = "app-row" + (condition === active ? " is-active" : "");
+
+    const name = document.createElement("span");
+    name.className = "app-row__name";
+    name.textContent = condition;
+
+    const what = document.createElement("span");
+    what.className = "app-row__what";
+    what.textContent = appSummary(tr);
+
+    const drop = document.createElement("button");
+    drop.className = "app-row__drop";
+    drop.title = `Remove ${condition}`;
+    drop.textContent = "✕";
+    drop.addEventListener("click", () =>
+      saveTriggers(triggers.filter((x) => x.when !== tr.when), `${condition} removed`));
+
+    row.append(name);
+    if (condition === active) {
+      const badge = document.createElement("span");
+      badge.className = "app-row__badge";
+      badge.textContent = t("in force");
+      row.append(badge);
+    }
+    row.append(what, drop);
+    list.append(row);
+  }
+
+  // The idle measurement is shown whether or not anything uses it: a rule
+  // built on a number you cannot see is a rule you cannot trust.
+  const idle = Math.floor((s.daemon?.idle_secs ?? 0) / 60);
+  $("#triggers-note").textContent = active
+    ? `${active} ${t("in force")}`
+    : `${t("idle for")} ${idle} ${t("min")}`;
+  translatePage(list);
+
+  fillChoices($("#trigger-fan"), FAN_CHOICES, "fan");
+
+  const kinds = $("#trigger-when");
+  if (!kinds.dataset.built) {
+    kinds.dataset.built = "1";
+    for (const [id, label] of TRIGGER_KINDS) {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = t(label);
+      kinds.append(opt);
+    }
+    syncTriggerValue();
+  }
+
+  const sel = $("#trigger-profile");
+  if (sel.dataset.built !== String(s.profile_choices?.length ?? 0)) {
+    sel.dataset.built = String(s.profile_choices?.length ?? 0);
+    sel.replaceChildren();
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = t("profile: leave alone");
+    sel.append(none);
+    for (const name of s.profile_choices ?? []) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = `profile: ${name}`;
+      sel.append(opt);
+    }
+  }
+}
+
+/** The value box follows the condition: a shut lid has no number. */
+function syncTriggerValue() {
+  const [, , unit, preset] = triggerKind($("#trigger-when").value);
+  const box = $("#trigger-value");
+  box.hidden = unit === null;
+  if (unit !== null) {
+    box.value = preset;
+    box.max = unit === "C" ? 110 : unit === "%" ? 100 : 600;
+  }
+}
+
+function bindTriggers() {
+  if (!$("#btn-trigger-add")) return;
+  $("#trigger-when").addEventListener("change", syncTriggerValue);
+
+  $("#btn-trigger-add").addEventListener("click", () => {
+    const when = $("#trigger-when").value;
+    const [, , unit] = triggerKind(when);
+    const profile = $("#trigger-profile").value || null;
+    const fanRaw = $("#trigger-fan").value;
+    if (!profile && !fanRaw) {
+      toast(t("pick a profile, a fan mode, or both - otherwise there is nothing to apply"), true);
+      return;
+    }
+    const value = unit === null ? null : Number($("#trigger-value").value);
+    if (unit !== null && !(value > 0)) {
+      toast(t("that condition needs a number"), true);
+      return;
+    }
+    const { fan, curve } = fanRuleFromValue(fanRaw);
+
+    const triggers = (state?.daemon?.triggers ?? []).filter((x) => x.when !== when);
+    triggers.push({ when, value, profile, fan, curve });
+    saveTriggers(triggers, t("trigger added"));
   });
 }
 
@@ -1782,6 +1996,18 @@ function bindDiagnosis() {
     await copyText(text, t("report"));
   });
 
+  $("#btn-diag-save").addEventListener("click", async () => {
+    const note = $("#diag-saved");
+    note.hidden = false;
+    note.textContent = t("writing the report…");
+    try {
+      const path = await invoke("save_report");
+      note.textContent = `${t("Written to")} ${path}`;
+    } catch (e) {
+      note.textContent = String(e);
+    }
+  });
+
   // Entering the page is what starts a scan - see onViewShown. This covers
   // the one case that is not a view switch: the page the window opened on.
   if ($('.view[data-view="diagnosis"]')?.classList.contains("is-active")) {
@@ -2241,6 +2467,86 @@ function bindLightBasics() {
     }));
 }
 
+/* ── battery ─────────────────────────────────────────────────────
+ *
+ * Offered only where the kernel actually exposes the threshold. On a machine
+ * without it the card says where the setting really lives rather than showing
+ * a control that writes nowhere - which is the failure this project keeps
+ * finding in other tools.
+ */
+
+function renderBattery(s) {
+  const card = $("#battery-card");
+  if (!card) return;
+  const d = s.daemon;
+  const supported = !!d?.charge_limit_supported;
+
+  $("#battery-control").hidden = !supported;
+  $("#battery-unsupported").hidden = supported;
+  if (!supported) {
+    $("#battery-unsupported").textContent = t(
+      "This kernel exposes no charge threshold for this battery. On HP laptops the setting usually lives in BIOS setup instead — Battery Health Manager, F10 at boot.");
+  }
+
+  const pct = d?.battery_percent;
+  $("#battery-note").textContent =
+    pct == null ? "" : `${pct}%${d?.on_ac ? ` · ${t("on mains")}` : ""}`;
+
+  const sel = $("#set-charge-limit");
+  // Not while it has focus: overwriting a choice mid-selection is the kind of
+  // thing a two-second poll does and a person cannot fight.
+  if (supported && document.activeElement !== sel) {
+    const limit = d?.charge_limit ?? 100;
+    sel.value = limit >= 100 ? "" : String(limit);
+  }
+}
+
+function bindBattery() {
+  const sel = $("#set-charge-limit");
+  if (!sel) return;
+  sel.addEventListener("change", () =>
+    act(() => invoke("set_charge_limit", {
+      percent: sel.value ? Number(sel.value) : null,
+    })));
+}
+
+/* ── what this machine can do ────────────────────────────────────
+ *
+ * Only shown when it is not everything. On the verified board this banner
+ * never appears; on an OMEN whose board is missing from hp-wmi's DMI table it
+ * is the difference between "this app is broken" and "this machine cannot do
+ * that part, and here is why".
+ */
+
+function renderCaps(s) {
+  const banner = $("#caps-banner");
+  if (!banner) return;
+  const caps = s.daemon?.caps;
+  const level = capsLevel(caps);
+  if (!caps || level === "full") {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  const missing = [
+    !caps.fan_setpoint && t("fan control"),
+    !caps.profile && t("performance profiles"),
+    !caps.leds && t("keyboard lighting"),
+  ].filter(Boolean);
+  banner.textContent =
+    `${t("Running with what this machine has:")} ${missing.join(", ")} ${t("not available here.")} ` +
+    t("omenctl caps says why.");
+}
+
+/** The level, worked out here rather than sent, so an older daemon still gets
+ * a sensible answer from the fields it does send. */
+function capsLevel(caps) {
+  if (!caps) return "full";
+  if (caps.fan_setpoint) return "full";
+  if (caps.profile) return "profile-only";
+  return caps.temps ? "telemetry-only" : "unsupported";
+}
+
 function renderLightMode(s) {
   const off = !!s.leds?.backlight_off || (s.leds?.brightness ?? 0) === 0;
   $$("#light-mode button").forEach((b) =>
@@ -2257,6 +2563,9 @@ async function refresh() {
   renderDaemon(state);
   renderProfiles(state);
   renderApps(state);
+  renderTriggers(state);
+  renderBattery(state);
+  renderCaps(state);
   renderGraphics(state);
   renderPowerRules(state);
   renderExtras(state);
@@ -2294,6 +2603,8 @@ buildKeycaps();
 buildZonePickers();
 bindCurveEditor();
 bindApps();
+bindTriggers();
+bindBattery();
 bindGraphics();
 bindSettings();
 bindFirmware();
@@ -2306,6 +2617,7 @@ bindLightBasics();
 loadSettings();
 renderVersions();
 refresh();
+seedHistory();
 function startPolling() {
   clearInterval(pollTimer);
   if (!visible) return;
