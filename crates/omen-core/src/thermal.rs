@@ -283,15 +283,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn discovery_finds_something_on_this_machine() {
-        // Whatever the silicon is, a laptop has a CPU sensor of some kind.
-        // The list covers AMD, Intel and the thermal-zone fallback, so
-        // finding nothing here would mean a real gap rather than a quirk.
-        let t = Thermal::discover().expect("no temperature source");
-        assert!(!t.sensors.is_empty());
-        let (label, celsius) = t.hottest().expect("nothing readable");
-        assert!(!label.is_empty());
-        assert!((10.0..=150.0).contains(&celsius), "{celsius}");
+    fn whatever_is_found_is_readable_and_sane() {
+        // Deliberately not "a machine has a CPU sensor". This first asserted
+        // that, and CI - a virtual machine with no thermal hardware at all -
+        // was right to fail it. What must hold everywhere is that anything
+        // discovery *does* return is a named sensor with a believable
+        // reading; a laptop exercises the real path, a VM finds nothing and
+        // says so.
+        let Ok(t) = Thermal::discover() else {
+            return;
+        };
+        assert!(!t.sensors.is_empty(), "Ok with no sensors is a lie");
+        for sensor in &t.sensors {
+            assert!(!sensor.label.is_empty());
+            assert!(sensor.label.contains('/'), "{} has no prefix", sensor.label);
+        }
+        if let Ok((label, celsius)) = t.hottest() {
+            assert!(!label.is_empty());
+            assert!((10.0..=150.0).contains(&celsius), "{celsius}");
+        }
     }
 
     #[test]
@@ -308,7 +318,9 @@ mod tests {
     fn the_ec_gpu_register_is_only_read_on_the_family_it_came_from() {
         // It is a single byte at a fixed offset, read out of one firmware.
         // On a machine that is not one of these, that byte is something else.
-        let t = Thermal::discover().expect("no temperature source");
+        let Ok(t) = Thermal::discover() else {
+            return;
+        };
         if !is_omen_family() {
             assert!(!t.has_dgpu(), "the EC register is not ours to read here");
         }
