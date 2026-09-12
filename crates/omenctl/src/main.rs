@@ -865,7 +865,8 @@ fn triggers(args: &[String]) -> Result<()> {
                     t.summary()
                 );
             }
-            field("\nidle for", format!("{} min", snap.idle_secs / 60));
+            println!();
+            field("idle for", format!("{} min", snap.idle_secs / 60));
             if let Some(active) = &snap.active_trigger {
                 println!("  in force: {active}");
             }
@@ -1114,7 +1115,14 @@ fn status() -> Result<()> {
         daemon_temps = Some(snap.temps.clone());
         daemon_gpu = snap.gpu.clone();
         println!("omend");
-        field("mode", snap.mode.map(|m| m.to_string()).unwrap_or_default());
+        // No mode at all means there is no fan setpoint on this machine.
+        // Printing an empty field there reads as a bug; saying so does not.
+        field(
+            "mode",
+            snap.mode
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "no fan control on this machine".into()),
+        );
         if snap.safety_fallback {
             println!("  ! the critical cutout has tripped - control is with the EC");
         }
@@ -1139,6 +1147,9 @@ fn status() -> Result<()> {
                 (_, Some(0)) => field("target", "fans off (idle, setpoint ours)"),
                 (_, Some(rpm)) => field("target", format!("{rpm} RPM")),
                 (Some(ControlMode::Max), None) => field("target", "full power"),
+                // A machine with no setpoint is not "control is with the EC":
+                // there is no control to hand over in the first place.
+                (None, None) => field("target", "nothing to drive - see 'omenctl caps'"),
                 (_, None) => field("target", "control is with the EC"),
             }
         }

@@ -262,6 +262,15 @@ impl Caps {
     pub fn remedy(&self) -> Option<String> {
         match self.level() {
             Level::Full => None,
+            // The verified board with no pwm1 is a different problem from an
+            // unverified one: the entry exists, so either the patched module
+            // is not installed or the running one predates the upgrade.
+            Level::ProfileOnly if self.verified_board => Some(format!(
+                "This IS board {VERIFIED_BOARD}, so hp-wmi should be exposing pwm1. Either the \
+                 patched module is not installed or the one loaded predates it - a module \
+                 keeps running until it is reloaded. Check with kernel/hp-wmi-8d24/verify.sh, \
+                 and 'omenctl version' says whether what is loaded is what is installed."
+            )),
             Level::ProfileOnly if self.omen_family => Some(format!(
                 "hp-wmi has no entry for board {}. The 8D24 patch in kernel/hp-wmi-8d24/ \
                  is one line in a DMI table; adding this board to it is the same change, \

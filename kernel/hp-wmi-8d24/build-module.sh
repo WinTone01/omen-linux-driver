@@ -147,6 +147,16 @@ MAKE[0]="make -C \${kernel_source_dir} M=\${dkms_tree}/$PKG/$VER/build \${_llvm}
 DEST_MODULE_LOCATION[0]="/updates"
 AUTOINSTALL="yes"
 EOF
+# Re-running the installer is the normal case - a new kernel, a new build of
+# this project, a second attempt after something else failed - and 'dkms add'
+# refuses a name/version combination it already has. Dropping the old
+# registration first makes the second run behave like the first, instead of
+# failing the whole install on the one step that had already succeeded.
+if dkms status -m "$PKG" -v "$VER" 2>/dev/null | grep -q .; then
+    echo "  already registered - removing the old entry first"
+    sudo dkms remove -m "$PKG" -v "$VER" --all >/dev/null 2>&1 || true
+fi
+
 sudo dkms add    -m "$PKG" -v "$VER"
 sudo dkms build  -m "$PKG" -v "$VER"
 sudo dkms install -m "$PKG" -v "$VER" --force
