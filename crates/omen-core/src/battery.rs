@@ -27,6 +27,11 @@ const SUPPLY_DIR: &str = "/sys/class/power_supply";
 const END: &str = "charge_control_end_threshold";
 const START: &str = "charge_control_start_threshold";
 
+/// HP's BIOS-settings driver. Where a machine's firmware publishes its setup
+/// options, a charge limit would appear under here rather than in the power
+/// supply - so its presence is worth reporting when the usual file is absent.
+const BIOSCFG_DIR: &str = "/sys/class/firmware-attributes/hp-bioscfg";
+
 /// How far below the end threshold charging is allowed to resume, on drivers
 /// that also expose a start threshold and insist the two differ. Five points
 /// is what HP's own firmware uses, and it keeps the charger from cycling on
@@ -121,13 +126,28 @@ impl Battery {
     /// instead. HP is the common case on this hardware and it has a real
     /// answer, so it gets named rather than left as "unsupported".
     pub fn unsupported_reason(&self) -> String {
+        let name = self
+            .dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "the battery".into());
+
+        // The other place it could have come from, and the one somebody who
+        // knows their BIOS has the setting will ask about. hp-bioscfg
+        // publishes a machine's BIOS options as sysfs attributes, so whether
+        // this one is among them is a question with an answer rather than an
+        // assumption - and on this firmware it is not.
+        let bioscfg = std::path::Path::new(BIOSCFG_DIR).exists();
+
         format!(
-            "this kernel exposes no charge threshold for {} - on HP laptops the setting \
-             usually lives in BIOS setup instead (Battery Health Manager, F10 at boot)",
-            self.dir
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "the battery".into())
+            "this kernel exposes no charge threshold for {name} - on HP laptops the setting \
+             usually lives in BIOS setup instead (Battery Health Manager, F10 at boot).{}",
+            if bioscfg {
+                " hp-bioscfg is loaded, but this firmware does not publish the setting through \
+                 it either, so there is nothing for the OS to write."
+            } else {
+                ""
+            }
         )
     }
 }
@@ -136,6 +156,15 @@ impl Battery {
 /// paths, which do not care which battery it was.
 pub fn limit() -> Option<u8> {
     Battery::discover()?.limit()
+}
+
+/// Whether HP's BIOS-settings driver is present.
+///
+/// Reported separately from the reason text so the window can say it in the
+/// window's own language - the daemon's sentences stay English because they
+/// end up in bug reports, and this one belongs on a settings card.
+pub fn bioscfg_present() -> bool {
+    std::path::Path::new(BIOSCFG_DIR).exists()
 }
 
 /// Whether this machine offers the control at all.

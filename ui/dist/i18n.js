@@ -102,6 +102,8 @@ const I18N = {
     "Off — charge to full": "Kapalı — tam doldur",
     "This kernel exposes no charge threshold for this battery. On HP laptops the setting usually lives in BIOS setup instead — Battery Health Manager, F10 at boot.":
       "Bu çekirdek bu pil için bir şarj eşiği sunmuyor. HP dizüstülerde bu ayar genellikle BIOS'ta durur — açılışta F10, Battery Health Manager.",
+    "hp-bioscfg is loaded, but this firmware does not publish the setting through it either, so there is nothing for the system to write.":
+      "hp-bioscfg yüklü, ama bu firmware ayarı onun üzerinden de yayınlamıyor; yani sistemin yazabileceği bir şey yok.",
     "on mains": "prizde",
 
     /* ── what this machine can do ───────────────────────────── */

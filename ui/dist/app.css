@@ -623,8 +623,15 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .chart--curve.is-editing { cursor: crosshair; }
 .chart-line--curve.is-draft { stroke-dasharray: 5 3; }
 
-/* [hidden] has to beat the flex rules above, or a hidden row still shows. */
-.slider-row[hidden], .hint[hidden] { display: none; }
+/* [hidden] has to beat every display rule in this file.
+ *
+ * The browser's own rule is `[hidden] { display: none }`, which any class
+ * with a `display` beats - so `.kv { display: grid }` quietly un-hid every
+ * row the script had hidden. This started as two targeted overrides, and the
+ * second time it bit (the battery card showed its control AND the "this
+ * machine has no such control" warning, at once) it earned a general one.
+ * Hiding is what `hidden` means; nothing here should have to opt in. */
+[hidden] { display: none !important; }
 
 /* The armed state of a destructive button: the second click is the one that
  * does it, so it should not look like the first. */

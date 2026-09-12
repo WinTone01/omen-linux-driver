@@ -64,6 +64,11 @@ struct UiState {
     /// Whether a tray icon came up. "Start hidden" is only offered when
     /// there is somewhere to hide.
     has_tray: bool,
+    /// Whether HP's BIOS-settings driver is present, so the battery card can
+    /// say - in the window's language - that the setting is not published
+    /// through it either. Without this the card would have to repeat the
+    /// daemon's English sentence into a Turkish page.
+    bioscfg_present: bool,
     /// "step" or "linear" - the chart has to be drawn the way the curve is
     /// actually read, or it would show a ramp where the daemon holds a value.
     interpolation: String,
@@ -290,6 +295,7 @@ fn get_state() -> UiState {
             })
             .unwrap_or_default(),
         has_tray: HAS_TRAY.load(Ordering::Relaxed),
+        bioscfg_present: omen_core::battery::bioscfg_present(),
         interpolation: match curve.as_ref().map(|c| c.interpolation()) {
             Some(omen_core::curve::Interpolation::Linear) => "linear".into(),
             _ => "step".into(),

@@ -2561,8 +2561,16 @@ function renderBattery(s) {
   $("#battery-control").hidden = !supported;
   $("#battery-unsupported").hidden = supported;
   if (!supported) {
-    $("#battery-unsupported").textContent = t(
+    let text = t(
       "This kernel exposes no charge threshold for this battery. On HP laptops the setting usually lives in BIOS setup instead — Battery Health Manager, F10 at boot.");
+    // The question anyone who knows their BIOS has the setting will ask
+    // next: HP's own BIOS-settings driver is right there, so why not through
+    // that? Because this firmware does not publish it there either.
+    if (s.bioscfg_present) {
+      text += " " + t(
+        "hp-bioscfg is loaded, but this firmware does not publish the setting through it either, so there is nothing for the system to write.");
+    }
+    $("#battery-unsupported").textContent = text;
   }
 
   const pct = d?.battery_percent;
