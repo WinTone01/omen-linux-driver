@@ -416,6 +416,14 @@ struct Runtime {
     /// When the current setpoint was last written, for the keep-alive.
     applied_at: Instant,
     gpu: gpu::Watch,
+    /// Both tachometers, read once at the top of each tick.
+    ///
+    /// Every read here is a WMI call into the firmware, and three separate
+    /// consumers want the same pair - the stall detector, the graph and the
+    /// snapshot. Reading it once and passing it around is three calls a tick
+    /// rather than nine, and the staleness it costs is none that matters: the
+    /// tachometer lags the setpoint by seconds anyway.
+    rpms: (Option<u32>, Option<u32>),
     /// What this machine can do, detected once at startup. Not re-detected
     /// per tick: the answer changes only when a module is loaded, and the one
     /// place that matters - a fan appearing - notices for itself.
@@ -478,6 +486,7 @@ impl Runtime {
             apps_scanned: Instant::now() - Duration::from_secs(3600),
             applied_at: Instant::now(),
             gpu: gpu::Watch::new(),
+            rpms: (None, None),
             caps: None,
             last_profile: None,
             hot_since: None,
@@ -509,6 +518,10 @@ impl Runtime {
     fn tick(&mut self, shared: &Shared, config_path: &std::path::Path) {
         self.handle_requests(shared, config_path);
         self.check_drift();
+        self.rpms = (
+            self.fan.as_ref().and_then(|f| f.rpm(1).ok()),
+            self.fan.as_ref().and_then(|f| f.rpm(2).ok()),
+        );
 
         let temp = match self.thermal.hottest() {
             Ok(v) => Some(v),
@@ -598,10 +611,7 @@ impl Runtime {
         self.samples.push_back(omen_core::ipc::Sample {
             uptime_secs: self.started.elapsed().as_secs(),
             temp_c,
-            fan_rpm: match (
-                self.fan.as_ref().and_then(|f| f.rpm(1).ok()),
-                self.fan.as_ref().and_then(|f| f.rpm(2).ok()),
-            ) {
+            fan_rpm: match self.rpms {
                 (Some(a), Some(b)) => Some(a.max(b)),
                 (one, two) => one.or(two),
             },
@@ -1183,10 +1193,11 @@ impl Runtime {
         // deliberately about BEHAVIOUR rather than about a particular mode -
         // whatever the reason the fans are stopped, stopped fans at this
         // temperature are wrong.
-        let stopped = self
-            .fan
-            .as_ref()
-            .is_some_and(|fan| matches!((fan.rpm(1), fan.rpm(2)), (Ok(0), Ok(0))));
+        // From this tick's single reading. "Both report zero" is the
+        // condition; a tachometer that could not be read at all is not a
+        // report of zero, and treating it as one would force full power on
+        // every machine whose fan1_input is missing.
+        let stopped = matches!(self.rpms, (Some(0), Some(0)));
         if stopped && temp >= self.cfg.safety.stall_temp_c {
             let since = *self.stall_since.get_or_insert_with(Instant::now);
             if since.elapsed() >= self.cfg.stall_grace() {
@@ -1423,8 +1434,8 @@ impl Runtime {
                 Applied::Idle => Some(0),
                 _ => None,
             },
-            fan1_rpm: self.fan.as_ref().and_then(|f| f.rpm(1).ok()),
-            fan2_rpm: self.fan.as_ref().and_then(|f| f.rpm(2).ok()),
+            fan1_rpm: self.rpms.0,
+            fan2_rpm: self.rpms.1,
             pwm: self.fan.as_ref().and_then(|f| f.pwm().ok()),
             profile: PlatformProfile::discover().and_then(|p| p.get().ok()),
             safety_fallback: self.emergency.is_some(),
