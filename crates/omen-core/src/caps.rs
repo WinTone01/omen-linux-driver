@@ -329,9 +329,11 @@ mod tests {
         c.verified_board = false;
         c.board = Some("8BCA".into());
         assert_eq!(c.level(), Level::ProfileOnly);
-        // And the remedy names the actual fix rather than shrugging.
+        // And the remedy names the command that does it rather than
+        // describing a change and leaving the reader to make it.
         let remedy = c.remedy().unwrap();
-        assert!(remedy.contains("DMI"), "{remedy}");
+        assert!(remedy.contains("8BCA"), "{remedy}");
+        assert!(remedy.contains("install.sh"), "{remedy}");
     }
 
     #[test]
