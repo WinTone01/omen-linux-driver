@@ -193,6 +193,7 @@ omenctl effect wave 7          # none / breathing / wave / spectrum
 omenctl gpu                    # what is holding the discrete GPU awake
 omenctl gpu mux discrete       # which GPU drives the screen, from the next boot
 omenctl version                # what is running vs what is installed
+omenctl key window             # what the OMEN key does: window / profile / both
 omen-ui --tab graphics         # open the window on one page
 ```
 

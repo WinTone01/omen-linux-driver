@@ -281,6 +281,30 @@ is not running, so it stays useful as a diagnostic tool either way.
 
 Set `OMEND_SOCKET` to run a second instance, or to try things without root.
 
+### The OMEN key
+
+The key above the keyboard reaches Linux as `KEY_PROG2`, delivered through the
+input device `hp-wmi` creates ("HP WMI hotkeys"). Most desktops have nothing
+bound to it, so out of the box it does nothing at all.
+
+`omend` watches that device and, by default, **opens the window** - which is
+what the key does on Windows and so what someone pressing it expects. It goes
+through the socket omen-ui already listens on for a second launch, so the
+daemon never has to start a GUI in someone else's session, which from a root
+service is both awkward and a bad idea. If the window is not running, the
+press is logged and nothing happens.
+
+```bash
+omenctl key            # what it is bound to now
+omenctl key profile    # step through the performance profiles instead
+omenctl key both
+omenctl key none
+```
+
+Setting it to `profile` is worth knowing about: stepping the performance
+profile needs no window, no desktop and no session, so it keeps working from a
+text console.
+
 ### Rules, in order of precedence
 
 Three things can decide the profile and how the fan is driven, and they are

@@ -157,6 +157,8 @@ pub enum Request {
     /// Which platform profile to select when the daemon starts. `None`
     /// leaves it to whatever the firmware remembers.
     SetStartupProfile { profile: Option<String> },
+    /// What the OMEN key does: window / profile / both / none.
+    SetOmenKey { action: String },
     /// What to do on mains power and on battery.
     SetPowerRules {
         on_ac: crate::power::PowerRule,
@@ -277,6 +279,9 @@ pub struct Snapshot {
     /// The profile selected at startup, if one is configured.
     #[serde(default)]
     pub startup_profile: Option<String>,
+    /// What the OMEN key is bound to.
+    #[serde(default)]
+    pub omen_key: Option<String>,
     /// The configured per-application profiles.
     #[serde(default)]
     pub apps: Vec<crate::apps::AppProfile>,

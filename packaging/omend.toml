@@ -160,6 +160,14 @@ dgpu_power = "auto"
 #
 # startup_profile = "balanced"
 
+# What the OMEN key does.
+#
+# On Windows it opens the Gaming Hub, so "window" is the default here: the key
+# raises the window if it is running. "profile" steps through the performance
+# profiles instead, which needs no window and no desktop; "both" does both and
+# "none" leaves the key alone.
+omen_key = "window"
+
 # How often the process list is checked for the application profiles below.
 app_scan_secs = 5
 

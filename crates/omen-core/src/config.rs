@@ -109,6 +109,15 @@ pub struct AutomationConfig {
     #[serde(default)]
     pub on_battery: PowerRule,
 
+    /// What the OMEN key does.
+    ///
+    /// On Windows it opens the Gaming Hub, which is what someone pressing it
+    /// expects, so that is the default here too. Cycling the performance
+    /// profile is the other useful thing to bind it to - it needs no window
+    /// and no desktop - so both are offered.
+    #[serde(default)]
+    pub omen_key: OmenKey,
+
     /// How often the process list is checked, in seconds.
     ///
     /// Every check walks /proc. Five seconds is quick enough that a game is
@@ -118,10 +127,62 @@ pub struct AutomationConfig {
     pub app_scan_secs: u64,
 }
 
+/// What pressing the OMEN key should do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OmenKey {
+    /// Open the window, or raise it if it is already running. What the key
+    /// does on Windows.
+    #[default]
+    Window,
+    /// Step through the performance profiles.
+    Profile,
+    /// Both: raise the window and step the profile.
+    Both,
+    /// Nothing.
+    None,
+}
+
+impl OmenKey {
+    pub fn opens_window(self) -> bool {
+        matches!(self, Self::Window | Self::Both)
+    }
+
+    pub fn cycles_profile(self) -> bool {
+        matches!(self, Self::Profile | Self::Both)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Window => "window",
+            Self::Profile => "profile",
+            Self::Both => "both",
+            Self::None => "none",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "window" | "app" | "gui" => Some(Self::Window),
+            "profile" => Some(Self::Profile),
+            "both" => Some(Self::Both),
+            "none" | "off" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for OmenKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl Default for AutomationConfig {
     fn default() -> Self {
         Self {
             startup_profile: None,
+            omen_key: OmenKey::default(),
             on_ac: PowerRule::default(),
             on_battery: PowerRule::default(),
             app_scan_secs: default_app_scan(),

@@ -335,6 +335,43 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             }
         }
 
+        Request::SetOmenKey { action } => {
+            let Some(want) = omen_core::config::OmenKey::parse(&action) else {
+                return Response::Error {
+                    message: format!(
+                        "unknown action {action:?}; choices: window / profile / both / none"
+                    ),
+                };
+            };
+            let mut cfg = match Config::load(config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("the current configuration could not be read: {e}"),
+                    }
+                }
+            };
+            cfg.automation.omen_key = want;
+            if let Err(e) = cfg.save(config_path) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+            shared.request_reload_sync(APPLY_TIMEOUT);
+            Response::Done {
+                message: match want {
+                    omen_core::config::OmenKey::Window => "the OMEN key opens the window".into(),
+                    omen_core::config::OmenKey::Profile => {
+                        "the OMEN key steps through the profiles".into()
+                    }
+                    omen_core::config::OmenKey::Both => {
+                        "the OMEN key opens the window and steps the profile".into()
+                    }
+                    omen_core::config::OmenKey::None => "the OMEN key does nothing".into(),
+                },
+            }
+        }
+
         Request::SetStartupProfile { profile } => {
             let mut cfg = match Config::load(config_path) {
                 Ok(cfg) => cfg,

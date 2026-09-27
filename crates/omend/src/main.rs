@@ -20,7 +20,7 @@ mod triggerwatch;
 
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -244,11 +244,14 @@ fn run(args: Args) -> Result<()> {
         .then(|| lighting::Lighting::start(rt.cfg.lighting.clone()))
         .flatten();
 
-    // The OMEN key cycles the performance profile. Not for --once, which is
-    // a single diagnostic pass, and not for --dry-run, which promises to
-    // write nothing.
+    // The OMEN key. Not for --once, which is a single diagnostic pass, and
+    // not for --dry-run, which promises to write nothing.
+    //
+    // Shared rather than copied so that editing the configuration changes
+    // what the key does at the next press, not the next boot.
+    let omen_key = Arc::new(Mutex::new(rt.cfg.automation.omen_key));
     if !args.once && !args.dry_run {
-        hotkey::spawn();
+        hotkey::spawn(Arc::clone(&omen_key));
     }
 
     // What the backlight rule last asked for, so it is only asked again when
@@ -263,6 +266,8 @@ fn run(args: Args) -> Result<()> {
 
     loop {
         rt.tick(&shared, &args.config);
+        *omen_key.lock().unwrap_or_else(|e| e.into_inner()) = rt.cfg.automation.omen_key;
+
         if let (Some(lights), Some(cfg)) = (lights.as_ref(), rt.take_lighting_change()) {
             lights.update(cfg);
         }
@@ -1534,6 +1539,7 @@ impl Runtime {
             power_battery: self.cfg.automation.on_battery.clone(),
             curve_preset: self.curve_preset.clone(),
             startup_profile: self.cfg.automation.startup_profile.clone(),
+            omen_key: Some(self.cfg.automation.omen_key.to_string()),
             apps: self.cfg.apps.clone(),
             active_app: self.apps.active().map(str::to_owned),
             triggers: self.cfg.triggers.clone(),

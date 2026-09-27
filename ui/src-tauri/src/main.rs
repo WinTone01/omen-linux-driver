@@ -430,6 +430,13 @@ fn set_power_rules(
 }
 
 /// A machine setting, not a window one: it changes what happens at the next
+/// What the OMEN key does. A machine setting: the daemon is what watches the
+/// key, and it watches it whether or not this window is open.
+#[tauri::command]
+fn set_omen_key(action: String) -> Result<String, String> {
+    talk(Request::SetOmenKey { action })
+}
+
 /// boot, for everyone.
 #[tauri::command]
 fn set_startup_profile(profile: Option<String>) -> Result<String, String> {
@@ -948,6 +955,7 @@ fn main() {
             gpu_env,
             system_info,
             set_startup_profile,
+            set_omen_key,
             set_power_rules,
             firmware,
             firmware_refresh,

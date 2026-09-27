@@ -476,3 +476,12 @@ Object.assign(I18N.tr, {
   "A rule is running the": "Bir kural şu anda",
   "curve; this is the configured one.": "eğrisini çalıştırıyor; buradaki yapılandırılmış olan.",
 });
+
+/* The OMEN key. */
+Object.assign(I18N.tr, {
+  "The OMEN key": "OMEN tuşu",
+  "opens this window": "bu pencereyi açar",
+  "steps through the profiles": "profiller arasında geçer",
+  "does both": "ikisini birden yapar",
+  "does nothing": "hiçbir şey yapmaz",
+});

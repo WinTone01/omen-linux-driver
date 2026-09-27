@@ -96,6 +96,8 @@ USAGE:
     omenctl profile startup <NAME|none>
                                    Which profile to select when the daemon
                                    starts. 'none' leaves it to the firmware.
+    omenctl key [ACTION]           What the OMEN key does: window / profile /
+                                   both / none. Without an argument, says.
     omenctl reload                 Make the daemon re-read its configuration
     omenctl fix [WHAT]             The things here that need root - restarting
                                    the service, reloading a module, joining the
@@ -137,6 +139,7 @@ fn main() -> ExitCode {
         "calibrate" => calibrate(&args),
         "battery" => battery(&args),
         "profile" => set_profile(&args),
+        "key" => omen_key(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
         "caps" | "capabilities" => capabilities(),
         "fix" => fix(&args),
@@ -263,6 +266,25 @@ fn set_effect(args: &[String]) -> Result<()> {
     }
 
     client::report(client::send(&Request::SetEffect(spec))?)
+}
+
+/// What the OMEN key is bound to.
+fn omen_key(args: &[String]) -> Result<()> {
+    let Some(action) = args.get(1) else {
+        let snap = app_snapshot()?;
+        field(
+            "OMEN key",
+            snap.omen_key.clone().unwrap_or_else(|| "?".into()),
+        );
+        println!("\n  window   open the window, or raise it if it is already running");
+        println!("  profile  step through the performance profiles");
+        println!("  both     do both");
+        println!("  none     nothing");
+        return Ok(());
+    };
+    client::report(client::send(&Request::SetOmenKey {
+        action: action.clone(),
+    })?)
 }
 
 fn set_profile(args: &[String]) -> Result<()> {

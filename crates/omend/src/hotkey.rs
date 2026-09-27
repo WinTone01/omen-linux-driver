@@ -5,9 +5,10 @@
 //! desktop usually has nothing bound to it, so the key does nothing at all -
 //! which is a waste of the one button on this machine that exists for us.
 //!
-//! What it does here is cycle the platform profile. That is a whole action in
-//! itself, needs no window, and cannot go wrong in a way that matters: the
-//! worst case is a profile change nobody asked for.
+//! What it does is configurable, and by default it opens the window - which
+//! is what the key does on Windows and therefore what someone pressing it
+//! expects. Cycling the performance profile is the alternative: a whole
+//! action in itself, needing no window and no desktop.
 //!
 //! Events are read as raw `struct input_event` rather than through a crate.
 //! The layout is kernel ABI - it cannot change - and it is 24 bytes on the
@@ -15,12 +16,15 @@
 //! integers is not a good trade in a daemon that controls fans.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use log::{debug, info, warn};
 
+use omen_core::config::OmenKey;
 use omen_core::profile::PlatformProfile;
 
 /// EV_KEY. The only event type we care about.
@@ -40,8 +44,11 @@ const EVENT_SIZE: usize = 24;
 
 /// Starts the listener, if the hotkey device is there and can be opened.
 ///
+/// The action is shared rather than copied, so changing it in the
+/// configuration applies to the next press instead of the next boot.
+///
 /// Never fatal: no hotkeys is a laptop that works fine with one less button.
-pub fn spawn() {
+pub fn spawn(action: Arc<Mutex<OmenKey>>) {
     let Some(path) = find_device() else {
         debug!("no HP WMI hotkey device - the OMEN key will do nothing");
         return;
@@ -76,7 +83,13 @@ pub fn spawn() {
                 let value = i32::from_ne_bytes([buf[20], buf[21], buf[22], buf[23]]);
 
                 if kind == EV_KEY && value == PRESS && (code == KEY_PROG1 || code == KEY_PROG2) {
-                    cycle_profile();
+                    let want = *action.lock().unwrap_or_else(|e| e.into_inner());
+                    if want.opens_window() {
+                        show_window();
+                    }
+                    if want.cycles_profile() {
+                        cycle_profile();
+                    }
                 }
             }
         });
@@ -109,6 +122,50 @@ fn find_device() -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Asks the window to show itself.
+///
+/// Through the socket omen-ui already listens on for a second launch - the
+/// one that makes `omen-ui --tab graphics` raise the running window instead
+/// of starting a second copy. Reusing it means the daemon needs no way to
+/// start a GUI in someone else's session, which from a root service is both
+/// awkward and a bad idea.
+///
+/// The runtime directory is per-user and the daemon is root, so the socket is
+/// found by looking rather than by knowing whose session this is. Normally
+/// there is exactly one.
+fn show_window() {
+    let Ok(entries) = std::fs::read_dir("/run/user") else {
+        debug!("no /run/user - nothing to raise");
+        return;
+    };
+
+    let mut asked = false;
+    for entry in entries.flatten() {
+        let socket = entry.path().join("omen-control.sock");
+        if !socket.exists() {
+            continue;
+        }
+        match UnixStream::connect(&socket) {
+            Ok(mut stream) => {
+                // The same word the second instance sends. A page could
+                // follow; the key opens whatever was last looked at, which is
+                // what a hardware button should do.
+                if stream.write_all(b"show\n").is_ok() {
+                    info!("OMEN key: raising the window");
+                    asked = true;
+                }
+            }
+            // A socket file with nobody listening is what a crash leaves
+            // behind; not worth a warning.
+            Err(e) => debug!("{}: {e}", socket.display()),
+        }
+    }
+
+    if !asked {
+        info!("OMEN key: the window is not running");
+    }
 }
 
 /// Next profile in the list the firmware offers, wrapping round.

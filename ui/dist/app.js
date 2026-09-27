@@ -98,6 +98,9 @@ async function mockInvoke(cmd, args) {
       mockState.daemon.power_ac = args.onAc;
       mockState.daemon.power_battery = args.onBattery;
       return "power rules saved";
+    case "set_omen_key":
+      mockState.daemon.omen_key = args.action;
+      return `the OMEN key: ${args.action}`;
     case "set_startup_profile":
       mockState.daemon.startup_profile = args.profile;
       return args.profile ? `${args.profile} will be selected at startup`
@@ -1864,6 +1867,13 @@ function renderStartupProfile(s) {
     }
   }
   if (document.activeElement !== sel) sel.value = current;
+
+  // The key belongs to the daemon rather than to this window - it is watched
+  // whether or not the window is open - so it sits with the machine defaults.
+  const key = $("#set-omen-key");
+  if (key && document.activeElement !== key) {
+    key.value = s.daemon?.omen_key ?? "window";
+  }
 }
 
 /* ── versions ──────────────────────────────────────────────── */
@@ -1983,6 +1993,9 @@ function bindSettings() {
 
   $("#set-startup-profile").addEventListener("change", (e) =>
     act(() => invoke("set_startup_profile", { profile: e.target.value || null })));
+
+  $("#set-omen-key").addEventListener("change", (e) =>
+    act(() => invoke("set_omen_key", { action: e.target.value })));
 
   $("#btn-ver-copy").addEventListener("click", () =>
     copyText($("#ver-commands").textContent, t("commands")));
