@@ -7,6 +7,10 @@ errors and 0 checks**. The two remaining warnings are "Unknown commit id",
 which is what checkpatch says about any commit reference when it is run
 outside a kernel tree; both hashes were verified against the real history.
 
+Checked again on 2026-09-28: 8D24 is still not in `torvalds/linux` master,
+and the patch applies to it cleanly (`git apply --check`), so it can go as
+it is.
+
 ## Before sending: the Signed-off-by needs a real name
 
 ```
@@ -53,6 +57,11 @@ written down anywhere upstream.
 
 ### `HP_FAN_SPEED_AUTOMATIC` does not hand the fans back
 
+A ready-to-send report is in
+[`report-pwm1-enable-auto.txt`](report-pwm1-enable-auto.txt): headers, the
+measurements, how to reproduce, and the two questions only a sibling board
+can answer. Put your real name at the bottom and send it as plain text.
+
 `hp_wmi_fan_speed_reset()` writes a speed of 0 on the way back to automatic,
 and the constant's name says that reverts to firmware control. On this board
 it does not, at least not promptly: with `pwm1_enable = 2` the fans sat at
@@ -79,3 +88,31 @@ read path has a dead `Local1 = 0x64` just before returning it.
 It is a switch taking two values, `0xE4` on and `0x64` off. Writing a level
 of 100 therefore sends the **off** value. Details and the measurements are in
 [`docs/research/rgb-protocol.md`](../../docs/research/rgb-protocol.md) §2.
+
+## Further out: the lighting group and the mux in hp-wmi
+
+`omen-kbd-rgb` is the right shape for this repository and the wrong one for
+upstream. It reaches the firmware through the legacy
+`wmi_evaluate_method()` and creates a platform device of its own, and a
+maintainer would ask why a second driver talks to the GUID hp-wmi already
+uses. Moving it to the modern WMI API is not an option either: the
+`5FB7F034` WMI device is bound to `hp-bioscfg`, so there is nothing left for
+a `wmi_driver` to attach to.
+
+What would be accepted is the same code inside hp-wmi, which already has the
+query helper, the Omen board table and the platform device. As a series:
+
+1. `hp-wmi: add the lighting command group` - `HPWMI_LIGHTING` (`0x20009`)
+   next to `HPWMI_GM`, and LM01 as the capability check.
+2. `hp-wmi: add 4-zone RGB keyboard backlight` - the multicolor LEDs, the
+   on/off switch values (`0xE4`/`0x64`), the zone order, resume.
+3. `hp-wmi: add the graphics mux` - through the firmware-attributes class
+   with `pending_reboot`, the way asus-armoury does `gpu_mux_mode`, rather
+   than as a private attribute.
+4. `hp-wmi: expose the dGPU temperature` - EC `0xB7` on the Omen boards, as
+   a second channel of the hwmon device hp-wmi already registers.
+
+Each is independent of the 8D24 entry above and should follow it, not ride
+with it. Until they land, `omen-kbd-rgb` keeps its name and sysfs paths:
+renaming it now would move `/sys/devices/platform/omen-kbd-rgb` under
+everything that reads it, for a module that is meant to disappear.

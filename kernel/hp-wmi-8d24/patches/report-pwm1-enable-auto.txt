@@ -1,0 +1,56 @@
+To: Hans de Goede <hansg@kernel.org>, Ilpo Järvinen <ilpo.jarvinen@linux.intel.com>
+Cc: platform-driver-x86@vger.kernel.org
+Subject: hp-wmi: pwm1_enable=2 leaves an OMEN 16-ap0xxx (8D24) at 0 RPM under load
+
+Hi,
+
+A report rather than a patch, because I can see the problem on one board
+and do not know yet how far it reaches.
+
+On an OMEN Gaming Laptop 16-ap0xxx (board 8D24, BIOS F.11, kernel 7.2.4,
+hp-wmi with the 8D24 entry added to hp_wmi_feature_boards[] using
+omen_v1_legacy_board_params), switching the fans back to automatic with
+
+    echo 2 > /sys/class/hwmon/hwmonN/pwm1_enable
+
+does not hand them back to the firmware promptly. The PWM_MODE_AUTO path
+ends in hp_wmi_fan_speed_reset(), which sets both speeds to
+HP_FAN_SPEED_AUTOMATIC (0) and writes them. On this board the EC takes that
+0 literally:
+
+  - under load, fan1/fan2 read 0 RPM for twelve consecutive seconds while
+    the CPU went from 78.6 to 85.5 °C;
+  - in an earlier, unattended case the CPU went from 81 to 98 °C in 76
+    seconds with the fans stopped.
+
+The firmware does appear to take over eventually. The omen-space project
+writes 120 to EC 0x63 and warns that the handover to the BIOS can take up
+to two minutes, which matches what I see. But on this machine that is longer
+than it takes to reach the critical trip point, and a user who selects
+"automatic" has no way to know the fans are stopped until then.
+
+How to reproduce, on a board with the omen_v1_legacy parameters:
+
+  1. echo 1 > pwm1_enable; set pwm1 to something mid-range
+  2. start a sustained CPU load (stress-ng --cpu 0)
+  3. echo 2 > pwm1_enable
+  4. watch fan1_input / fan2_input and the CPU temperature for 30 s
+
+What I do not know, and would like to hear from anyone with a sibling
+board (8D26, 8E35):
+
+  - whether the same happens there, i.e. whether this is 8D24's EC or every
+    omen_v1_legacy board;
+  - whether the Windows vendor software does something besides writing 0
+    when it returns to automatic - a thermal-profile write, or the EC 0x63
+    timer above - that makes the EC resume at once.
+
+Until then, the userspace daemon I maintain works around it: for a quiet
+machine it stays in manual mode at pwm 0 rather than selecting automatic, so
+it can spin the fans back up on the next sample, and when it exits while the
+machine is hot it leaves them at full power (pwm1_enable=0) instead of
+handing them to an EC that will not drive them. Details and the raw measurements:
+https://github.com/WinTone01/omen-linux-driver (kernel/hp-wmi-8d24/patches/README.md).
+
+Thanks,
+<your real name>
