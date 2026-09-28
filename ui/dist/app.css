@@ -562,6 +562,7 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 /* The Auto mode explanation is a warning, not a description: on this machine
  * that mode genuinely does not cool. */
 .hint.is-warning { color: var(--accent-amber); }
+.kv dd.is-warn { color: var(--accent-amber); }
 
 /* ── Charts ─────────────────────────────────────────────────── */
 

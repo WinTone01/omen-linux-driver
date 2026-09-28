@@ -154,6 +154,12 @@ pub enum Request {
     SetAppProfiles { apps: Vec<crate::apps::AppProfile> },
     /// Discrete GPU power policy: whether it may suspend when idle.
     SetDgpuPower(crate::gpu::DgpuPower),
+    /// Whether cTGP and Dynamic Boost follow the platform profile.
+    SetGpuBoost(crate::gpu::Boost),
+    /// How many times the OMEN key has asked for the window. Asked by the
+    /// window itself, several times a second, so it is the cheapest request
+    /// there is - see omend's hotkey module for why it works this way round.
+    OmenKeyPresses,
     /// Which platform profile to select when the daemon starts. `None`
     /// leaves it to whatever the firmware remembers.
     SetStartupProfile { profile: Option<String> },
@@ -209,6 +215,10 @@ pub enum Response {
     },
     Error {
         message: String,
+    },
+    /// The answer to `OmenKeyPresses`: a count that only grows.
+    Presses {
+        count: u64,
     },
 }
 
@@ -320,7 +330,24 @@ pub struct Snapshot {
     /// Discrete GPU runtime power state, when there is a dGPU.
     #[serde(default)]
     pub gpu: Option<crate::gpu::GpuPower>,
+    /// cTGP and Dynamic Boost, on a machine whose module reports them.
+    #[serde(default)]
+    pub gpu_boost: Option<crate::gpu::boost::State>,
+    /// Recent things the daemon tried to do to the hardware and could not,
+    /// newest last. Bounded, and each carries an id that only grows, so a
+    /// client can tell a new failure from one it has already shown.
+    #[serde(default)]
+    pub problems: Vec<Problem>,
     pub uptime_secs: u64,
+}
+
+/// Something the daemon was asked or meant to do and the hardware refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Problem {
+    pub id: u64,
+    /// Seconds since the daemon started, when it last happened.
+    pub at_secs: u64,
+    pub what: String,
 }
 
 /// Client side of the protocol. Shared by omenctl and the UI so there is only

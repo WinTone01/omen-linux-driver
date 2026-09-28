@@ -45,8 +45,9 @@ pub struct LedState {
     pub brightness: Option<u8>,
     pub zones: Vec<Rgb>,
     /// Set when the keyboard is dark. Writing colours will show nothing until
-    /// it is on, and only Fn+F4 can do that (see docs/rgb-protocol.md §5) -
-    /// the UI needs to be able to say so.
+    /// it is switched on - by setting a brightness, or with Fn+F4 (see
+    /// docs/research/rgb-protocol.md §5) - and the UI needs to be able to say
+    /// so.
     pub backlight_off: bool,
 }
 
@@ -131,10 +132,11 @@ impl Leds {
 
     /// Whether the keyboard is actually lit.
     ///
-    /// Asks the driver first, which reads the byte that tracks it. Only if
-    /// that is unavailable does it fall back to "brightness is zero", which
-    /// is a poor proxy: the backlight can be off with brightness set to 100,
-    /// and that is exactly the case that made a working driver look broken.
+    /// Asks the driver first, which asks the firmware's switch. Only if that
+    /// is unavailable does it fall back to "brightness is zero" - exact with
+    /// omen-kbd-rgb 0.2.0, which follows Fn+F4 and reports 0 while dark, but
+    /// not with older builds, where the backlight could be off with the
+    /// brightness still at 100.
     fn backlight_off(&self, brightness: Option<u8>) -> bool {
         match sysfs::read_string(Path::new(BACKLIGHT_ACTIVE)) {
             Ok(v) => v.trim() == "0",

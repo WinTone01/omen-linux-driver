@@ -106,6 +106,17 @@ impl Lighting {
         let _ = self.tx.send(Ask::Backlight(on));
     }
 
+    /// Whether the keyboard is dark. `None` when there is no keyboard.
+    pub fn is_dark(&self) -> Option<bool> {
+        Leds::discover().ok()?.brightness().map(|b| b == 0)
+    }
+
+    /// The keyboard's brightness, for remembering it. `None` while it is dark
+    /// or absent: zero is not a level to come back to.
+    pub fn brightness(&self) -> Option<u8> {
+        Leds::discover().ok()?.brightness().filter(|b| *b > 0)
+    }
+
     /// The colours the keyboard is showing, for remembering them. `None`
     /// while an effect is running - what is on screen then is a frame, not a
     /// choice.
@@ -126,8 +137,9 @@ struct Painter {
     /// puts the keyboard back rather than leaving it on whatever frame it
     /// happened to stop on.
     saved: Option<Vec<Rgb>>,
-    /// What we painted last, so unchanged zones are not rewritten. Every zone
-    /// write is a WMI call; a breathing effect at its dimmest can hold the
+    /// What we painted last, so unchanged zones are not rewritten. The driver
+    /// folds a frame's zones into one WMI call, but a frame with nothing new
+    /// in it is still a call; a breathing effect at its dimmest can hold the
     /// same 8-bit value for several frames.
     last: Option<[Rgb; ZONE_COUNT]>,
     /// Brightness before the backlight was switched off, so turning it back
@@ -164,6 +176,25 @@ impl Painter {
             if let Err(e) = self.leds.set_zone(i, colour) {
                 debug!("could not restore zone {i}: {e}");
                 return;
+            }
+        }
+        // After the colours: the driver scales what it holds, so the level
+        // applies to the colours just written. Only if the keyboard is lit -
+        // setting a level switches it on, and a keyboard someone turned off
+        // should stay off.
+        // Off if it was switched off: the firmware may well light the
+        // keyboard at boot whatever it was left as.
+        if cfg.backlight_off {
+            if let Err(e) = self.leds.set_brightness(0) {
+                debug!("could not switch the backlight back off: {e}");
+            }
+            info!("keyboard colours restored, backlight left off as it was");
+            return;
+        }
+        let lit = self.leds.brightness().is_some_and(|b| b > 0);
+        if let Some(level) = cfg.brightness.filter(|b| *b > 0 && lit) {
+            if let Err(e) = self.leds.set_brightness(level) {
+                debug!("could not restore the brightness: {e}");
             }
         }
         info!("keyboard colours restored");

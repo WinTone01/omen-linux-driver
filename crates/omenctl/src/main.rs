@@ -72,10 +72,14 @@ USAGE:
 
     omenctl gpu mux [MODE]         Which GPU drives the screen from the next
                                    boot: hybrid / discrete / uma
+    omenctl gpu boost [profile|leave]
+                                   cTGP and Dynamic Boost: follow the profile
+                                   as the vendor software does, or leave them
+                                   to the firmware. Without an argument, shows
+                                   what the firmware has now
     omenctl gpu [auto|on]          Discrete GPU: may it suspend when idle?
                                    Without an argument, shows what is holding
-                                   it awake. This board has no mux, so there
-                                   is no panel to switch - see the note below.
+                                   it awake.
 
     omenctl power                  What happens on mains and on battery
     omenctl power ac|battery <PROFILE|none> [FAN]
@@ -96,8 +100,17 @@ USAGE:
     omenctl profile startup <NAME|none>
                                    Which profile to select when the daemon
                                    starts. 'none' leaves it to the firmware.
+    omenctl profile measure        Load every core, and measure what each
+                                   profile actually allows: CPU package power
+                                   and clock, and the GPU's power limit.
+                                   About a minute and a half; the profile is
+                                   put back afterwards.
     omenctl key [ACTION]           What the OMEN key does: window / profile /
                                    both / none. Without an argument, says.
+    omenctl keys check             Press the keys it names and it says which
+                                   ones send the wrong key, and writes a rule
+                                   for this board that fixes only those
+    omenctl keys reset             Remove that rule
     omenctl reload                 Make the daemon re-read its configuration
     omenctl fix [WHAT]             The things here that need root - restarting
                                    the service, reloading a module, joining the
@@ -140,6 +153,7 @@ fn main() -> ExitCode {
         "battery" => battery(&args),
         "profile" => set_profile(&args),
         "key" => omen_key(&args),
+        "keys" => keys(&args),
         "reload" => client::send(&Request::Reload).and_then(client::report),
         "caps" | "capabilities" => capabilities(),
         "fix" => fix(&args),
@@ -288,6 +302,9 @@ fn omen_key(args: &[String]) -> Result<()> {
 }
 
 fn set_profile(args: &[String]) -> Result<()> {
+    if args.get(1).map(String::as_str) == Some("measure") {
+        return measure_profiles();
+    }
     if args.get(1).map(String::as_str) == Some("startup") {
         let want = args
             .get(2)
@@ -303,6 +320,369 @@ fn set_profile(args: &[String]) -> Result<()> {
     client::report(client::send(&Request::SetProfile { profile })?)
 }
 
+/// `omenctl keys check` / `reset`. See omen_core::keys.
+fn keys(args: &[String]) -> Result<()> {
+    use omen_core::keys::{self, Fix, Keyboard};
+    use std::time::Duration;
+
+    let is_root = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("Uid:"))
+                .map(|l| l.split_whitespace().nth(1) == Some("0"))
+        })
+        .unwrap_or(false);
+
+    match args.get(1).map(String::as_str) {
+        Some("reset") => {
+            if !is_root {
+                println!("  This needs root:");
+                println!("    sudo omenctl keys reset");
+                return Ok(());
+            }
+            // Run whether or not the file is still there: a rule removed by
+            // hand, or by an older version of this command, leaves its
+            // mappings in the kernel until the keyboard is re-created.
+            if std::path::Path::new(keys::HWDB_PATH).exists() {
+                std::fs::remove_file(keys::HWDB_PATH)?;
+                println!("  {} removed", keys::HWDB_PATH);
+            }
+            reload_hwdb()?;
+            keys::reset_keymap()?;
+            println!("  the keyboard's keymap is back to the defaults and systemd's own map");
+            return Ok(());
+        }
+        Some("check") => {}
+        _ => bail!("usage: omenctl keys check | omenctl keys reset"),
+    }
+
+    let Some(dev) = keys::keyboard_device() else {
+        bail!("no built-in AT keyboard was found in /proc/bus/input/devices");
+    };
+    let mut kb = Keyboard::open(&dev).map_err(|e| {
+        anyhow::anyhow!(
+            "{} could not be opened ({e}). Reading it needs root or the 'input' group: \
+             sudo omenctl keys check",
+            dev.display()
+        )
+    })?;
+
+    println!("  Press each key when asked. Wait 10 seconds to skip one this keyboard");
+    println!("  does not have. The desktop sees the presses too, so PrtSc may take a");
+    println!("  screenshot.\n");
+
+    // The terminal would echo each key as an escape sequence (^[[24~ for
+    // F12) into the middle of the report. Echo is put back on the way out,
+    // including an early return.
+    struct NoEcho;
+    impl NoEcho {
+        fn set(on: bool) {
+            if let Ok(tty) = std::fs::File::open("/dev/tty") {
+                let _ = std::process::Command::new("stty")
+                    .arg(if on { "echo" } else { "-echo" })
+                    .stdin(tty)
+                    .status();
+            }
+        }
+    }
+    impl Drop for NoEcho {
+        fn drop(&mut self) {
+            NoEcho::set(true);
+        }
+    }
+    NoEcho::set(false);
+    let echo = NoEcho;
+
+    let mut fixes = Vec::new();
+    for want in keys::CHECKS {
+        // A top-row key is asked for twice, on its own and with Fn: which of
+        // the two gives F1 and which gives the action is a BIOS setting, and
+        // the key is only broken if neither gives it.
+        let ways: &[&str] = if want.top_row {
+            &["on its own", "with Fn held"]
+        } else {
+            &[""]
+        };
+        let mut verdicts = Vec::new();
+        for way in ways {
+            let prompt = if way.is_empty() {
+                want.label.to_string()
+            } else {
+                format!("{} {way}", want.label)
+            };
+            print!("  {prompt:<24} ");
+            use std::io::Write as _;
+            let _ = std::io::stdout().flush();
+            kb.drain();
+            let presses = kb.next_presses(Duration::from_secs(10));
+            let verdict = keys::judge(want, &presses);
+            match &verdict {
+                keys::Verdict::Skipped => match keys::silent_hint(want) {
+                    Some(hint) => println!("nothing sent - {hint}"),
+                    None => println!("skipped"),
+                },
+                keys::Verdict::Right { with } if with.is_empty() => {
+                    println!("ok - {}", keys::describe(&presses))
+                }
+                keys::Verdict::Right { .. } => println!(
+                    "ok - {} (a combination the firmware sends)",
+                    keys::describe(&presses)
+                ),
+                keys::Verdict::Wrong { .. } => {
+                    println!("{} - not {}", keys::describe(&presses), want.name)
+                }
+            }
+            verdicts.push(verdict);
+        }
+
+        let any_right = verdicts
+            .iter()
+            .any(|v| matches!(v, keys::Verdict::Right { .. }));
+        let all_skipped = verdicts.iter().all(|v| *v == keys::Verdict::Skipped);
+        if any_right || all_skipped {
+            continue;
+        }
+        let fix = verdicts.iter().find_map(|v| match v {
+            keys::Verdict::Wrong { fix: Some(s), .. } => Some(*s),
+            _ => None,
+        });
+        match fix {
+            Some(scancode) => fixes.push(Fix {
+                scancode,
+                name: want.name,
+                label: want.label,
+            }),
+            None => println!(
+                "    {} cannot be reached, but what came was a modifier, several keys or \
+                 had no scancode - remapping that would break something else, so it is \
+                 left alone",
+                want.name
+            ),
+        }
+    }
+    drop(echo);
+
+    if fixes.is_empty() {
+        println!("\n  Every key that was pressed sends what it says. Nothing to fix.");
+        return Ok(());
+    }
+
+    let board = sysfs::read_string(std::path::Path::new("/sys/class/dmi/id/board_name"))
+        .unwrap_or_default();
+    if board.is_empty() {
+        bail!("the board name could not be read, so the rule cannot be limited to this board");
+    }
+    let rule = keys::hwdb_rule(&board, &fixes);
+    println!("\n  The rule that fixes these, for board {board} only:\n");
+    for line in rule.lines() {
+        println!("    {line}");
+    }
+
+    if is_root {
+        std::fs::create_dir_all("/etc/udev/hwdb.d")?;
+        std::fs::write(keys::HWDB_PATH, &rule)?;
+        reload_hwdb()?;
+        // From clean defaults, so a mapping from an earlier rule that this
+        // one no longer has does not linger.
+        keys::reset_keymap()?;
+        println!(
+            "\n  Installed as {}. Undo with: sudo omenctl keys reset",
+            keys::HWDB_PATH
+        );
+    } else {
+        let staged = std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
+            })
+            .map(|c| c.join("omen-control/keyboard.hwdb"))
+            .ok_or_else(|| anyhow::anyhow!("no home directory to save the rule in"))?;
+        if let Some(dir) = staged.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&staged, &rule)?;
+        println!(
+            "\n  Saved to {}. Installing it needs root:",
+            staged.display()
+        );
+        println!(
+            "    sudo install -Dm644 {} {}",
+            staged.display(),
+            keys::HWDB_PATH
+        );
+        println!("    sudo systemd-hwdb update");
+        println!("    sudo udevadm trigger -s input");
+        println!("  or run this check again with sudo, which installs it itself.");
+    }
+    Ok(())
+}
+
+/// Rebuilds the hwdb and replays the input devices so a rule takes effect
+/// without a reboot.
+fn reload_hwdb() -> Result<()> {
+    let ok = |cmd: &mut std::process::Command| cmd.status().map(|s| s.success()).unwrap_or(false);
+    if !ok(std::process::Command::new("systemd-hwdb").arg("update")) {
+        bail!("systemd-hwdb update failed");
+    }
+    if !ok(std::process::Command::new("udevadm").args(["trigger", "-s", "input"])) {
+        bail!("udevadm trigger failed");
+    }
+    Ok(())
+}
+
+/// What each platform profile actually allows, measured.
+///
+/// A profile is a request to the firmware, and whether it does anything is a
+/// question of fact: on a sibling of this board another project measured no
+/// difference at all between modes until it took a different path. So this
+/// puts every core under load, switches through the profiles, and reads what
+/// the CPU package draws and how fast it runs once the firmware's limits have
+/// settled - plus the power limit the NVIDIA driver is enforcing, which the
+/// profile moves too.
+///
+/// Measured on 8D24 (2026-09-28): low-power 32 W, balanced 55 W,
+/// performance 60 W; GPU limit 80 / 80 / 100 W. docs/research/profile-power.md.
+fn measure_profiles() -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    const SETTLE: Duration = Duration::from_secs(15);
+    const WINDOW: Duration = Duration::from_secs(10);
+
+    let Some(mut rapl) = omen_core::rapl::Package::discover() else {
+        bail!("no RAPL package counter under /sys/class/powercap - nothing to measure with");
+    };
+    if let Err(e) = rapl.watts() {
+        bail!(
+            "{} is not readable ({e}). Some kernels keep it root-only: sudo omenctl profile measure",
+            rapl.path().join("energy_uj").display()
+        );
+    }
+    let Some(pp) = PlatformProfile::discover() else {
+        bail!("there is no platform_profile to switch");
+    };
+    let before = pp.get()?;
+    let choices = pp.choices();
+
+    println!(
+        "  Loading all {} threads. Each profile gets {}s to settle and {}s of measuring;",
+        std::thread::available_parallelism().map_or(1, |n| n.get()),
+        SETTLE.as_secs(),
+        WINDOW.as_secs()
+    );
+    println!(
+        "  the fans will spin up. Ctrl+C stops the load (the profile then stays where it is).\n"
+    );
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let workers: Vec<_> = (0..std::thread::available_parallelism().map_or(1, |n| n.get()))
+        .map(|_| {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                // Floating point across a wide array, which the compiler turns
+                // into vector code. A scalar integer loop is not enough: it
+                // runs into the clock ceiling before it reaches the power
+                // limit, and then every profile above low-power reads the
+                // same - which says nothing about the limits.
+                let mut a = [1.000_001_f64; 256];
+                while !stop.load(Ordering::Relaxed) {
+                    for _ in 0..2_000 {
+                        for v in a.iter_mut() {
+                            *v = *v * 0.999_999_9 + 1e-9;
+                        }
+                    }
+                    std::hint::black_box(&mut a);
+                }
+            })
+        })
+        .collect();
+
+    let mut rows = Vec::new();
+    let mut failure = None;
+    for profile in &choices {
+        if let Err(e) = client::send(&Request::SetProfile {
+            profile: profile.clone(),
+        })
+        .and_then(client::report)
+        {
+            failure = Some(e);
+            break;
+        }
+        std::thread::sleep(SETTLE);
+        let _ = rapl.watts();
+        let mhz_before = mean_mhz();
+        std::thread::sleep(WINDOW);
+        let watts = rapl.watts().ok().flatten();
+        let mhz = match (mhz_before, mean_mhz()) {
+            (Some(a), Some(b)) => Some((a + b) / 2),
+            (a, b) => a.or(b),
+        };
+        rows.push((profile.clone(), watts, mhz, gpu_power_limit()));
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    for w in workers {
+        let _ = w.join();
+    }
+    let restored = client::send(&Request::SetProfile {
+        profile: before.clone(),
+    });
+
+    println!(
+        "\n  {:<14} {:>10} {:>10} {:>12}",
+        "profile", "CPU", "clock", "GPU limit"
+    );
+    for (profile, watts, mhz, gpu) in &rows {
+        println!(
+            "  {:<14} {:>10} {:>10} {:>12}",
+            profile,
+            watts.map_or("?".into(), |w| format!("{w:.1} W")),
+            mhz.map_or("?".into(), |m| format!("{m} MHz")),
+            gpu.map_or("-".into(), |g| format!("{g:.0} W")),
+        );
+    }
+    match restored {
+        Ok(_) => println!("\n  profile put back to {before}"),
+        Err(e) => println!("\n  could not put the profile back to {before}: {e}"),
+    }
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// The average current clock across all CPUs, from cpufreq.
+fn mean_mhz() -> Option<u32> {
+    let entries = std::fs::read_dir("/sys/devices/system/cpu").ok()?;
+    let khz: Vec<u64> = entries
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .and_then(|n| n.strip_prefix("cpu"))
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .filter_map(|e| sysfs::read_string(&e.path().join("cpufreq/scaling_cur_freq")).ok())
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    (!khz.is_empty()).then(|| (khz.iter().sum::<u64>() / khz.len() as u64 / 1000) as u32)
+}
+
+/// The power limit the NVIDIA driver is enforcing, if there is one to ask.
+/// This wakes the GPU for a moment, which is fine in a one-off test.
+fn gpu_power_limit() -> Option<f32> {
+    let out = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=enforced.power.limit",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
 /// The per-application profiles, as the daemon has them. Read from the daemon
 /// rather than the file so the list shown is the list in force.
 fn app_snapshot() -> Result<Box<omen_core::ipc::Snapshot>> {
@@ -310,8 +690,8 @@ fn app_snapshot() -> Result<Box<omen_core::ipc::Snapshot>> {
         Response::Ok(snap) => Ok(snap),
         Response::Error { message } => bail!("{message}"),
         Response::Done { message } => bail!("unexpected reply: {message}"),
-        Response::History { .. } | Response::Samples { .. } => {
-            bail!("unexpected reply: a log, not a status")
+        Response::History { .. } | Response::Samples { .. } | Response::Presses { .. } => {
+            bail!("unexpected reply: not a status")
         }
     }
 }
@@ -1140,6 +1520,37 @@ fn power_rules(args: &[String]) -> Result<()> {
 }
 
 fn gpu_power(args: &[String]) -> Result<()> {
+    if args.get(1).map(String::as_str) == Some("boost") {
+        let Some(arg) = args.get(2) else {
+            let snap = app_snapshot()?;
+            let Some(b) = snap.gpu_boost else {
+                bail!(
+                    "cTGP and Dynamic Boost are not reported here. They need omen-kbd-rgb \
+                     0.2.0 or newer and an NVIDIA GPU."
+                );
+            };
+            let on = |v: bool| if v { "on" } else { "off" };
+            field("cTGP", on(b.ctgp));
+            field("Dynamic Boost", on(b.ppab));
+            field(
+                "follows",
+                if b.follows_profile {
+                    "the profile (performance: both on, balanced: Dynamic Boost, low-power: neither)"
+                } else {
+                    "nothing - left to the firmware"
+                },
+            );
+            if b.ppab && !omen_core::diagnose::nvidia_powerd_active() {
+                println!();
+                println!("  Dynamic Boost is on, but nvidia-powerd is not running - the driver");
+                println!("  side of it. Start it: sudo systemctl enable --now nvidia-powerd");
+            }
+            return Ok(());
+        };
+        let want = omen_core::gpu::Boost::parse(arg)
+            .ok_or_else(|| anyhow::anyhow!("unknown setting: {arg} (profile / leave)"))?;
+        return client::report(client::send(&Request::SetGpuBoost(want))?);
+    }
     if args.get(1).map(String::as_str) == Some("mux") {
         let snap = app_snapshot()?;
         let Some(mux) = snap.mux.clone() else {
@@ -1150,6 +1561,9 @@ fn gpu_power(args: &[String]) -> Result<()> {
         };
         let Some(mode) = args.get(2) else {
             field("current", mux.current.clone().unwrap_or_else(|| "?".into()));
+            if mux.pending_reboot == Some(true) {
+                field("pending", "yes - a reboot applies it");
+            }
             field("supported", mux.supported.join(" "));
             println!("\n  Switching takes effect at the next boot: the firmware re-wires");
             println!("  the panel during POST, nothing changes while the machine is up.");
@@ -1297,6 +1711,12 @@ fn status() -> Result<()> {
             }
         }
         field("uptime", format!("{} s", snap.uptime_secs));
+        // What the hardware refused, most recent last - the same list the
+        // window turns into notifications.
+        for p in snap.problems.iter().rev().take(3).rev() {
+            let ago = snap.uptime_secs.saturating_sub(p.at_secs);
+            field("refused", format!("{} ({ago} s ago)", p.what));
+        }
         println!();
     }
 

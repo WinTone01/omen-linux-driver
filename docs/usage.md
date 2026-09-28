@@ -23,8 +23,9 @@ traded away.
 
 Everything that changes fan behaviour here goes through `hp-wmi`'s hwmon
 interface, where the kernel clamps the values. The EC is only ever **read**,
-for the dGPU temperature, which is why the packaging ships
-`options ec_sys write_support=0`.
+for the dGPU temperature - by `omen-kbd-rgb` through the kernel's own EC
+driver, or with an older module through `ec_sys`, which is why the packaging
+ships `options ec_sys write_support=0`.
 
 That was a caution when it was written. It turns out to be a requirement.
 The omen-space project keeps a list of machines where direct EC writes are
@@ -103,10 +104,17 @@ dgpu/ec      65.0 C
 nvidia-smi   65
 ```
 
-That needs the `ec_sys` module, loaded **read-only** — omend only ever reads
-temperatures, and everything that writes goes through hp-wmi's hwmon
-interface where the kernel clamps the values. The packaging installs a
-`modules-load.d` entry and a `modprobe.d` option for it. Without it the daemon
+`omen-kbd-rgb` reads it in the kernel, with `ec_read()`, and publishes it as
+an hwmon device named `omen` (`temp1_input`, labelled `dGPU`) on OMEN and
+Victus machines. So `sensors` shows it, omend needs no root-only debugfs file
+for it, and `ec_sys` is no longer loaded at boot. A 0 in the register is
+reported as "no data" rather than as 0 °C.
+
+With a module older than 0.2.0, omend falls back to reading the same byte
+through `ec_sys`, loaded **read-only** — the packaging keeps the
+`options ec_sys write_support=0` line for that case, and everything that
+writes still goes through hp-wmi's hwmon interface where the kernel clamps
+the values. With neither, the daemon
 still runs, follows the CPU alone, and says so at startup.
 
 ## The fan curve is HP's own
@@ -287,12 +295,22 @@ The key above the keyboard reaches Linux as `KEY_PROG2`, delivered through the
 input device `hp-wmi` creates ("HP WMI hotkeys"). Most desktops have nothing
 bound to it, so out of the box it does nothing at all.
 
-`omend` watches that device and, by default, **opens the window** - which is
-what the key does on Windows and so what someone pressing it expects. It goes
-through the socket omen-ui already listens on for a second launch, so the
-daemon never has to start a GUI in someone else's session, which from a root
-service is both awkward and a bad idea. If the window is not running, the
-press is logged and nothing happens.
+`omend` watches that device and, by default, **opens the window**. That is
+what the key does on Windows, so it is what someone pressing it expects.
+
+The daemon cannot raise the window itself. The service is sandboxed:
+`ProtectHome=yes` hides `/run/user`, and root with an empty capability set
+could not enter a user's runtime directory anyway. So the daemon counts the
+presses, and the window asks for that count four times a second over the
+daemon's socket, showing itself when it goes up. Nothing needs loosening, and
+no `input` group is needed. It does mean the window has to be running for the
+key to open it. With *Start with the session* and *Start hidden in the tray*
+on in Settings, it always is.
+
+A first version had the daemon connect to the window's own socket under
+`/run/user`. It seemed to work only because the daemon under test ran as the
+user. The installed service could never reach that socket, and it said so
+only in a debug message.
 
 ```bash
 omenctl key            # what it is bound to now
@@ -602,7 +620,7 @@ instead, for the reason in the incident above.
 crates/omen-core/    sysfs, fan, thermal, curve, config, IPC   (19 tests)
 crates/omend/        daemon: curve engine + safety state machine + socket
 crates/omenctl/      status tool and daemon client
-kernel/omen-kbd-rgb/ 4-zone RGB keyboard module (leds-multicolor)
+kernel/omen-kbd-rgb/ keyboard (leds-multicolor), graphics mux, dGPU hwmon
 packaging/           systemd unit, example config, sysusers
 docs/                phase plan, RGB protocol
 ```
@@ -638,7 +656,37 @@ alongside `hp-wmi` — no `blacklist hp_wmi` needed. Protocol:
 
 The global brightness LED is deliberately named `omen::kbd_backlight`: desktop
 environments and `upower` look for keyboard backlights matching
-`*::kbd_backlight`, so the brightness keys work.
+`*::kbd_backlight`, so the brightness keys work. Fn+F4 is followed too. The
+firmware steps the keyboard through bright, dim (its own 50 %) and off without
+telling anyone, so the module checks every two seconds (`poll_ms` module
+parameter; 0 turns it off). It reports each step through
+`brightness_hw_changed`, which is what the desktop's on-screen indicator
+listens to. The value it reports is what the keyboard shows: the level set
+here times the firmware's. The firmware's dim level cannot be set from
+software; only Fn+F4 reaches it. See research/rgb-protocol.md §2.
+
+What else the module does on its own:
+
+* **Colours survive sleep.** They live in the EC, which the firmware may
+  reinitialise; the module writes them back on resume, daemon or not.
+* **Writes are folded.** One firmware call carries all four zones, and
+  changes that arrive together — a whole keyboard, or an effect frame — go
+  out as one.
+* **It asks before it lights anything.** `LM01` says whether there is a
+  backlight and which kind; anything but the 4-zone type is left alone,
+  rather than dressed up as four RGB zones.
+
+Module files, under `/sys/devices/platform/omen-kbd-rgb/`:
+
+| | |
+|---|---|
+| `backlight_active` | 1 while the keyboard is lit, asked of the firmware |
+| `gpu_mux_mode` | the mode the next boot uses; write `hybrid`, `discrete` or `uma` |
+| `gpu_mux_supported` | what the firmware declares |
+| `gpu_mux_pending_reboot` | 1 when the mode differs from the one in force at load |
+
+The raw lighting block of the extended EC RAM that the research used is in
+debugfs now, on 8D24 only: `/sys/kernel/debug/omen-kbd-rgb/lighting_regs`.
 
 ## Status
 
@@ -648,3 +696,97 @@ environments and `upower` look for keyboard backlights matching
 | M1b `omenctl` control commands (unix socket) | **working** |
 | M2 `omen-kbd-rgb` kernel module | **working**, verified on the machine |
 | M3 Tauri UI | planned |
+
+## GPU power allowance: cTGP and Dynamic Boost
+
+```bash
+omenctl gpu boost              # what the firmware has now
+omenctl gpu boost profile      # follow the profile (the default)
+omenctl gpu boost leave        # leave them to the firmware
+```
+
+The firmware has two switches for the discrete GPU's power, read with WMI
+command `0x21` and set with `0x22`: **cTGP** (configurable TGP) and **Dynamic
+Boost**, which lets the GPU borrow power the CPU is not using. The vendor
+software sets both with every profile change. hp-wmi does the same on the
+Victus S boards, but not on `omen_v1_legacy` boards like 8D24. omen-kbd-rgb
+0.2.0 exposes them as `gpu_ctgp` and `gpu_ppab`, and omend follows hp-wmi's
+mapping:
+
+| Profile | cTGP | Dynamic Boost |
+|---|---|---|
+| performance | on | on |
+| balanced | off | on |
+| low-power | off | off |
+
+Dynamic Boost has a second half, **nvidia-powerd**, which does the shifting
+at run time. Without it the switch is accepted and does nothing, and
+`omenctl doctor` says so.
+
+## What each profile allows
+
+```bash
+omenctl profile measure
+```
+
+Loads every core, switches through the profiles, and prints what the CPU
+package draws once the firmware's limits settle. It also prints the clock and
+the GPU power limit the NVIDIA driver is enforcing. It takes about a minute
+and a half and puts the profile back afterwards. On 8D24, on mains:
+
+| Profile | CPU | Clock | GPU limit |
+|---|---|---|---|
+| low-power | 31.7 W | 1992 MHz | 80 W |
+| balanced | 55.0 W | 3479 MHz | 80 W |
+| performance | 60.0 W | 3552 MHz | 100 W |
+
+Method and what the numbers mean: [research/profile-power.md](research/profile-power.md).
+
+## GPU load on the vitals page
+
+NVIDIA publishes the GPU's load, power and clock only through NVML, and
+opening the GPU to ask counts as using it. Asking every two seconds would keep
+it awake forever, which is the problem the Graphics page exists to catch. So
+the window asks through `nvidia-smi` only while the GPU is already awake **and**
+a program other than a query tool is rendering on it (`/dev/nvidiaN` open).
+The rest of the time the GPU ring shows the temperature, as before.
+
+## Keys that send the wrong thing
+
+```bash
+omenctl keys check     # needs the 'input' group, or sudo
+omenctl keys reset
+```
+
+Some HP boards send the wrong key for Print Screen or F1, and other projects
+fix that with an hwdb rule for every HP laptop. A rule like that breaks the same
+keys on a board where they were right. So this one measures instead: it names
+a key, you press it, and it reads the scancode and the keycode from the
+keyboard itself. Everything one key sends is collected, not just the first
+event: on 8D24 some keys send a combination, and a first version that stopped
+at the first event wrote a rule turning the Super key into F1. Top-row keys
+are asked for twice, on their own and with Fn, because which half is the
+default is a BIOS setting. A key counts as broken only if neither way sends it.
+A modifier (Ctrl, Shift, Alt, Super, Fn) is never remapped.
+
+On 8D24, **Fn+F12 is the Windows-key lock**. The firmware handles it, so the
+toggle sends no event, and while the lock is on the Windows key sends nothing
+at all. A Windows key that looks dead is usually this. The check says so when
+the Windows key sends nothing. The rule covers
+only keys that came out wrong, only for this board (`rn8D24`), and goes to
+`/etc/udev/hwdb.d/90-omen-keyboard.hwdb`. Run
+without root, it saves the rule in `~/.config/omen-control/keyboard.hwdb` and
+prints the commands that install it.
+
+## Notifications
+
+With *Warn me* on in Settings, the window raises a desktop notification in
+these cases, once each:
+
+* the fans are forced to full power;
+* the service tries a hardware command and the firmware refuses it (a profile,
+  the GPU settings, the fans' mode). The service keeps the last twenty;
+  `omenctl status` shows the most recent three;
+* the fans stop doing what they were told;
+* the service stops responding, which leaves the fans to the firmware.
+

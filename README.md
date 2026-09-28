@@ -168,7 +168,7 @@ FAN
   OK   Firmware thermal profile   hp-wmi is a platform_profile handler (amd-pmf, hp-wmi)
   OK   Fan tachometers            fan1 1700 RPM, fan2 1500 RPM
 THERMAL
-  OK   EC write access            ec_sys is loaded read-only, which is what this project expects
+  OK   EC write access            ec_sys is not loaded, or is read-only
 ```
 
 <details>
@@ -206,7 +206,7 @@ Three pieces, in the order they depend on each other:
 | | Gives you |
 |---|---|
 | `hp-wmi` with the 8D24 entry | `pwm1`, fan tachometers, `platform_profile` |
-| `omen-kbd-rgb` | four RGB zones, `gpu_mux_mode` |
+| `omen-kbd-rgb` | four RGB zones, `gpu_mux_mode`, the dGPU temperature as hwmon, cTGP and Dynamic Boost |
 | `omen-control` | `omend`, `omenctl`, `omen-ui`, the unit and the udev rules |
 
 Before any of that it identifies the board, because the EC registers and WMI
@@ -322,7 +322,7 @@ crates/             omen-core · omend (the daemon) · omenctl (the CLI)
 ui/                 omen-ui — the window
 kernel/
   hp-wmi-8d24/      the board entry: patch, build script, verify.sh
-  omen-kbd-rgb/     4 RGB zones and the graphics mux
+  omen-kbd-rgb/     4 RGB zones, the graphics mux, the dGPU temperature
 packaging/          systemd unit, udev rules, sysusers, PKGBUILD
 docs/
   usage.md          configuration and the commands in full

@@ -335,13 +335,36 @@ fn graphics() -> String {
         Some(mux) => {
             let _ = writeln!(
                 out,
-                "mux           {} (supported: {})",
+                "mux           {} (supported: {}; pending reboot: {})",
                 mux.current.as_deref().unwrap_or("unknown"),
-                mux.supported.join(" ")
+                mux.supported.join(" "),
+                match mux.pending_reboot {
+                    Some(true) => "yes",
+                    Some(false) => "no",
+                    None => "not reported",
+                }
             );
         }
         None => {
             let _ = writeln!(out, "mux           none reported by the driver");
+        }
+    }
+    match crate::gpu::boost::read_state() {
+        Some((ctgp, ppab)) => {
+            let _ = writeln!(
+                out,
+                "gpu power     cTGP {}, Dynamic Boost {}, nvidia-powerd {}",
+                ctgp as u8,
+                ppab as u8,
+                if crate::diagnose::nvidia_powerd_active() {
+                    "running"
+                } else {
+                    "not running"
+                }
+            );
+        }
+        None => {
+            let _ = writeln!(out, "gpu power     not reported by the driver");
         }
     }
     match crate::gpu::discover() {

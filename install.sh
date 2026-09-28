@@ -309,7 +309,7 @@ uninstall() {
                    /usr/share/applications/dev.wintone.omen-control.desktop
         ok "files removed"
     fi
-    sudo dkms remove -m omen-kbd-rgb -v "$VERSION" --all >/dev/null 2>&1 || true
+    sudo dkms remove -m omen-kbd-rgb --all >/dev/null 2>&1 || true
     sudo dkms remove -m hp-wmi-8d24 --all >/dev/null 2>&1 || true
 
     step "What is left"

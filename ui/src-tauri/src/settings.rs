@@ -23,7 +23,9 @@ pub struct Settings {
     /// How often the window asks the daemon for a new reading, in
     /// milliseconds.
     pub poll_ms: u32,
-    /// Raise a desktop notification when the fans are forced to full power.
+    /// Raise a desktop notification when the fans are forced to full power,
+    /// when the service refuses a hardware command, or when it goes away.
+    /// when the service refuses a hardware command, or when it goes away.
     pub alerts: bool,
     /// Start with the session.
     pub autostart: bool,

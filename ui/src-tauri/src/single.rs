@@ -100,18 +100,66 @@ pub fn listen(app: &tauri::AppHandle) {
                 }
                 let tab = words.next().map(str::to_owned);
 
-                let handle = app.clone();
-                // Windows may only be touched from the main thread.
-                let _ = app.run_on_main_thread(move || {
-                    if let Some(window) = handle.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.unminimize();
-                        let _ = window.set_focus();
-                        if let Some(tab) = tab {
-                            let _ = window.emit("omen://open-tab", tab);
+                show(&app, tab);
+            }
+        })
+        .ok();
+}
+
+/// Brings the window up, optionally on a page.
+fn show(app: &tauri::AppHandle, tab: Option<String>) {
+    let handle = app.clone();
+    // Windows may only be touched from the main thread.
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+            if let Some(tab) = tab {
+                let _ = window.emit("omen://open-tab", tab);
+            }
+        }
+    });
+}
+
+/// Shows the window when the OMEN key is pressed.
+///
+/// The daemon sees the key - it arrives through hp-wmi's input device - but
+/// cannot reach into this session to raise a window, so it counts presses
+/// and this asks for the count. A few times a second over the daemon's own
+/// socket is a handful of bytes, and it needs neither the 'input' group nor
+/// any loosening of the service's sandbox.
+///
+/// The first answer only sets the baseline: presses from before the window
+/// started are not a request to show it now.
+pub fn watch_omen_key(app: &tauri::AppHandle) {
+    use omen_core::ipc::{client, Request, Response};
+    use std::time::Duration;
+
+    let app = app.clone();
+    std::thread::Builder::new()
+        .name("omen-key".into())
+        .spawn(move || {
+            let mut seen: Option<u64> = None;
+            loop {
+                match client::send(&Request::OmenKeyPresses) {
+                    Ok(Response::Presses { count }) => {
+                        if seen.is_some_and(|before| count > before) {
+                            show(&app, None);
                         }
+                        // A restarted daemon starts again from zero; take its
+                        // count as the new baseline rather than waiting for
+                        // it to pass the old one.
+                        seen = Some(count);
+                        std::thread::sleep(Duration::from_millis(250));
                     }
-                });
+                    // No daemon, or one too old to know the request: ask
+                    // again later rather than hammer it.
+                    _ => {
+                        seen = None;
+                        std::thread::sleep(Duration::from_secs(5));
+                    }
+                }
             }
         })
         .ok();

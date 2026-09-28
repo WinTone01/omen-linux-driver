@@ -191,11 +191,12 @@ impl Action {
             Self::ReloadHpWmi => crate::about::module_status("hp_wmi").stale(),
             Self::ReloadRgb => crate::about::module_status("omen_kbd_rgb").stale(),
             // Only worth offering where it would buy something: the GPU
-            // temperature comes from the EC, and without the module nothing
-            // can read it.
+            // temperature comes from the EC, and an omen-kbd-rgb older than
+            // 0.2.0 does not publish it - ec_sys is then the only way in.
             Self::LoadEcSys => {
                 !std::path::Path::new("/sys/module/ec_sys").exists()
                     && std::path::Path::new("/sys/module/hp_wmi").exists()
+                    && !crate::sysfs::Hwmon::all().iter().any(|h| h.name == "omen")
             }
             Self::JoinOmenGroup => group_exists() && !in_omen_group(),
         }

@@ -49,7 +49,10 @@ const mockState = {
       holders: [{ pid: 1688, name: "quickshell",
                   nodes: ["/dev/dri/renderD128", "/dev/nvidia0"] }],
     },
-    mux: { supported: ["uma", "hybrid", "discrete"], current: "hybrid" },
+    mux: { supported: ["uma", "hybrid", "discrete"], current: "hybrid",
+           pending_reboot: false },
+    gpu_boost: { ctgp: false, ppab: true, follows_profile: true },
+    problems: [],
   },
   daemon_error: null,
   leds: {
@@ -177,7 +180,13 @@ async function mockInvoke(cmd, args) {
       };
     case "set_gpu_mux":
       mockState.daemon.mux.current = args.mode;
+      mockState.daemon.mux.pending_reboot = args.mode !== "hybrid";
       return `graphics set to ${args.mode}; it takes effect after a reboot`;
+    case "set_gpu_boost":
+      mockState.daemon.gpu_boost.follows_profile = args.mode === "profile";
+      return args.mode === "profile"
+        ? "cTGP and Dynamic Boost now follow the profile"
+        : "cTGP and Dynamic Boost are left to the firmware";
     case "set_dgpu_power":
       mockState.daemon.gpu.control = args.power;
       return args.power === "auto"
@@ -598,20 +607,36 @@ function renderDaemon(s) {
   const cpu = d.driver_temp_c;
 
   // The Hub puts utilization in the ring and temperature in a badge below
-  // it. We follow that where we have both: the CPU has a real load figure,
-  // the GPU does not (NVIDIA exposes utilization only through NVML), so its
-  // ring shows temperature and says so.
+  // it. We follow that where we have both. The GPU's load comes from NVML,
+  // which is only asked while a program is already rendering on it - asking
+  // otherwise would wake it - so the rest of the time its ring shows
+  // temperature and says so.
   const cpuTemp = namedTemp(d, "cpu") ?? cpu;
   if (cpuTemp != null) setBadge("#cpu-badge", cpuTemp);
   $("#cpu-label").textContent = d.driver_label ?? "";
 
   const gpuTemp = namedTemp(d, "dgpu") ?? namedTemp(d, "igpu");
-  if (gpuTemp != null) {
+  const load = s.gpu_load ?? null;
+  if (load?.util_pct != null) {
+    $("#gpu-temp").textContent = `${load.util_pct}%`;
+    $("#gpu-sub").textContent = t("GPU Usage");
+    setRing("#ring-gpu", load.util_pct, gpuTemp != null ? heat(gpuTemp) : "");
+    if (gpuTemp != null) setBadge("#gpu-badge", gpuTemp);
+    const parts = [t("discrete")];
+    if (load.power_w != null) {
+      parts.push(load.power_limit_w != null
+        ? `${load.power_w.toFixed(0)} / ${load.power_limit_w.toFixed(0)} W`
+        : `${load.power_w.toFixed(0)} W`);
+    }
+    if (load.clock_mhz != null) parts.push(`${load.clock_mhz} MHz`);
+    $("#gpu-label").textContent = parts.join(" · ");
+  } else if (gpuTemp != null) {
     $("#gpu-temp").textContent = `${gpuTemp.toFixed(0)}°`;
+    $("#gpu-sub").textContent = t("GPU Temperature");
     setRing("#ring-gpu", pct(gpuTemp, 30, 100), heat(gpuTemp));
     setBadge("#gpu-badge", gpuTemp);
-    $("#gpu-label").textContent = d.temps?.find(([l]) => l.startsWith("dgpu"))
-      ? "discrete" : "integrated";
+    $("#gpu-label").textContent = t(d.temps?.find(([l]) => l.startsWith("dgpu"))
+      ? "discrete" : "integrated");
   }
 
   for (const [key, value] of [["fan1", d.fan1_rpm], ["fan2", d.fan2_rpm]]) {
@@ -714,25 +739,28 @@ function fmtUptime(secs) {
   return h > 0 ? `${h} h ${m} min` : `${m} min ${secs % 60} s`;
 }
 
-/* Measured on this machine, on battery, in both orders and with enough
- * settling time - a first attempt with two seconds produced "balanced is the
- * same as low-power", which is wrong. */
+/* Measured on this machine. The clocks on battery, in both orders and with
+ * enough settling time - a first attempt with two seconds produced "balanced
+ * is the same as low-power", which is wrong. The watts on mains under a load
+ * that reaches the power limit (omenctl profile measure,
+ * docs/research/profile-power.md). */
 const PROFILE_INFO = {
   "low-power": {
     blurb:
-      "Caps the CPU at 2.0 GHz. A real limit rather than a preference, for " +
-      "stretching the battery.",
+      "Caps the CPU at 2.0 GHz - about 32 W under full load. A real limit " +
+      "rather than a preference, for stretching the battery.",
     icon: "M12 3v9m0 9a8 8 0 0 1-5.7-13.7M12 21a8 8 0 0 0 5.7-13.7",
   },
   balanced: {
     blurb:
-      "Full 5.09 GHz boost, but reluctant about it. Firmware profile 0x30.",
+      "Full 5.09 GHz boost, but reluctant about it; 55 W sustained. GPU " +
+      "limited to 80 W. Firmware profile 0x30.",
     icon: "M3 12h4l3-7 4 14 3-7h4",
   },
   performance: {
     blurb:
-      "Same 5.09 GHz ceiling, reached sooner and held longer. Firmware " +
-      "profile 0x31.",
+      "Same 5.09 GHz ceiling, reached sooner and held longer; 60 W " +
+      "sustained, and the GPU's limit goes to 100 W. Firmware profile 0x31.",
     icon: "M13 2 4 14h6l-1 8 9-12h-6l1-8Z",
   },
 };
@@ -741,7 +769,10 @@ function renderProfiles(s) {
   const box = $("#profile-cards");
   const current = s.daemon?.profile;
 
-  if (box.dataset.built !== String(s.profile_choices.length)) {
+  // Rebuilt when the language changes too: the blurbs are translated once,
+  // when the cards are made.
+  const built = `${s.profile_choices.length}:${LANG}`;
+  if (box.dataset.built !== built) {
     box.innerHTML = "";
     s.profile_choices.forEach((name) => {
       const info = PROFILE_INFO[name] ?? { blurb: "", icon: "" };
@@ -750,7 +781,7 @@ function renderProfiles(s) {
       card.dataset.profile = name;
       card.innerHTML =
         `<svg class="power-card__icon" viewBox="0 0 24 24"><path d="${info.icon}"/></svg>` +
-        `<h3>${name.replace("-", " ")}</h3><p>${info.blurb}</p>` +
+        `<h3>${name.replace("-", " ")}</h3><p>${t(info.blurb)}</p>` +
         // Said in words as well as in colour: which profile is in force is
         // the single most important thing on this page, and a border is not
         // an answer for somebody who cannot see the difference.
@@ -758,7 +789,7 @@ function renderProfiles(s) {
       card.addEventListener("click", () => act(() => invoke("set_profile", { profile: name })));
       box.append(card);
     });
-    box.dataset.built = String(s.profile_choices.length);
+    box.dataset.built = built;
   }
   // Scoped to this grid. The graphics page draws its mux options with the
   // same class, and an unscoped selector cleared their selection on every
@@ -1711,10 +1742,8 @@ function bindTriggers() {
 
 /* ── graphics ────────────────────────────────────────────────────
  *
- * There is nothing to switch on this board - no mux, the panel is wired to
- * the integrated GPU - so this panel does the two things that are real:
- * report what the discrete GPU is doing and who is stopping it sleeping, and
- * let its runtime power policy be set.
+ * The discrete GPU's runtime power: what it is doing, who is stopping it
+ * sleeping, and whether it may. The mux has its own card (renderMux).
  */
 
 function renderGraphics(s) {
@@ -1758,7 +1787,32 @@ function renderGraphics(s) {
       : "";
 }
 
+/* cTGP and Dynamic Boost. Shown only where the module reports them. */
+function renderBoost(s) {
+  const b = s.daemon?.gpu_boost ?? null;
+  const card = $("#boost-card");
+  if (!card) return;
+  card.hidden = !b;
+  if (!b) return;
+
+  const onOff = (v) => t(v ? "on" : "off");
+  $$("#boost-mode button").forEach((btn) =>
+    btn.classList.toggle("is-active",
+      btn.dataset.boost === (b.follows_profile ? "profile" : "leave")));
+  $("#boost-ctgp").textContent = onOff(b.ctgp);
+  $("#boost-ppab").textContent = onOff(b.ppab);
+  $("#boost-powerd").textContent = t(s.nvidia_powerd ? "running" : "not running");
+  $("#boost-powerd").className = s.nvidia_powerd || !b.ppab ? "" : "is-warn";
+  $("#boost-note").textContent = b.ppab && !s.nvidia_powerd
+    ? t("Dynamic Boost is on but nvidia-powerd is not running")
+    : "";
+}
+
 function bindGraphics() {
+  $$("#boost-mode button").forEach((btn) =>
+    btn.addEventListener("click", () =>
+      act(() => invoke("set_gpu_boost", { mode: btn.dataset.boost }))));
+
   $$("#gfx-power button").forEach((b) =>
     b.addEventListener("click", () =>
       act(() => invoke("set_dgpu_power", { power: b.dataset.power }))));
@@ -1965,6 +2019,54 @@ function maybeAlert(s) {
     toast(`${t("fans forced to full power")} - ${reason}`, true);
   }
   lastFallback = now;
+}
+
+/* The other things worth a notification, each on its edge only:
+ *   - a hardware command the service tried and the firmware refused (a
+ *     profile that would not set, a GPU setting, the fans' mode);
+ *   - the service going away, which leaves the fans to the EC;
+ *   - the fans not doing what they were told.
+ * Problems that were already there when the window opened are not
+ * announced: the window did not see them happen. */
+let lastProblemId = null;
+let hadDaemon = null;
+let lastDrift = null;
+
+function maybeNotify(s) {
+  if (!settings?.alerts) {
+    lastProblemId = null;
+    hadDaemon = null;
+    lastDrift = null;
+    return;
+  }
+  const d = s.daemon;
+  const say = (title, body, urgency) => {
+    invoke("notify", { title, body, urgency }).catch(() => {});
+    toast(`${title} - ${body}`, true);
+  };
+
+  if (d) {
+    const newest = Math.max(0, ...(d.problems ?? []).map((p) => p.id));
+    if (lastProblemId !== null) {
+      (d.problems ?? [])
+        .filter((p) => p.id > lastProblemId)
+        .slice(-3)
+        .forEach((p) => say(t("the service could not do something"), p.what, "normal"));
+    }
+    lastProblemId = newest;
+
+    if (d.drift && lastDrift === null && hadDaemon !== null) {
+      say(t("the fans are not doing what they were told"), d.drift, "normal");
+    }
+    lastDrift = d.drift ?? null;
+  }
+
+  const has = !!d;
+  if (hadDaemon === true && !has) {
+    say(t("the service stopped responding"),
+      s.daemon_error ?? t("the fans are with the firmware until it is back"), "critical");
+  }
+  hadDaemon = has;
 }
 
 function bindSettings() {
@@ -2679,9 +2781,13 @@ function renderMux(s) {
 
   $$("#mux-cards .power-card").forEach((c) =>
     c.classList.toggle("is-active", c.dataset.mux === mux.current));
-  $("#mux-note").textContent = mux.current
-    ? `${t("now")}: ${mux.current}`
-    : "";
+  // "now" would be wrong once a switch is waiting for the reboot: the
+  // firmware reports the mode it will boot into, not the one in force.
+  $("#mux-note").textContent = !mux.current
+    ? ""
+    : mux.pending_reboot
+      ? `${t("after the next restart")}: ${mux.current}`
+      : `${t("now")}: ${mux.current}`;
 }
 
 /* The three numbers the Hub puts under the mode cards, and the fan switch
@@ -2874,6 +2980,7 @@ async function refresh() {
   renderBattery(state);
   renderCaps(state);
   renderGraphics(state);
+  renderBoost(state);
   renderPowerRules(state);
   renderExtras(state);
   renderSystem();
@@ -2883,6 +2990,7 @@ async function refresh() {
   renderStartupProfile(state);
   renderTrayDependent(state);
   maybeAlert(state);
+  maybeNotify(state);
   renderLeds(state);
   renderEffect(state);
   renderLightMode(state);

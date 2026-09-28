@@ -456,15 +456,17 @@ fn thermal(snapshot: &DaemonView) -> Section {
                     "the service is not watching it - the curve only follows the CPU",
                 )
                 .with_fix(
-                    "The GPU's temperature is read from the EC, which needs the ec_sys \
-                     module: sudo modprobe ec_sys  (read-only; do NOT pass \
-                     write_support=1 on this board). Then: sudo systemctl restart omend",
+                    "The GPU's temperature comes from the omen-kbd-rgb module, which \
+                     publishes it as hwmon from version 0.2.0: ./install.sh updates it, \
+                     then sudo systemctl restart omend. With an older module, \
+                     sudo modprobe ec_sys (read-only; do NOT pass write_support=1 on this \
+                     board) does the same through debugfs.",
                 ),
                 (None, false) => Check::new(
                     "dgpu_temp",
                     "Discrete GPU temperature",
                     Verdict::Skip,
-                    "cannot be read from here - it comes from the EC, which needs root",
+                    "not published by the module here; the ec_sys fallback needs root",
                 ),
             });
         }
@@ -797,6 +799,30 @@ fn graphics() -> Section {
                     ),
                 )
             });
+
+            // Dynamic Boost has two halves: the firmware switch this project
+            // sets, and nvidia-powerd, which does the actual shifting of
+            // power at run time. Either one alone does nothing.
+            if let Some((ctgp, ppab)) = gpu::boost::read_state() {
+                let on = |v: bool| if v { "on" } else { "off" };
+                checks.push(if ppab && !nvidia_powerd_active() {
+                    Check::new(
+                        "dynamic_boost",
+                        "GPU power allowance",
+                        Verdict::Warn,
+                        "Dynamic Boost is switched on in the firmware, but nvidia-powerd \
+                         is not running - so the GPU never gets the extra power",
+                    )
+                    .with_fix("sudo systemctl enable --now nvidia-powerd")
+                } else {
+                    Check::new(
+                        "dynamic_boost",
+                        "GPU power allowance",
+                        Verdict::Ok,
+                        format!("cTGP {}, Dynamic Boost {}", on(ctgp), on(ppab)),
+                    )
+                });
+            }
         }
     }
 
@@ -812,8 +838,13 @@ fn graphics() -> Section {
             "Graphics switcher",
             Verdict::Ok,
             format!(
-                "{} (supports {})",
+                "{}{} (supports {})",
                 mux.current.clone().unwrap_or_else(|| "?".into()),
+                if mux.pending_reboot == Some(true) {
+                    ", from the next boot"
+                } else {
+                    ""
+                },
                 mux.supported.join(", ")
             ),
         ),
@@ -940,6 +971,24 @@ fn conflicts() -> Section {
         title: "Coexistence".into(),
         checks,
     }
+}
+
+/// Whether nvidia-powerd - the driver's side of Dynamic Boost - is running.
+///
+/// Looked for in /proc rather than asked of systemd: it needs no process
+/// spawn, and every user can read another process's name.
+pub fn nvidia_powerd_active() -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        e.file_name()
+            .to_string_lossy()
+            .bytes()
+            .all(|b| b.is_ascii_digit())
+            && std::fs::read_to_string(e.path().join("comm"))
+                .is_ok_and(|c| c.trim() == "nvidia-powerd")
+    })
 }
 
 #[cfg(test)]

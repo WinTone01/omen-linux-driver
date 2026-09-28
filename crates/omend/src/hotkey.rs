@@ -16,10 +16,10 @@
 //! integers is not a good trade in a daemon that controls fans.
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::unix::fs::FileTypeExt;
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use log::{debug, info, warn};
@@ -124,48 +124,24 @@ fn find_device() -> Option<PathBuf> {
     None
 }
 
-/// Asks the window to show itself.
+/// How many times the OMEN key has asked for the window.
 ///
-/// Through the socket omen-ui already listens on for a second launch - the
-/// one that makes `omen-ui --tab graphics` raise the running window instead
-/// of starting a second copy. Reusing it means the daemon needs no way to
-/// start a GUI in someone else's session, which from a root service is both
-/// awkward and a bad idea.
-///
-/// The runtime directory is per-user and the daemon is root, so the socket is
-/// found by looking rather than by knowing whose session this is. Normally
-/// there is exactly one.
+/// The window asks for this number (Request::OmenKeyPresses) and shows itself
+/// when it goes up. The other way round - the daemon reaching into the user's
+/// session to raise it - cannot work under the service's sandbox:
+/// ProtectHome=yes hides /run/user entirely, and a root process with an empty
+/// capability set could not enter someone's 0700 runtime directory anyway.
+/// The first version tried exactly that, and it only ever looked like it
+/// worked when the daemon under test was run as the user.
+static PRESSES: AtomicU64 = AtomicU64::new(0);
+
+pub fn presses() -> u64 {
+    PRESSES.load(Ordering::Relaxed)
+}
+
 fn show_window() {
-    let Ok(entries) = std::fs::read_dir("/run/user") else {
-        debug!("no /run/user - nothing to raise");
-        return;
-    };
-
-    let mut asked = false;
-    for entry in entries.flatten() {
-        let socket = entry.path().join("omen-control.sock");
-        if !socket.exists() {
-            continue;
-        }
-        match UnixStream::connect(&socket) {
-            Ok(mut stream) => {
-                // The same word the second instance sends. A page could
-                // follow; the key opens whatever was last looked at, which is
-                // what a hardware button should do.
-                if stream.write_all(b"show\n").is_ok() {
-                    info!("OMEN key: raising the window");
-                    asked = true;
-                }
-            }
-            // A socket file with nobody listening is what a crash leaves
-            // behind; not worth a warning.
-            Err(e) => debug!("{}: {e}", socket.display()),
-        }
-    }
-
-    if !asked {
-        info!("OMEN key: the window is not running");
-    }
+    PRESSES.fetch_add(1, Ordering::Relaxed);
+    info!("OMEN key: asking the window to show itself");
 }
 
 /// Next profile in the list the firmware offers, wrapping round.

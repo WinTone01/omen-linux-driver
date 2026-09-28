@@ -57,11 +57,9 @@ impl GpuPower {
 
 /// What the dGPU's runtime power management is allowed to do.
 ///
-/// This is not a graphics switch, because this board does not have one: the
-/// panel is wired to the integrated GPU (the NVIDIA card has no eDP
-/// connector, only HDMI), there is no `gpu_mux_mode`, and the DSDT does not
-/// mention a mux at all. What can be chosen is whether the discrete GPU is
-/// allowed to sleep when nothing is using it.
+/// This is not the graphics switch - that is [`mux`], which re-wires the
+/// panel at the next boot. This is whether the discrete GPU is allowed to
+/// sleep when nothing is using it, which matters in hybrid mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DgpuPower {
@@ -354,8 +352,13 @@ pub mod mux {
     pub struct Mux {
         /// What the firmware says it can do: "hybrid", "discrete", "uma".
         pub supported: Vec<String>,
-        /// What it is set to now.
+        /// What the firmware is set to - the mode the next boot will use.
         pub current: Option<String>,
+        /// Whether `current` differs from the mode in force, so a reboot is
+        /// needed before it means anything. `None` with a module older than
+        /// 0.2.0, which does not say.
+        #[serde(default)]
+        pub pending_reboot: Option<bool>,
     }
 
     fn path(file: &str) -> PathBuf {
@@ -381,6 +384,7 @@ pub mod mux {
         }
         Some(Mux {
             current: read("gpu_mux_mode"),
+            pending_reboot: read("gpu_mux_pending_reboot").map(|v| v == "1"),
             supported,
         })
     }
@@ -401,5 +405,285 @@ pub mod mux {
         }
         let file = path("gpu_mux_mode");
         std::fs::write(&file, mode).map_err(|source| crate::Error::Write { path: file, source })
+    }
+}
+
+/// The discrete GPU's power allowance: configurable TGP and Dynamic Boost.
+///
+/// Reported by omen-kbd-rgb from the firmware's GM21 and set through GM22 -
+/// the same pair hp-wmi uses on the Victus S boards, which switches them with
+/// the platform profile. On an omen_v1_legacy board such as 8D24 hp-wmi does
+/// not, so the daemon does it instead (see [`Boost`]).
+pub mod boost {
+    use std::path::{Path, PathBuf};
+
+    use serde::{Deserialize, Serialize};
+
+    const DIR: &str = "/sys/devices/platform/omen-kbd-rgb";
+
+    /// What the firmware has, and whether the daemon is keeping it in step
+    /// with the profile.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct State {
+        /// Configurable TGP.
+        pub ctgp: bool,
+        /// Dynamic Boost: the GPU may borrow power the CPU is not using.
+        pub ppab: bool,
+        /// Whether the configuration has these follow the profile.
+        #[serde(default)]
+        pub follows_profile: bool,
+    }
+
+    fn path(file: &str) -> PathBuf {
+        Path::new(DIR).join(file)
+    }
+
+    fn read(file: &str) -> Option<bool> {
+        std::fs::read_to_string(path(file))
+            .ok()
+            .map(|s| s.trim() == "1")
+    }
+
+    /// `None` without the module, or on a machine with no NVIDIA GPU.
+    pub fn read_state() -> Option<(bool, bool)> {
+        Some((read("gpu_ctgp")?, read("gpu_ppab")?))
+    }
+
+    fn write(file: &str, on: bool) -> crate::error::Result<()> {
+        let p = path(file);
+        std::fs::write(&p, if on { "1" } else { "0" })
+            .map_err(|source| crate::Error::Write { path: p, source })
+    }
+
+    /// Writes only what differs: each write is a firmware call that notifies
+    /// the NVIDIA platform controller.
+    pub fn set(ctgp: bool, ppab: bool) -> crate::error::Result<()> {
+        let now = read_state();
+        if now.map(|(c, _)| c) != Some(ctgp) {
+            write("gpu_ctgp", ctgp)?;
+        }
+        if now.map(|(_, p)| p) != Some(ppab) {
+            write("gpu_ppab", ppab)?;
+        }
+        Ok(())
+    }
+
+    /// What the vendor software sets for each profile, as hp-wmi encodes it
+    /// for the Victus S boards: cTGP only in performance, Dynamic Boost in
+    /// everything but low-power.
+    pub fn for_profile(profile: &str) -> Option<(bool, bool)> {
+        match profile {
+            "performance" => Some((true, true)),
+            "balanced" | "balanced-performance" => Some((false, true)),
+            "low-power" | "quiet" | "cool" => Some((false, false)),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn more_performance_never_means_less_gpu_power() {
+            let rank = |p: &str| {
+                let (c, b) = for_profile(p).unwrap();
+                c as u8 + b as u8
+            };
+            assert!(rank("low-power") <= rank("balanced"));
+            assert!(rank("balanced") <= rank("performance"));
+            assert_eq!(for_profile("performance"), Some((true, true)));
+        }
+    }
+}
+
+/// Whether the configuration keeps cTGP and Dynamic Boost in step with the
+/// platform profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Boost {
+    /// Set them with each profile, as the vendor software does on Windows.
+    #[default]
+    Profile,
+    /// Leave them to the firmware and to whatever else writes them.
+    Leave,
+}
+
+impl Boost {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Profile => "profile",
+            Self::Leave => "leave",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "profile" | "follow" | "auto" => Some(Self::Profile),
+            "leave" | "off" | "firmware" => Some(Self::Leave),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Boost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// What the discrete GPU is doing: load, power, clock.
+///
+/// NVIDIA publishes these only through NVML, which is what `nvidia-smi` is
+/// built on. Asked through `nvidia-smi` rather than by loading NVML here: it
+/// is one process spawn while a game runs, against a library binding that
+/// would have to track the driver's ABI.
+pub mod load {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use serde::{Deserialize, Serialize};
+
+    use super::GpuPower;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+    pub struct GpuLoad {
+        /// 0-100.
+        pub util_pct: Option<u8>,
+        pub power_w: Option<f32>,
+        /// The limit in force now - it moves with the profile and with
+        /// Dynamic Boost, which is the point of showing it.
+        pub power_limit_w: Option<f32>,
+        pub clock_mhz: Option<u32>,
+        pub mem_used_mb: Option<u32>,
+    }
+
+    /// Whether asking would cost nothing.
+    ///
+    /// Opening the GPU to ask how busy it is counts as using it: it wakes a
+    /// suspended GPU, and asking every couple of seconds would keep it from
+    /// ever going back to sleep - exactly what the Graphics page exists to
+    /// catch. So only while it is already awake, and only while a program
+    /// other than a query tool is rendering on it (holding /dev/nvidiaN,
+    /// not just the control node). When that program exits the questions
+    /// stop, and the GPU is free to sleep.
+    pub fn worth_asking(gpu: &GpuPower) -> bool {
+        gpu.status == "active"
+            && gpu.holders.iter().any(|h| {
+                h.name != "nvidia-smi"
+                    && h.nodes.iter().any(|n| {
+                        n.strip_prefix("/dev/nvidia").is_some_and(|rest| {
+                            !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+                        })
+                    })
+            })
+    }
+
+    /// `None` when it is not worth asking (see [`worth_asking`]) or the
+    /// answer did not come within a second and a half.
+    pub fn read(gpu: &GpuPower) -> Option<GpuLoad> {
+        if !worth_asking(gpu) {
+            return None;
+        }
+        let mut child = Command::new("nvidia-smi")
+            .args([
+                "--query-gpu=utilization.gpu,power.draw,enforced.power.limit,clocks.gr,memory.used",
+                "--format=csv,noheader,nounits",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        // A wedged driver makes nvidia-smi hang, and this is called from a
+        // poll: give up rather than stall the window.
+        let started = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if started.elapsed() < Duration::from_millis(1500) => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+            }
+        }
+        let mut out = String::new();
+        child.stdout.take()?.read_to_string(&mut out).ok()?;
+        parse(out.lines().next()?)
+    }
+
+    /// One line of the CSV above. Fields the GPU does not support read
+    /// "[N/A]" and come back as `None` rather than failing the rest.
+    pub fn parse(line: &str) -> Option<GpuLoad> {
+        let f: Vec<&str> = line.split(',').map(str::trim).collect();
+        if f.len() < 5 {
+            return None;
+        }
+        let num = |s: &str| s.parse::<f32>().ok();
+        Some(GpuLoad {
+            util_pct: num(f[0]).map(|v| v.clamp(0.0, 100.0) as u8),
+            power_w: num(f[1]),
+            power_limit_w: num(f[2]),
+            clock_mhz: num(f[3]).map(|v| v as u32),
+            mem_used_mb: num(f[4]).map(|v| v as u32),
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::gpu::Holder;
+
+        fn gpu(status: &str, holders: Vec<(&str, &str)>) -> GpuPower {
+            GpuPower {
+                address: "0000:04:00.0".into(),
+                control: "auto".into(),
+                status: status.into(),
+                suspended_ms: 0,
+                holders: holders
+                    .into_iter()
+                    .map(|(name, node)| Holder {
+                        pid: 1,
+                        name: name.into(),
+                        nodes: vec![node.into()],
+                    })
+                    .collect(),
+            }
+        }
+
+        #[test]
+        fn a_sleeping_or_idle_gpu_is_not_woken_to_ask() {
+            assert!(!worth_asking(&gpu("suspended", vec![])));
+            assert!(!worth_asking(&gpu("active", vec![])));
+            // Only the control node or a render node: enumerating, not rendering.
+            assert!(!worth_asking(&gpu(
+                "active",
+                vec![("firefox", "/dev/nvidiactl")]
+            )));
+            assert!(!worth_asking(&gpu(
+                "active",
+                vec![("x", "/dev/dri/renderD128")]
+            )));
+            assert!(!worth_asking(&gpu(
+                "active",
+                vec![("nvidia-smi", "/dev/nvidia0")]
+            )));
+            assert!(worth_asking(&gpu("active", vec![("game", "/dev/nvidia0")])));
+        }
+
+        #[test]
+        fn unsupported_fields_do_not_sink_the_rest() {
+            let l = parse("37, [N/A], 100.00, 1845, 2210").unwrap();
+            assert_eq!(l.util_pct, Some(37));
+            assert_eq!(l.power_w, None);
+            assert_eq!(l.power_limit_w, Some(100.0));
+            assert_eq!(l.clock_mhz, Some(1845));
+            assert_eq!(l.mem_used_mb, Some(2210));
+            assert!(parse("garbage").is_none());
+        }
     }
 }

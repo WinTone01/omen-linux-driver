@@ -72,6 +72,13 @@ struct UiState {
     /// "step" or "linear" - the chart has to be drawn the way the curve is
     /// actually read, or it would show a ramp where the daemon holds a value.
     interpolation: String,
+    /// Load, power and clock of the discrete GPU - only while a program is
+    /// already rendering on it; see omen_core::gpu::load for why never
+    /// otherwise.
+    gpu_load: Option<omen_core::gpu::load::GpuLoad>,
+    /// Whether nvidia-powerd runs, without which Dynamic Boost is a switch
+    /// connected to nothing.
+    nvidia_powerd: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -86,9 +93,9 @@ fn snapshot() -> (Option<Snapshot>, Option<String>, Option<String>) {
         Ok(Response::Error { message }) | Ok(Response::Done { message }) => {
             (None, Some(message), None)
         }
-        Ok(Response::History { .. }) | Ok(Response::Samples { .. }) => {
-            (None, Some("unexpected reply".into()), None)
-        }
+        Ok(Response::History { .. })
+        | Ok(Response::Samples { .. })
+        | Ok(Response::Presses { .. }) => (None, Some("unexpected reply".into()), None),
         Err(e) => {
             let hint = daemon_hint(&e);
             (None, Some(e.to_string()), hint)
@@ -266,6 +273,12 @@ fn get_state() -> UiState {
     if let Some(gpu) = daemon.as_mut().and_then(|s| s.gpu.as_mut()) {
         omen_core::gpu::merge_local_holders(gpu);
     }
+    // After the merge: whether it is worth asking depends on who holds the
+    // GPU, and only this process can see the user's own programs.
+    let gpu_load = daemon
+        .as_ref()
+        .and_then(|s| s.gpu.as_ref())
+        .and_then(omen_core::gpu::load::read);
 
     let (leds, leds_error, leds_writable) = match Leds::discover() {
         Ok(l) => (Some(l.state()), None, l.writable()),
@@ -300,6 +313,8 @@ fn get_state() -> UiState {
             Some(omen_core::curve::Interpolation::Linear) => "linear".into(),
             _ => "step".into(),
         },
+        gpu_load,
+        nvidia_powerd: omen_core::diagnose::nvidia_powerd_active(),
     }
 }
 
@@ -311,7 +326,10 @@ fn talk(req: Request) -> Result<String, String> {
     match client::send(&req).map_err(|e| e.to_string())? {
         Response::Done { message } => Ok(message),
         Response::Error { message } => Err(message),
-        Response::Ok(_) | Response::History { .. } | Response::Samples { .. } => Ok(String::new()),
+        Response::Ok(_)
+        | Response::History { .. }
+        | Response::Samples { .. }
+        | Response::Presses { .. } => Ok(String::new()),
     }
 }
 
@@ -592,13 +610,21 @@ fn running_programs() -> Vec<String> {
 ///
 /// Best effort by design: a machine without notify-send gets nothing extra,
 /// and the in-window toast still happens either way.
+///
+/// `urgency` is "critical" unless said otherwise: the fans being forced to
+/// full power is not a "by the way". A command the hardware refused is
+/// "normal" - worth knowing, not worth a notification that stays up.
 #[tauri::command]
-fn notify(title: String, body: String) -> Result<(), String> {
+fn notify(title: String, body: String, urgency: Option<String>) -> Result<(), String> {
+    let urgency = match urgency.as_deref() {
+        Some("low") => "--urgency=low",
+        Some("normal") => "--urgency=normal",
+        _ => "--urgency=critical",
+    };
     std::process::Command::new("notify-send")
         .args([
             "--app-name=OMEN Control",
-            // The fans being forced to full power is not a "by the way".
-            "--urgency=critical",
+            urgency,
             "--icon=omen-control",
             &title,
             &body,
@@ -724,6 +750,14 @@ fn set_dgpu_power(power: String) -> Result<String, String> {
     let want = omen_core::gpu::DgpuPower::parse(&power)
         .ok_or_else(|| format!("unknown setting: {power}"))?;
     talk(Request::SetDgpuPower(want))
+}
+
+/// Whether cTGP and Dynamic Boost follow the profile.
+#[tauri::command]
+fn set_gpu_boost(mode: String) -> Result<String, String> {
+    let want =
+        omen_core::gpu::Boost::parse(&mode).ok_or_else(|| format!("unknown setting: {mode}"))?;
+    talk(Request::SetGpuBoost(want))
 }
 
 #[tauri::command]
@@ -904,6 +938,7 @@ fn main() {
             }
 
             single::listen(app.handle());
+            single::watch_omen_key(app.handle());
 
             // The first instance honours --tab too, so the flag behaves the
             // same whether or not the app was already open.
@@ -951,6 +986,7 @@ fn main() {
             set_effect,
             set_app_profiles,
             set_dgpu_power,
+            set_gpu_boost,
             set_gpu_mux,
             gpu_env,
             system_info,

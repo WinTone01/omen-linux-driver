@@ -12,7 +12,15 @@ use crate::error::{Error, Result};
 use crate::sysfs::{self, Hwmon};
 
 /// The EC's register window, as exposed by the `ec_sys` module.
+///
+/// Only a fallback now: `omen-kbd-rgb` reads the same register in the kernel
+/// and publishes it as hwmon (see [`OMEN_HWMON`]), which needs neither root
+/// nor debugfs. This is for a machine still running an older module.
 const EC_IO: &str = "/sys/kernel/debug/ec/ec0/io";
+
+/// The hwmon device `omen-kbd-rgb` registers for the discrete GPU's
+/// temperature - the EC register below, read by the kernel.
+const OMEN_HWMON: &str = "omen";
 
 /// dGPU temperature, in degrees, one byte (Phase 1 §4: `GTMP`).
 ///
@@ -123,7 +131,9 @@ impl Thermal {
 
         for hwmon in Hwmon::all() {
             let name = hwmon.name.as_str();
-            let (prefix, role) = if CPU_DRIVERS.contains(&name) {
+            let (prefix, role) = if name == OMEN_HWMON {
+                ("dgpu", Role::Primary)
+            } else if CPU_DRIVERS.contains(&name) {
                 ("cpu", Role::Primary)
             } else if GPU_DRIVERS.contains(&name) {
                 (if name == "amdgpu" { "igpu" } else { "gpu" }, Role::Primary)
@@ -138,9 +148,15 @@ impl Thermal {
                     continue;
                 }
                 // Use the label when there is one (Tctl, edge, ...), else the
-                // index.
-                let label = sysfs::read_string(&hwmon.attr(&format!("temp{idx}_label")))
-                    .unwrap_or_else(|_| format!("temp{idx}"));
+                // index. The module's GPU reading keeps the name it had when
+                // it came through ec_sys - it is the same register - so the
+                // decision log reads the same either way.
+                let label = if name == OMEN_HWMON {
+                    "ec".to_string()
+                } else {
+                    sysfs::read_string(&hwmon.attr(&format!("temp{idx}_label")))
+                        .unwrap_or_else(|_| format!("temp{idx}"))
+                };
                 sensors.push(TempSensor {
                     label: format!("{prefix}/{label}"),
                     path: input,
@@ -159,8 +175,9 @@ impl Thermal {
             sensors.extend(thermal_zones());
         }
 
-        // The discrete GPU, which hwmon does not expose at all here. Read-only
-        // and best-effort: without the `ec_sys` module there is simply no dGPU
+        // The discrete GPU, when the module's hwmon did not already provide
+        // it: the NVIDIA driver registers none here. Read-only and
+        // best-effort: without the `ec_sys` module there is simply no dGPU
         // reading, and the rest still works.
         //
         // Only on the family this register was read from. The map came out of
@@ -169,7 +186,8 @@ impl Thermal {
         // a plausible-looking number from the wrong register would drive the
         // fan from nothing at all.
         let ec = Path::new(EC_IO);
-        if ec.exists() && is_omen_family() {
+        let dgpu_from_hwmon = sensors.iter().any(|s| s.label.starts_with("dgpu/"));
+        if !dgpu_from_hwmon && ec.exists() && is_omen_family() {
             sensors.push(TempSensor {
                 label: "dgpu/ec".to_string(),
                 path: ec.to_owned(),
@@ -190,9 +208,7 @@ impl Thermal {
     /// blind to most of the heat a game produces, and the only symptom is fans
     /// that stay quiet while the machine cooks.
     pub fn has_dgpu(&self) -> bool {
-        self.sensors
-            .iter()
-            .any(|s| matches!(s.source, Source::EcByte(EC_GPU_TEMP)))
+        self.sensors.iter().any(|s| s.label.starts_with("dgpu/"))
     }
 
     pub fn read_all(&self) -> Vec<(String, Result<f32>)> {
@@ -322,7 +338,27 @@ mod tests {
             return;
         };
         if !is_omen_family() {
-            assert!(!t.has_dgpu(), "the EC register is not ours to read here");
+            assert!(
+                !t.sensors
+                    .iter()
+                    .any(|s| matches!(s.source, Source::EcByte(_))),
+                "the EC register is not ours to read here"
+            );
         }
+    }
+
+    #[test]
+    fn the_gpu_is_read_from_one_place_only() {
+        // The module's hwmon and the ec_sys fallback read the same register;
+        // listing both would count one GPU twice.
+        let Ok(t) = Thermal::discover() else {
+            return;
+        };
+        let dgpu = t
+            .sensors
+            .iter()
+            .filter(|s| s.label.starts_with("dgpu/"))
+            .count();
+        assert!(dgpu <= 1, "{dgpu} dGPU sensors");
     }
 }

@@ -247,8 +247,8 @@ const I18N = {
     "2 seconds": "2 saniye",
     "5 seconds": "5 saniye",
     "10 seconds": "10 saniye",
-    "Warn me when the fans are forced to full":
-      "Fanlar tam güce zorlandığında beni uyar",
+    "Warn me when the fans are forced to full, or something fails":
+      "Fanlar tam güce zorlandığında ya da bir şey başarısız olduğunda beni uyar",
     "Start with the session": "Oturumla birlikte başlat",
     "Start hidden in the tray": "Tepside gizli başlat",
     "There is no tray icon in this session, so starting hidden would leave you with a running program and no way back to it. Install":
@@ -433,6 +433,7 @@ Object.assign(I18N.tr, {
 
   "Graphics Switcher": "Ekran kartı anahtarı",
   "now": "şimdi",
+  "after the next restart": "bir sonraki yeniden başlatmadan sonra",
   "Hybrid": "Hibrit",
   "Discrete": "Ayrık",
   "Integrated Only": "Yalnızca tümleşik",
@@ -485,3 +486,38 @@ Object.assign(I18N.tr, {
   "does both": "ikisini birden yapar",
   "does nothing": "hiçbir şey yapmaz",
 });
+
+/* Strings added with the GPU power allowance and the GPU load ring. */
+Object.assign(I18N.tr, {
+  "GPU Usage": "GPU Kullanımı",
+  "GPU power allowance": "GPU güç sınırı",
+  "Follow the profile": "Profili takip et",
+  "Leave to the firmware": "Firmware'e bırak",
+  "running": "çalışıyor",
+  "not running": "çalışmıyor",
+  "on": "açık",
+  "off": "kapalı",
+  "Dynamic Boost is on but nvidia-powerd is not running":
+    "Dynamic Boost açık ama nvidia-powerd çalışmıyor",
+  "Following the profile does what the vendor software does on Windows: cTGP and Dynamic Boost in Performance, Dynamic Boost in Balanced, neither in Low power. Dynamic Boost lets the GPU borrow power the CPU is not using, and it only works while nvidia-powerd runs.":
+    "Profili takip etmek, üretici yazılımının Windows'ta yaptığını yapar: Performans'ta cTGP ve Dynamic Boost, Dengeli'de Dynamic Boost, Düşük güçte hiçbiri. Dynamic Boost, GPU'nun CPU'nun kullanmadığı gücü ödünç almasını sağlar ve yalnızca nvidia-powerd çalışırken işe yarar.",
+});
+
+/* The profile cards, with what each was measured to allow. */
+Object.assign(I18N.tr, {
+  "Caps the CPU at 2.0 GHz - about 32 W under full load. A real limit rather than a preference, for stretching the battery.":
+    "CPU'yu 2,0 GHz'de sınırlar - tam yükte yaklaşık 32 W. Bir tercih değil gerçek bir sınır; pili uzatmak için.",
+  "Full 5.09 GHz boost, but reluctant about it; 55 W sustained. GPU limited to 80 W. Firmware profile 0x30.":
+    "Tam 5,09 GHz'e çıkar ama isteksizce; sürekli 55 W. GPU 80 W ile sınırlı. Firmware profili 0x30.",
+  "Same 5.09 GHz ceiling, reached sooner and held longer; 60 W sustained, and the GPU's limit goes to 100 W. Firmware profile 0x31.":
+    "Aynı 5,09 GHz tavan, daha çabuk ulaşılır ve daha uzun tutulur; sürekli 60 W, ve GPU'nun sınırı 100 W'a çıkar. Firmware profili 0x31.",
+});
+
+/* Notifications beyond the fans being forced to full. */
+Object.assign(I18N.tr, {
+  "the service could not do something": "servis bir şeyi yapamadı",
+  "the fans are not doing what they were told": "fanlar söyleneni yapmıyor",
+  "the service stopped responding": "servis yanıt vermiyor",
+  "the fans are with the firmware until it is back": "servis dönene kadar fanlar firmware'de",
+});
+

@@ -166,7 +166,7 @@
                 <div class="ring__label">
                   <span class="ring__pct" id="gpu-temp">—</span>
                   <span class="ring__trend" id="gpu-trend" hidden></span>
-                  <span class="ring__sub">GPU Temperature</span>
+                  <span class="ring__sub" id="gpu-sub">GPU Temperature</span>
                 </div>
               </div>
               <svg class="spark" viewBox="0 0 200 26" preserveAspectRatio="none" aria-hidden="true">
@@ -530,6 +530,29 @@
             </p>
           </div>
 
+          <div class="card" id="boost-card" hidden>
+            <div class="panel-head">
+              <h2 class="panel-head__title">GPU power allowance</h2>
+              <span class="panel-head__note" id="boost-note"></span>
+            </div>
+            <div class="seg-4 seg-4--two" id="boost-mode">
+              <button data-boost="profile">Follow the profile</button>
+              <button data-boost="leave">Leave to the firmware</button>
+            </div>
+            <dl class="kv kv--tight">
+              <dt>cTGP</dt><dd id="boost-ctgp">—</dd>
+              <dt>Dynamic Boost</dt><dd id="boost-ppab">—</dd>
+              <dt>nvidia-powerd</dt><dd id="boost-powerd">—</dd>
+            </dl>
+            <p class="hint">
+              Following the profile does what the vendor software does on
+              Windows: cTGP and Dynamic Boost in Performance, Dynamic Boost in
+              Balanced, neither in Low power. Dynamic Boost lets the GPU borrow
+              power the CPU is not using, and it only works while nvidia-powerd
+              runs.
+            </p>
+          </div>
+
           <div class="card" id="gfx-card">
             <div class="panel-head">
               <h2 class="panel-head__title">Discrete GPU power</h2>
@@ -727,7 +750,7 @@
                   <option value="10000">10 seconds</option>
                 </select>
               </dd>
-              <dt>Warn me when the fans are forced to full</dt>
+              <dt>Warn me when the fans are forced to full, or something fails</dt>
               <dd><label class="switch"><input type="checkbox" id="set-alerts"><span></span></label></dd>
               <dt>Start with the session</dt>
               <dd><label class="switch"><input type="checkbox" id="set-autostart"><span></span></label></dd>

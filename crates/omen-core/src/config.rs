@@ -77,13 +77,17 @@ pub struct BatteryConfig {
     pub charge_limit: Option<u8>,
 }
 
-/// Discrete GPU power. Not a graphics switch - this board has no mux; see
-/// gpu::DgpuPower.
+/// Discrete GPU power: whether it may sleep (gpu::DgpuPower), and whether its
+/// power allowance follows the profile (gpu::Boost). The mux is not here -
+/// the firmware keeps that setting itself.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphicsConfig {
     #[serde(default)]
     pub dgpu_power: DgpuPower,
+    /// cTGP and Dynamic Boost with the profile, or left alone.
+    #[serde(default)]
+    pub gpu_boost: crate::gpu::Boost,
 }
 
 /// Settings for the things omend does on its own.
@@ -346,6 +350,25 @@ pub struct LightingConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub zones: Vec<[u8; 3]>,
 
+    /// The keyboard's brightness, 1-100, remembered and restored with the
+    /// colours.
+    ///
+    /// Needed because the firmware cannot give it back: it stores the
+    /// already-dimmed colour bytes and an on/off switch, so after a reboot or
+    /// a module reload the driver starts at full. Never 0 - a keyboard that
+    /// was dark when this was last checked is not one to switch off at start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<u8>,
+
+    /// The keyboard was switched off - by hand, with Fn+F4 or a brightness
+    /// of 0 - when this was last checked, and should come up off.
+    ///
+    /// Separate from `brightness` so switching it back on returns to the
+    /// level it had. Not set when it was the battery rule that switched it
+    /// off: that is the machine's doing, not a choice to remember.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub backlight_off: bool,
+
     /// Turn the keyboard backlight off when the machine is on battery.
     ///
     /// Worth a real amount on this laptop: the backlight is the only thing
@@ -355,7 +378,8 @@ pub struct LightingConfig {
 
     /// Frames per second while an effect runs.
     ///
-    /// Each frame writes four zones, and each zone write is a WMI call. Ten
+    /// Each frame writes four zones; the driver folds them into one WMI call
+    /// when they arrive together, but a frame is still firmware work. Ten
     /// is smooth enough for four zones spread across a keyboard and leaves
     /// the firmware alone the rest of the time; there is no point paying for
     /// sixty.
@@ -372,6 +396,8 @@ impl Default for LightingConfig {
             color: default_effect_color(),
             restore_on_start: false,
             zones: Vec::new(),
+            brightness: None,
+            backlight_off: false,
             off_on_battery: false,
             fps: default_fps(),
         }

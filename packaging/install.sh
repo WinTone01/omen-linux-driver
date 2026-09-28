@@ -34,7 +34,10 @@ say "3. Configuration"
 install -Dm644 -b packaging/omend.toml        /etc/omen/omend.toml
 install -Dm644 packaging/omend.service        /etc/systemd/system/omend.service
 install -Dm644 packaging/omen-sysusers.conf   /usr/lib/sysusers.d/omen.conf
-install -Dm644 packaging/omen-modules.conf    /usr/lib/modules-load.d/omen.conf
+# omen-modules.conf used to load ec_sys at boot for the GPU temperature.
+# omen-kbd-rgb publishes that as hwmon now, so nothing needs it; an old copy
+# would keep loading a debug interface for no reason.
+rm -f /usr/lib/modules-load.d/omen.conf
 install -Dm644 packaging/omen-modprobe.conf   /usr/lib/modprobe.d/omen.conf
 install -Dm644 packaging/99-omen-leds.rules   /etc/udev/rules.d/99-omen-leds.rules
 install -Dm755 packaging/omen-sleep.sh        /usr/lib/systemd/system-sleep/omen
@@ -49,7 +52,6 @@ systemd-sysusers
 systemctl daemon-reload
 udevadm control --reload
 udevadm trigger -s leds
-modprobe ec_sys write_support=0 2>/dev/null || echo "  (ec_sys unavailable - the dGPU temperature will not be read)"
 gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
 systemctl enable --now omend
 

@@ -55,7 +55,6 @@ package() {
   install -Dm644 packaging/omend.service      "$pkgdir/usr/lib/systemd/system/omend.service"
   install -Dm644 packaging/omend.toml         "$pkgdir/etc/omen/omend.toml"
   install -Dm644 packaging/omen-sysusers.conf "$pkgdir/usr/lib/sysusers.d/omen.conf"
-  install -Dm644 packaging/omen-modules.conf  "$pkgdir/usr/lib/modules-load.d/omen.conf"
   install -Dm644 packaging/omen-modprobe.conf "$pkgdir/usr/lib/modprobe.d/omen.conf"
   install -Dm644 packaging/99-omen-leds.rules "$pkgdir/usr/lib/udev/rules.d/99-omen-leds.rules"
 

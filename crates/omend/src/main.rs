@@ -188,8 +188,9 @@ fn run(args: Args) -> Result<()> {
     // Worth saying out loud rather than leaving to be discovered.
     if !thermal.has_dgpu() {
         warn!(
-            "the discrete GPU is not being watched - load 'ec_sys' so it can be read \
-             (modprobe ec_sys write_support=0); without it the curve only follows the CPU"
+            "the discrete GPU is not being watched - omen-kbd-rgb 0.2.0 publishes it as \
+             hwmon, or load 'ec_sys' read-only (modprobe ec_sys write_support=0); without \
+             it the curve only follows the CPU"
         );
     }
 
@@ -469,6 +470,13 @@ struct Runtime {
     battery: Option<omen_core::battery::Battery>,
     /// When the charge limit was last compared with the configured one.
     charge_checked: Instant,
+    /// The profile cTGP and Dynamic Boost were last put in step with, so
+    /// they are written on a change of profile rather than on every tick.
+    /// Cleared on a reload, which is also what a resume does.
+    boost_for: Option<String>,
+    /// Hardware commands that failed, for the UI. See ipc::Problem.
+    problems: std::collections::VecDeque<omen_core::ipc::Problem>,
+    problem_seq: u64,
     started: Instant,
 }
 
@@ -522,6 +530,9 @@ impl Runtime {
             battery: omen_core::battery::Battery::discover(),
             // Checked on the first tick rather than one interval in.
             charge_checked: Instant::now() - CHARGE_LIMIT_EVERY,
+            boost_for: None,
+            problems: std::collections::VecDeque::new(),
+            problem_seq: 0,
             started: Instant::now(),
         })
     }
@@ -577,6 +588,7 @@ impl Runtime {
         // something one of them has just applied.
         self.apply_power_rule();
         self.apply_gpu_power();
+        self.apply_gpu_boost();
         self.apply_charge_limit();
         self.watch_profile(temp.as_ref().map(|(_, c)| *c));
 
@@ -840,7 +852,15 @@ impl Runtime {
         let Some(lights) = lights else { return };
         let Some(zones) = lights.zones() else { return };
         let as_arrays: Vec<[u8; 3]> = zones.iter().map(|c| [c.r, c.g, c.b]).collect();
-        if as_arrays == self.cfg.lighting.zones {
+        // A dark keyboard keeps the level it had before, rather than
+        // forgetting it.
+        let brightness = lights.brightness().or(self.cfg.lighting.brightness);
+        // Dark by choice, not because the battery rule is holding it off.
+        let off = lights.is_dark() == Some(true) && self.backlight_wanted() != Some(false);
+        if as_arrays == self.cfg.lighting.zones
+            && brightness == self.cfg.lighting.brightness
+            && off == self.cfg.lighting.backlight_off
+        {
             return;
         }
 
@@ -849,11 +869,15 @@ impl Runtime {
         match Config::load(config_path) {
             Ok(mut on_disk) => {
                 on_disk.lighting.zones = as_arrays.clone();
+                on_disk.lighting.brightness = brightness;
+                on_disk.lighting.backlight_off = off;
                 if let Err(e) = on_disk.save(config_path) {
                     debug!("could not remember the keyboard colours: {e}");
                     return;
                 }
                 self.cfg.lighting.zones = as_arrays;
+                self.cfg.lighting.brightness = brightness;
+                self.cfg.lighting.backlight_off = off;
                 debug!("keyboard colours remembered");
             }
             Err(e) => debug!("could not re-read the configuration to remember colours: {e}"),
@@ -905,7 +929,7 @@ impl Runtime {
             match PlatformProfile::discover() {
                 Some(pp) if pp.choices().contains(want) => {
                     if let Err(e) = pp.set(want) {
-                        warn!("could not set the {want} profile: {e}");
+                        self.problem(format!("could not set the {want} profile: {e}"));
                     }
                 }
                 Some(pp) => warn!("{want:?} is not one of {}", pp.choices().join(" ")),
@@ -950,7 +974,7 @@ impl Runtime {
     /// Only at startup: doing it on every reload would fight the user every
     /// time the configuration is re-read, and fight the application profiles
     /// every time one of them ends.
-    fn apply_startup_profile(&self) {
+    fn apply_startup_profile(&mut self) {
         let Some(want) = self.cfg.automation.startup_profile.clone() else {
             return;
         };
@@ -960,7 +984,9 @@ impl Runtime {
         match PlatformProfile::discover() {
             Some(pp) if pp.choices().contains(&want) => match pp.set(&want) {
                 Ok(()) => info!("startup profile: {want}"),
-                Err(e) => warn!("could not select the {want} profile at startup: {e}"),
+                Err(e) => self.problem(format!(
+                    "could not select the {want} profile at startup: {e}"
+                )),
             },
             Some(pp) => warn!(
                 "startup_profile {want:?} is not one of {}",
@@ -988,9 +1014,76 @@ impl Runtime {
         }
         match omen_core::gpu::set_power(want) {
             Ok(()) => info!("dGPU runtime power: {} -> {want}", gpu.control),
-            Err(e) => warn!("could not set the dGPU power policy to {want}: {e}"),
+            Err(e) => self.problem(format!(
+                "could not set the dGPU power policy to {want}: {e}"
+            )),
         }
         self.gpu.invalidate();
+    }
+
+    /// Keeps cTGP and Dynamic Boost in step with the platform profile.
+    ///
+    /// hp-wmi does this itself on the Victus S boards; on omen_v1_legacy
+    /// boards such as 8D24 it only writes the thermal profile, and the GPU's
+    /// allowance stays wherever it was. The vendor software sets both with
+    /// every profile, so this does too - on the change, whoever made it: the
+    /// window, the desktop's power panel or the OMEN key.
+    fn apply_gpu_boost(&mut self) {
+        if self.read_only || self.cfg.graphics.gpu_boost != omen_core::gpu::Boost::Profile {
+            return;
+        }
+        let Some(profile) = PlatformProfile::discover().and_then(|p| p.get().ok()) else {
+            return;
+        };
+        if self.boost_for.as_deref() == Some(profile.as_str()) {
+            return;
+        }
+        // Nothing to set until the module reports it. Not recorded as done:
+        // the module can load after the daemon starts, and then this profile
+        // still has to be applied. The check is one sysfs read a tick.
+        if omen_core::gpu::boost::read_state().is_none() {
+            return;
+        }
+        let Some((ctgp, ppab)) = omen_core::gpu::boost::for_profile(&profile) else {
+            self.boost_for = Some(profile);
+            return;
+        };
+        match omen_core::gpu::boost::set(ctgp, ppab) {
+            Ok(()) => info!(
+                "{profile}: cTGP {}, Dynamic Boost {}",
+                if ctgp { "on" } else { "off" },
+                if ppab { "on" } else { "off" }
+            ),
+            Err(e) => self.problem(format!("could not set the GPU power for {profile}: {e}")),
+        }
+        // Recorded either way: a write the firmware refuses will be refused
+        // again, and a problem a minute is not more informative than one.
+        self.boost_for = Some(profile);
+    }
+
+    /// Logs a hardware command that failed, and keeps it for the UI.
+    ///
+    /// The same failure again within ten minutes updates the existing entry
+    /// instead of adding one: several of these are re-tried every tick, and
+    /// a notification per retry would be noise.
+    fn problem(&mut self, what: String) {
+        warn!("{what}");
+        let now = self.started.elapsed().as_secs();
+        if let Some(last) = self.problems.iter_mut().rev().find(|p| p.what == what) {
+            if now.saturating_sub(last.at_secs) < 600 {
+                last.at_secs = now;
+                return;
+            }
+        }
+        self.problem_seq += 1;
+        self.problems.push_back(omen_core::ipc::Problem {
+            id: self.problem_seq,
+            at_secs: now,
+            what,
+        });
+        while self.problems.len() > 20 {
+            self.problems.pop_front();
+        }
     }
 
     /// Notices the firmware putting the platform profile back.
@@ -1046,7 +1139,7 @@ impl Runtime {
             match pp.set(&before) {
                 Ok(()) => return,
                 Err(e) => {
-                    warn!("could not put the {before} profile back: {e}");
+                    self.problem(format!("could not put the {before} profile back: {e}"));
                     // It stands as the new state; there is nothing else to do
                     // and pretending otherwise would make the next tick try
                     // again forever.
@@ -1085,7 +1178,9 @@ impl Runtime {
         }
         match battery.set_limit(Some(want)) {
             Ok(()) => info!("battery charge limit -> {want}%"),
-            Err(e) => warn!("could not set the battery charge limit to {want}%: {e}"),
+            Err(e) => self.problem(format!(
+                "could not set the battery charge limit to {want}%: {e}"
+            )),
         }
     }
 
@@ -1189,6 +1284,7 @@ impl Runtime {
                         }
                         self.cfg = cfg;
                         self.applied = Applied::Unknown;
+                        self.boost_for = None;
                         info!("configuration re-read");
                         self.log_curve();
                     }
@@ -1437,7 +1533,7 @@ impl Runtime {
                 info!("{why} -> automatic (control with the EC)");
                 if !self.read_only {
                     if let Err(e) = self.with_fan(|fan| fan.restore_auto()) {
-                        error!("could not switch to automatic: {e}");
+                        self.problem(format!("could not switch the fans to automatic: {e}"));
                         return;
                     }
                 }
@@ -1448,7 +1544,7 @@ impl Runtime {
                 if !self.read_only {
                     if let Err(e) = self.with_fan(|fan| fan.set_mode(omen_core::fan::PwmMode::Max))
                     {
-                        error!("could not switch to full power: {e}");
+                        self.problem(format!("could not switch the fans to full power: {e}"));
                         return;
                     }
                 }
@@ -1551,6 +1647,14 @@ impl Runtime {
             effect: Some(self.cfg.lighting.spec()),
             mux: omen_core::gpu::mux::discover(),
             gpu: self.gpu.get(),
+            gpu_boost: omen_core::gpu::boost::read_state().map(|(ctgp, ppab)| {
+                omen_core::gpu::boost::State {
+                    ctgp,
+                    ppab,
+                    follows_profile: self.cfg.graphics.gpu_boost == omen_core::gpu::Boost::Profile,
+                }
+            }),
+            problems: self.problems.iter().cloned().collect(),
             uptime_secs: self.started.elapsed().as_secs(),
         }
     }

@@ -147,6 +147,9 @@ fn handle(stream: UnixStream, shared: &Shared, config_path: &Path) -> Result<()>
 fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
     match req {
         Request::Status => Response::Ok(Box::new(shared.snapshot())),
+        Request::OmenKeyPresses => Response::Presses {
+            count: crate::hotkey::presses(),
+        },
 
         // Capped here as well as in the daemon: a client asking for a million
         // entries should not be able to make the daemon build a million-entry
@@ -308,6 +311,43 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             }
         }
 
+        Request::SetGpuBoost(want) => {
+            info!("request: GPU power allowance -> {want}");
+            let mut cfg = match Config::load(config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("the current configuration could not be read: {e}"),
+                    }
+                }
+            };
+            if want == omen_core::gpu::Boost::Profile
+                && omen_core::gpu::boost::read_state().is_none()
+            {
+                return Response::Error {
+                    message: "this machine does not report cTGP or Dynamic Boost - it needs \
+                              omen-kbd-rgb 0.2.0 and an NVIDIA GPU"
+                        .into(),
+                };
+            }
+            cfg.graphics.gpu_boost = want;
+            if let Err(e) = cfg.save(config_path) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+            shared.request_reload_sync(APPLY_TIMEOUT);
+            Response::Done {
+                message: match want {
+                    omen_core::gpu::Boost::Profile => {
+                        "cTGP and Dynamic Boost now follow the profile".into()
+                    }
+                    omen_core::gpu::Boost::Leave => {
+                        "cTGP and Dynamic Boost are left to the firmware".into()
+                    }
+                },
+            }
+        }
         Request::SetDgpuPower(want) => {
             info!("request: dGPU runtime power -> {want}");
             let mut cfg = match Config::load(config_path) {
