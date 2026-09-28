@@ -7,9 +7,9 @@
 # in-tree hp-wmi - no blacklist, unlike the drivers it was informed by.
 
 pkgname=omen-kbd-rgb-dkms
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
-pkgdesc="4-zone RGB keyboard backlight for the HP OMEN 16-ap0xxx (board 8D24)"
+pkgdesc="HP OMEN 4-zone RGB keyboard, graphics mux and dGPU temperature (board 8D24)"
 arch=('x86_64')
 url="https://github.com/WinTone01/omen-linux-driver"
 license=('GPL-2.0-only')

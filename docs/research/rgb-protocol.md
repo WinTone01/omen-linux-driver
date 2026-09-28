@@ -32,10 +32,32 @@ data area starts at `0x10`. While `DSZI <= 0x80` the firmware does
 
 | `CMDT` | Method | Function |
 |---|---|---|
+| `0x01` | LM01 | what lighting the keyboard has |
 | `0x02` | LM02 | read zone colours |
 | `0x03` | LM03 | write zone colours |
 | `0x04` | LM04 | read backlight **on/off** |
 | `0x05` | LM05 | write backlight **on/off** |
+
+### LM01 — what the keyboard has
+
+```
+byte0 = Local1 | (Local2 << 1)
+        Local1 = 1 if EC RE20 is 1 or 2, else 0     // a backlight at all
+        Local2 = 3                                   // keyboard type
+byte1 = EC R570                                      // meaning unknown
+```
+
+`omen-kbd-rgb` asks this at load and drives the lighting only when bit 0 is
+set and the type is 3, the one LM02/LM03 implement as four RGB zones. The
+module keeps no board list, so this is what stops it presenting four RGB
+zones on a sibling with an unlit or single-colour keyboard.
+
+### LM02 — reading colours
+
+`byte0 = 3`, the 12 colour bytes at `0x19..0x24`, and zeros everywhere else.
+Since LM03 reads nothing but the colours either, the driver reads the block
+once at load and uses it as the template for every write, rather than
+reading it back each time.
 
 ### LM03 — writing colours
 
@@ -57,35 +79,54 @@ Three things stand out:
 `Local2 = 0x03` overrides the sub-command and pins it, so the firmware ignores
 `WBUF[0]` and always performs the 12-byte zone write.
 
-### LM04 / LM05 — the backlight switch, not a brightness level
+### LM04 / LM05 — an on bit over a level, of which we may only set the bit
 
-This pair is **on/off**, and it takes two magic values:
+**Corrected on 2026-09-28.** This section said the pair took two magic values,
+`0xE4` on and `0x64` off. Those are the right values to *write*. As a
+description of the byte they were wrong, and the mistake showed up as Fn+F4's
+dim step being read as "off".
 
-```
-0xE4  on
-0x64  off
-```
+`LBRT` is bit 7 on/off plus a 0-100 level in bits 0-6: `0xE4` is
+`0x80 | 100`, and `0x64` is `100` with the on bit clear. Measured by stepping
+Fn+F4 and reading it back (`kernel/omen-kbd-rgb/probe-brightness.sh`, which
+reads the byte through the module's debugfs file `lbrt`):
 
-Read with LM04 and write with LM05, as a `u32`.
+| | LBRT | EC `0xEE1` | Keyboard |
+|---|---|---|---|
+| start | `0xE4` | `0x64` | bright |
+| Fn+F4 | `0xB2` = on \| 50 | `0x32` | dim |
+| Fn+F4 | `0x00` | `0x00` | off |
+| Fn+F4 | `0xE4` | `0x64` | bright |
 
-The DSDT invites the wrong reading. `LM05` assigns `LBRT = WBUF[0]` and `LM04`
-has a dead assignment `Local1 = 0x64` just before returning `LBRT`, which looks
-exactly like "the scale is 0-100". It is not. Implementing it that way cost
-most of an evening: writing a level of 100 sends `0x64`, which is the **off**
-value, so every attempt to set full brightness switched the keyboard off. The
-colours were being written correctly the whole time and simply were not lit.
+Fn+F4 cycles bright → dim → off. The level is the firmware's own, though:
 
-It also explains two earlier measurements that had been filed as puzzles:
-LM04 returning `100` with the keyboard dark (that is `0x64` — "off", not
-"brightness 100"), and the raw register at `0xEFC` reading `0xe4` while it was
-lit (that is "on").
+| Written with LM05 | Reads back | `0xEE1` | Keyboard |
+|---|---|---|---|
+| `0xE4` | `0xE4` | `0x64` | bright |
+| `0xB2` | `0xB2` | `0x64` | **bright** |
+| `0x94` | `0x94` | `0x64` | **bright** |
+| `0x80` | `0x80` | `0x64` | **bright** |
+| `0x32` | `0x32` | `0x00` | off |
 
-Credit for the two values: `hp-omen-extra.c` in the
-[omen-space](https://github.com/) project, which had this right.
+A write takes effect through bit 7 alone. The level bits are stored and read
+back, but they change nothing. The dim step exists, but only on the
+firmware's own Fn+F4 path. `0xEE1`, not `LBRT`, is the level in force.
 
-**So the hardware knows only on and off.** Any intermediate brightness is the
-driver's own doing — see §6.
+So the driver:
 
+* writes `0xE4` or `0x64`, as before. Switching on through LM05 always comes
+  up at the firmware's full level;
+* dims by scaling the colours (§6), because the firmware's level cannot be
+  set from here;
+* reads the on bit as "lit" and the level as the firmware's contribution.
+  After Fn+F4's dim step the keyboard shows the driver's level times 50 %,
+  and that product is what the LED class reports.
+
+The DSDT invites the wrong reading in the other direction as well. `LM05`
+assigns `LBRT = WBUF[0]` and `LM04` has a dead `Local1 = 0x64`, which looks
+like "a 0-100 scale". Writing a plain level there sends a value with bit 7
+clear, which is off. That cost an evening on 2026-09-11. Credit for the two
+write values: `hp-omen-extra.c` in the omen-space project.
 
 ## 3. EC fields
 
@@ -190,6 +231,8 @@ on:   00 64 00 | ff ff ff ff ff ff ff ff ff ff ff ff | 00 ...
 ```
 
 `0xEE1` reads non-zero while the keyboard is lit and `0x00` while it is dark.
+It is the level in force: `0x64` bright, `0x32` after Fn+F4's dim step
+(§2).
 The colours read `0xff` throughout, which is precisely why writing them always
 looked like it had worked.
 
@@ -198,9 +241,22 @@ looked like it had worked.
 unnamed. Every search above looked at declared fields; this one lives in the
 gap between them.
 
-`omen-kbd-rgb` maps the block read-only and exposes it as
-`/sys/devices/platform/omen-kbd-rgb/lighting_regs`. The logical state comes
-from LM04 now, which needs no `ioremap` and is the more portable of the two.
+`omen-kbd-rgb` maps the block read-only and exposes it in debugfs as
+`/sys/kernel/debug/omen-kbd-rgb/lighting_regs` - on 8D24 only, because the
+address is this board's `OperationRegion H2RA`, and on another board the same
+address belongs to something else. The logical state comes from LM04, which
+needs no `ioremap` and is the more portable of the two.
+
+### Fn+F4
+
+The firmware flips the switch on Fn+F4 by itself. If it raises a WMI event
+for it, that goes to `hp-wmi`, which owns the event GUID and has a case for
+`0x0D` (`HPWMI_BACKLIT_KB_BRIGHTNESS`) that does nothing - whether this
+machine sends it at all has not been measured. Either way this module cannot
+listen for it.
+Instead it asks LM04 every two seconds (module parameter `poll_ms`) and
+reports a change through the LED class's `brightness_hw_changed`, which is
+what desktop on-screen indicators follow.
 
 ## 6. Brightness is the driver's, not the hardware's
 
@@ -220,9 +276,14 @@ Two details matter:
 * Scaling always starts from the **stored** intensity, never from what is
   currently on the wire — otherwise dimming twice in a row would compound and
   the colour would drift towards black.
-* At probe the colours on the wire are already scaled, so they are scaled back
-  up to recover the intent. Without that, reloading the module at 50 % would
-  halve them again.
+* The level is applied even while the switch is off. Scaling by 0 would store
+  black in the firmware, and the next Fn+F4 would light a black keyboard.
+* The level cannot be recovered at load. The firmware holds the scaled bytes
+  and an on/off switch, nothing else, so after a reload at 50 % the colours
+  read back at half and are taken as they are. An earlier version claimed to
+  scale them back up, but it divided by the level it had just assumed to be
+  100, which changes nothing. omend remembers the level with the colours and
+  restores both when it starts.
 
 Level 0 is not "scale everything to black": it switches the backlight off with
 LM05, which is what the user means and what leaves the machine in the state

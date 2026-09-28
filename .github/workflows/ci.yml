@@ -100,6 +100,46 @@ jobs:
           perl .ci/checkpatch.pl --no-tree --strict --codespell \
             --ignore FILE_PATH_CHANGES,UNKNOWN_COMMIT_ID .ci/patches/*.patch
 
+  module:
+    name: omen-kbd-rgb
+    runs-on: ubuntu-latest
+    # Arch rather than the runner's own kernel: the people running this are on
+    # Arch and CachyOS, so the headers worth building against are the current
+    # stable kernel's. An API that changes there breaks here first, instead
+    # of in someone's DKMS log after an update.
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Dependencies
+        run: pacman -Syu --noconfirm --needed base-devel linux-headers kmod curl perl
+
+      # One version number, in dkms.conf. The package, the Makefile and
+      # MODULE_VERSION all read it or are checked against it here.
+      - name: Versions agree
+        working-directory: kernel/omen-kbd-rgb
+        run: |
+          dkms=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' dkms.conf)
+          pkg=$(sed -n 's/^pkgver=//p' PKGBUILD)
+          echo "dkms.conf $dkms, PKGBUILD $pkg"
+          test -n "$dkms" && test "$dkms" = "$pkg"
+
+      # W=1 turns on the warnings maintainers build with; any warning fails.
+      - name: Build
+        working-directory: kernel/omen-kbd-rgb
+        run: |
+          kdir=$(echo /usr/lib/modules/*/build)
+          make KDIR="$kdir" W=1 KCFLAGS=-Werror
+          modinfo -F version omen-kbd-rgb.ko | tee /dev/stderr | grep -qx "$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' dkms.conf)"
+
+      - name: checkpatch
+        run: |
+          mkdir -p .ci
+          for f in checkpatch.pl spelling.txt const_structs.checkpatch; do
+            curl -sSL -o ".ci/$f" "https://raw.githubusercontent.com/torvalds/linux/master/scripts/$f"
+          done
+          perl .ci/checkpatch.pl --no-tree --strict -f kernel/omen-kbd-rgb/omen-kbd-rgb.c
+
   shell:
     name: shellcheck
     runs-on: ubuntu-latest
@@ -109,4 +149,4 @@ jobs:
       # way through. A quoting mistake in it is the most expensive kind of
       # bug this project can ship.
       - run: sudo apt-get update && sudo apt-get install -y shellcheck
-      - run: shellcheck install.sh packaging/install.sh packaging/omen-sleep.sh
+      - run: shellcheck install.sh packaging/install.sh packaging/omen-sleep.sh kernel/omen-kbd-rgb/verify.sh

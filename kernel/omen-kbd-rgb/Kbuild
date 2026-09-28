@@ -1,1 +1,6 @@
 obj-m := omen-kbd-rgb.o
+
+# The version lives in dkms.conf and nowhere else; MODULE_VERSION gets it from
+# here, so the loaded module and the package cannot disagree.
+omen_version := $(shell sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' $(src)/dkms.conf 2>/dev/null)
+ccflags-y += -DOMEN_KBD_RGB_VERSION='"$(or $(omen_version),unknown)"'

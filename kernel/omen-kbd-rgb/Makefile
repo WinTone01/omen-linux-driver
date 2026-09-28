@@ -14,10 +14,16 @@ clean:
 # For distributions without makepkg. Copies the source where DKMS expects it
 # and lets DKMS rebuild the module on every kernel update, which is the whole
 # point of shipping it this way.
-VERSION := 0.1.0
+# The one version number, kept in dkms.conf.
+VERSION := $(shell sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' dkms.conf)
 DKMS_SRC := /usr/src/omen-kbd-rgb-$(VERSION)
 
+# Any version already registered goes first: left in place, DKMS would
+# rebuild it next to this one on every kernel update, and which of the two
+# gets loaded would be down to directory order.
 dkms-install:
+	-dkms remove -m omen-kbd-rgb --all 2>/dev/null
+	find /usr/src -maxdepth 1 -name 'omen-kbd-rgb-*' ! -name 'omen-kbd-rgb-$(VERSION)' -exec rm -rf {} +
 	install -Dm644 omen-kbd-rgb.c $(DKMS_SRC)/omen-kbd-rgb.c
 	install -Dm644 Kbuild         $(DKMS_SRC)/Kbuild
 	install -Dm644 Makefile       $(DKMS_SRC)/Makefile
@@ -30,7 +36,7 @@ dkms-install:
 	modprobe omen-kbd-rgb
 
 dkms-remove:
-	dkms remove -m omen-kbd-rgb -v $(VERSION) --all || true
-	rm -rf $(DKMS_SRC) /usr/lib/modules-load.d/omen-kbd-rgb.conf
+	dkms remove -m omen-kbd-rgb --all || true
+	rm -rf /usr/src/omen-kbd-rgb-* /usr/lib/modules-load.d/omen-kbd-rgb.conf
 
 .PHONY: all clean dkms-install dkms-remove
