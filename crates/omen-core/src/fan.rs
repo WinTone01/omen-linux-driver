@@ -73,6 +73,15 @@ impl std::fmt::Display for PwmMode {
 #[derive(Debug, Clone)]
 pub struct Fan {
     hwmon: Hwmon,
+    /// omen-kbd-rgb's hwmon, when it has the tachometers.
+    ///
+    /// hp-wmi reads them through a firmware method that starts with an SMI:
+    /// 264 ms a read on 8D24, during which no other ACPI method runs. Three a
+    /// tick held the ACPI interpreter for most of a second in every two, and
+    /// the keyboard's effects stuttered on it. The module reads the same two
+    /// numbers straight out of the EC's memory-mapped RAM. hp-wmi stays the
+    /// fallback, and the only thing written to.
+    tach: Option<Hwmon>,
     min_rpm: u32,
     max_rpm: u32,
 }
@@ -92,8 +101,12 @@ impl Fan {
                 "invalid RPM range: {min_rpm}-{max_rpm}"
             )));
         }
+        let tach = Hwmon::all()
+            .into_iter()
+            .find(|h| h.name == "omen" && h.has("fan1_input"));
         Ok(Self {
             hwmon,
+            tach,
             min_rpm,
             max_rpm,
         })
@@ -113,7 +126,18 @@ impl Fan {
 
     /// Tachometer. `index` is 1 or 2 (CPU / GPU fan).
     pub fn rpm(&self, index: u8) -> Result<u32> {
-        Ok(self.hwmon.read(&format!("fan{index}_input"))?.max(0) as u32)
+        let attr = format!("fan{index}_input");
+        if let Some(tach) = &self.tach {
+            if let Ok(v) = tach.read(&attr) {
+                return Ok(v.max(0) as u32);
+            }
+        }
+        Ok(self.hwmon.read(&attr)?.max(0) as u32)
+    }
+
+    /// Whether the tachometers come from the fast path (see `tach`).
+    pub fn fast_tach(&self) -> bool {
+        self.tach.is_some()
     }
 
     pub fn mode(&self) -> Result<PwmMode> {
@@ -141,7 +165,14 @@ impl Fan {
         self.hwmon.write("pwm1_enable", mode.as_raw())
     }
 
+    /// What `pwm1` reads. On this board hp-wmi does not give back the
+    /// setpoint there but the first fan's measured speed on the PWM scale,
+    /// through the same slow method - so with the fast tachometer it is
+    /// worked out from that instead.
     pub fn pwm(&self) -> Result<u8> {
+        if self.tach.is_some() {
+            return Ok(self.rpm_to_pwm(self.rpm(1)?));
+        }
         Ok(self.hwmon.read("pwm1")?.clamp(0, 255) as u8)
     }
 
@@ -203,6 +234,7 @@ mod tests {
                 path: "/dev/null".into(),
                 name: "hp".into(),
             },
+            tach: None,
             min_rpm: min,
             max_rpm: max,
         }

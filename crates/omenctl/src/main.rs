@@ -43,6 +43,7 @@ USAGE:
                                    not take them - for comparing against stock
                                    behaviour, not for daily use.
 
+    omenctl effect fps <1-60>        Frames a second for effects (default 30)
     omenctl effect <NAME> [SPEED] [#RRGGBB]
                                    Keyboard lighting: none / breathing / wave /
                                    spectrum. Speed is 1-10; the colour applies
@@ -251,6 +252,14 @@ fn parse_curve_arg(raw: &str) -> Result<Option<String>> {
 }
 
 fn set_effect(args: &[String]) -> Result<()> {
+    if args.get(1).map(String::as_str) == Some("fps") {
+        let fps: u8 = args
+            .get(2)
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| anyhow::anyhow!("a frame rate is required: 1-60"))?;
+        return client::report(client::send(&Request::SetLightingFps { fps })?);
+    }
+
     let name = args.get(1).ok_or_else(|| {
         anyhow::anyhow!("an effect is required: none / breathing / wave / spectrum")
     })?;

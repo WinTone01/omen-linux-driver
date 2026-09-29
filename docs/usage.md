@@ -245,6 +245,7 @@ omenctl set auto              # advanced: hand the fans to the EC (see below)
 omenctl effect wave 7         # keyboard: none / breathing / wave / spectrum
 omenctl effect breathing 4 '#00a0ff'
                               # speed 1-10, colour for the effects that use one
+omenctl effect fps 60         # frames a second, 1-60 (default 30)
 omenctl app                   # per-application profiles
 omenctl app add cs2 performance curve:performance
                               # or a fixed target: omenctl app add cs2 3000
@@ -790,3 +791,39 @@ these cases, once each:
 * the fans stop doing what they were told;
 * the service stops responding, which leaves the fans to the firmware.
 
+## Smooth effects
+
+The effects stuttered at any frame rate, and the frame rate was not the
+cause. Measured with `kernel/omen-kbd-rgb/probe-fps.sh`, which counts the
+writes that reach the firmware and times each one (debugfs `zone_stats`):
+
+| | Frames reaching the firmware | Mean write | Longest write |
+|---|---|---|---|
+| before | 70-80 % of those asked for | 8-23 ms | ~270 ms |
+| after | all of them | 0.7 ms | 15-21 ms |
+
+**The cause was the fan tachometer.** hp-wmi reads the fan speeds on this
+board through WMI command `0x2D`. Its firmware method (`GM2D`) starts with an
+SMI and waits for it, which takes 264 ms per read. While it runs, no other
+ACPI method can run, and that includes a keyboard frame. omend read three of
+them every two seconds (fan1, fan2 and `pwm1`, which on this board reads back
+the measured speed). The same two numbers sit in the EC's memory-mapped RAM
+(`FS1H/FS1L`, `FS2H/FS2L` at `0x530`), where `GM11` reads them without an SMI.
+omen-kbd-rgb now exposes them as `fan1_input`/`fan2_input` on its `omen`
+hwmon device, on 8D24 only, and omend reads those. They agree with hp-wmi
+(2313 against 2300 RPM, since hp-wmi rounds to 100). hp-wmi stays the
+fallback, and the only path for writing. This also takes most of a second of
+ACPI time off every daemon tick.
+
+With that fixed, 30 fps looked smooth and 60 fps no better, so 30 is the
+default. Three smaller things were fixed along the way:
+
+* **Half-written frames.** The LED class hands the driver one zone at a time.
+  The driver now waits 4 ms for the rest of the frame and writes all four
+  zones in one call. A frame writes colours only, four writes instead of eight.
+* **Frame pacing.** Frames are placed on a fixed grid, so the time a draw
+  takes does not stretch every frame.
+* **Linear breathing.** LED output is linear and the eye is not, so breathing
+  is gamma-corrected (2.2).
+
+`omenctl effect fps` and Smoothness on the Lighting page set the rate, 1-60.

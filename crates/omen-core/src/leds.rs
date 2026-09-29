@@ -130,6 +130,26 @@ impl Leds {
         })
     }
 
+    /// Writes a zone's colour without touching its brightness.
+    ///
+    /// For an effect, which pins the brightness once and then only changes
+    /// colours: half the writes of set_zone, and one driver write per zone
+    /// rather than two to fold into each frame.
+    pub fn set_intensity(&self, index: usize, c: Rgb) -> Result<()> {
+        let p = self
+            .zones
+            .get(index)
+            .ok_or_else(|| Error::Curve(format!("zone {index} is out of range")))?;
+        std::fs::write(
+            p.join("multi_intensity"),
+            format!("{} {} {}", c.r, c.g, c.b),
+        )
+        .map_err(|source| Error::Write {
+            path: p.join("multi_intensity"),
+            source,
+        })
+    }
+
     /// Whether the keyboard is actually lit.
     ///
     /// Asks the driver first, which asks the firmware's switch. Only if that

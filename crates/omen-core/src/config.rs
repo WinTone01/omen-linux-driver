@@ -378,11 +378,12 @@ pub struct LightingConfig {
 
     /// Frames per second while an effect runs.
     ///
-    /// Each frame writes four zones; the driver folds them into one WMI call
-    /// when they arrive together, but a frame is still firmware work. Ten
-    /// is smooth enough for four zones spread across a keyboard and leaves
-    /// the firmware alone the rest of the time; there is no point paying for
-    /// sixty.
+    /// Ten was the first default, on the idea that four zones do not need
+    /// more. It is visibly steppy: at speed 5 a spectrum moves 1.5 % of the
+    /// colour wheel per frame, ten times a second. A frame is cheap - the
+    /// driver folds its four zones into one WMI call, and the colours are
+    /// memory-mapped EC RAM, not port I/O - so thirty is the default, and
+    /// sixty is allowed.
     #[serde(default = "default_fps")]
     pub fps: u8,
 }
@@ -429,7 +430,7 @@ impl LightingConfig {
 }
 
 fn default_fps() -> u8 {
-    10
+    30
 }
 
 fn default_speed() -> u8 {

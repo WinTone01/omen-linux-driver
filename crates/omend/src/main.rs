@@ -1644,6 +1644,7 @@ impl Runtime {
             profile_resets: self.profile_resets,
             lighting_restore: self.cfg.lighting.restore_on_start,
             lighting_off_on_battery: self.cfg.lighting.off_on_battery,
+            lighting_fps: self.cfg.lighting.fps,
             effect: Some(self.cfg.lighting.spec()),
             mux: omen_core::gpu::mux::discover(),
             gpu: self.gpu.get(),

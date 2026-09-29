@@ -231,6 +231,33 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             write_curve(config_path, shared, None)
         }
 
+        Request::SetLightingFps { fps } => {
+            if !(1..=60).contains(&fps) {
+                return Response::Error {
+                    message: format!("the frame rate must be between 1 and 60, got {fps}"),
+                };
+            }
+            info!("request: lighting at {fps} fps");
+            let mut cfg = match Config::load(config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("the current configuration could not be read: {e}"),
+                    }
+                }
+            };
+            cfg.lighting.fps = fps;
+            if let Err(e) = cfg.save(config_path) {
+                return Response::Error {
+                    message: e.to_string(),
+                };
+            }
+            shared.request_reload_sync(APPLY_TIMEOUT);
+            Response::Done {
+                message: format!("keyboard effects at {fps} frames a second"),
+            }
+        }
+
         Request::SetEffect(spec) => {
             info!(
                 "request: lighting -> {} at speed {}",

@@ -127,10 +127,16 @@ impl EffectSpec {
             Effect::Breathing => {
                 // A raised cosine rather than a triangle: the eye reads a
                 // linear ramp as spending too long at the extremes.
-                let level = 0.5 - 0.5 * (phase * std::f32::consts::TAU).cos();
+                let perceived = 0.5 - 0.5 * (phase * std::f32::consts::TAU).cos();
+                // The cosine is how bright it should *look*. LED output is
+                // linear and the eye is not: driven linearly, the dim half of
+                // the breath went by in a few coarse jumps and the bright
+                // half barely seemed to move. Gamma 2.2 spends the steps
+                // where the eye can see them.
+                let linear = perceived.powf(2.2);
                 // Never all the way to black. At zero the keyboard looks off
                 // rather than dim, and "did it crash" is not the effect.
-                let level = 0.12 + 0.88 * level;
+                let level = 0.04 + 0.96 * linear;
                 Some([scale(self.color, level); ZONE_COUNT])
             }
 
@@ -209,6 +215,32 @@ mod tests {
         // Dimmest is dim, not off.
         assert!(start.r > 0);
         assert_eq!(middle.r, 255);
+    }
+
+    #[test]
+    fn breathing_changes_gently_at_the_dim_end() {
+        // What gamma buys: near the bottom of the breath, one frame at 30 fps
+        // moves the output by only a few steps, instead of the jumps a linear
+        // ramp made where the eye is most sensitive.
+        let spec = EffectSpec {
+            effect: Effect::Breathing,
+            speed: 5,
+            color: Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+        };
+        let frame = 1.0 / 30.0;
+        let mut t = 0.0;
+        while t < spec.cycle_secs() / 4.0 {
+            let a = spec.frame(t).unwrap()[0].r as i32;
+            let b = spec.frame(t + frame).unwrap()[0].r as i32;
+            if a < 40 {
+                assert!((b - a).abs() <= 2, "{a} -> {b} at {t:.2}s");
+            }
+            t += frame;
+        }
     }
 
     #[test]

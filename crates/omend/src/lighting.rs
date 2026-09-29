@@ -62,6 +62,11 @@ impl Lighting {
                 let mut painter = Painter::new(leds);
                 painter.restore_saved(&cfg);
                 painter.begin(&cfg);
+                // When the next frame is due. Frames are placed on a fixed
+                // grid rather than "draw, then sleep an interval": that way
+                // the time a draw takes does not stretch every frame by the
+                // same amount, which reads as a stutter in a slow fade.
+                let mut due = Instant::now();
 
                 loop {
                     let spec = cfg.spec();
@@ -72,13 +77,21 @@ impl Lighting {
                         Duration::from_secs(3600)
                     } else {
                         painter.draw(&spec);
-                        cfg.frame_interval()
+                        let now = Instant::now();
+                        due += cfg.frame_interval();
+                        // Fell behind - a suspend, a busy machine: start the
+                        // grid again from here instead of rushing to catch up.
+                        if due < now {
+                            due = now + cfg.frame_interval();
+                        }
+                        due - now
                     };
 
                     match rx.recv_timeout(wait) {
                         Ok(Ask::Configure(next)) => {
                             painter.reconfigure(&cfg, &next);
                             cfg = *next;
+                            due = Instant::now();
                         }
                         Ok(Ask::Backlight(on)) => painter.set_backlight(on),
                         Err(RecvTimeoutError::Timeout) => {}
@@ -145,6 +158,9 @@ struct Painter {
     /// Brightness before the backlight was switched off, so turning it back
     /// on returns to what it was rather than to an arbitrary full.
     saved_brightness: Option<u8>,
+    /// Whether the zones' own brightness has been pinned at full for this
+    /// effect. After that a frame writes colours only - see set_intensity.
+    pinned: bool,
 }
 
 impl Painter {
@@ -155,6 +171,7 @@ impl Painter {
             saved: None,
             last: None,
             saved_brightness: None,
+            pinned: false,
         }
     }
 
@@ -225,6 +242,7 @@ impl Painter {
         }
         self.save();
         self.started = Instant::now();
+        self.pinned = false;
         info!(
             "lighting: {} at speed {} ({} fps)",
             cfg.effect,
@@ -274,11 +292,17 @@ impl Painter {
         let Some(frame) = spec.frame(self.started.elapsed().as_secs_f32()) else {
             return;
         };
+        let pinned = self.pinned;
         for (i, colour) in frame.iter().enumerate() {
             if self.last.map(|l| l[i]) == Some(*colour) {
                 continue;
             }
-            if let Err(e) = self.leds.set_zone(i, *colour) {
+            let written = if pinned {
+                self.leds.set_intensity(i, *colour)
+            } else {
+                self.leds.set_zone(i, *colour)
+            };
+            if let Err(e) = written {
                 // A keyboard that has gone away (module unloaded) should not
                 // spin this thread logging once per frame.
                 debug!("lighting: zone {i} write failed: {e}");
@@ -286,5 +310,6 @@ impl Painter {
             }
         }
         self.last = Some(frame);
+        self.pinned = true;
     }
 }

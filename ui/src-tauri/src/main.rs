@@ -393,6 +393,12 @@ fn set_lighting_options(restore_on_start: bool, off_on_battery: bool) -> Result<
     })
 }
 
+/// Frames a second for keyboard effects.
+#[tauri::command]
+fn set_lighting_fps(fps: u8) -> Result<String, String> {
+    talk(Request::SetLightingFps { fps })
+}
+
 /// A dust-clearing run. The daemon clamps the length; this is a button, and a
 /// button that can leave the fans at full power indefinitely is a trap.
 #[tauri::command]
@@ -987,6 +993,7 @@ fn main() {
             set_app_profiles,
             set_dgpu_power,
             set_gpu_boost,
+            set_lighting_fps,
             set_gpu_mux,
             gpu_env,
             system_info,

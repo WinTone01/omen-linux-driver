@@ -36,6 +36,7 @@ const mockState = {
     apps: [{ process: "cs2", profile: "performance", fan: { mode: "curve" }, curve: "performance" }],
     active_app: null,
     lighting_restore: false,
+    lighting_fps: 30,
     lighting_off_on_battery: false,
     cleaning_secs_left: null,
     on_ac: true,
@@ -203,6 +204,9 @@ async function mockInvoke(cmd, args) {
     case "clean_fans":
       mockState.daemon.cleaning_secs_left = args.seconds;
       return `running the fans at full power for ${args.seconds}s, then back to normal`;
+    case "set_lighting_fps":
+      mockState.daemon.lighting_fps = args.fps;
+      return `keyboard effects at ${args.fps} frames a second`;
     case "set_lighting_options":
       mockState.daemon.lighting_restore = args.restoreOnStart;
       mockState.daemon.lighting_off_on_battery = args.offOnBattery;
@@ -555,12 +559,20 @@ function renderEffect(s) {
     $("#effect-speed-out").textContent = String(now.speed ?? 5);
   }
   $("#effect-speed-row").hidden = now.effect === "none";
+  $("#effect-fps-row").hidden = now.effect === "none";
+  const fps = s.daemon?.lighting_fps ?? 30;
+  $$("#effect-fps button").forEach((b) =>
+    b.classList.toggle("is-active", Number(b.dataset.fps) === fps));
   $("#effect-hint").textContent = t(EFFECT_HINT[now.effect] ?? "");
   // An effect repaints the zones several times a second, so the colour
   // pickers below are not what the keyboard is showing. Say so.
   $("#effect-note").textContent =
     now.effect === "none" ? "" : t("the zone colours below are being animated");
 }
+
+$$("#effect-fps button").forEach((b) =>
+  b.addEventListener("click", () =>
+    act(() => invoke("set_lighting_fps", { fps: Number(b.dataset.fps) }))));
 
 $("#bright-range").addEventListener("input", (e) => {
   $("#bright-out").textContent = `${e.target.value}%`;

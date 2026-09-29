@@ -377,7 +377,20 @@ fn fan() -> Section {
                 )
                 .with_fix("Without a tachometer the stall detector cannot tell a stopped fan from a slow one.")
             } else {
-                Check::new("tacho", "Fan tachometers", Verdict::Ok, rpms.join(", "))
+                Check::new(
+                    "tacho",
+                    "Fan tachometers",
+                    Verdict::Ok,
+                    format!(
+                        "{}{}",
+                        rpms.join(", "),
+                        if f.fast_tach() {
+                            " (from EC RAM, through omen-kbd-rgb)"
+                        } else {
+                            " (through hp-wmi's SMI - slow)"
+                        }
+                    ),
+                )
             });
         }
         Err(e) => checks.push(

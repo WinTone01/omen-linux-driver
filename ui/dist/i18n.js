@@ -521,3 +521,8 @@ Object.assign(I18N.tr, {
   "the fans are with the firmware until it is back": "servis dönene kadar fanlar firmware'de",
 });
 
+/* The effect frame rate. */
+Object.assign(I18N.tr, {
+  "Smoothness": "Akıcılık",
+});
+

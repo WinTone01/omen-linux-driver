@@ -183,6 +183,8 @@ pub enum Request {
         restore_on_start: bool,
         off_on_battery: bool,
     },
+    /// Frames per second for keyboard effects, 1-60.
+    SetLightingFps { fps: u8 },
     /// Run the fans at full power for a while, to clear dust, then go back
     /// to whatever was happening before.
     CleanFans { seconds: u64 },
@@ -317,6 +319,9 @@ pub struct Snapshot {
     pub lighting_restore: bool,
     #[serde(default)]
     pub lighting_off_on_battery: bool,
+    /// Frames a second for keyboard effects.
+    #[serde(default)]
+    pub lighting_fps: u8,
     /// The keyboard effect the daemon is drawing, if any.
     #[serde(default)]
     pub effect: Option<crate::anim::EffectSpec>,
