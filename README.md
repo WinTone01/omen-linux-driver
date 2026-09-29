@@ -11,8 +11,12 @@ built by reading the firmware, not by guessing.**
 [![Interfaces](https://img.shields.io/badge/interfaces-hwmon%20%C2%B7%20platform__profile%20%C2%B7%20leds--multicolor-2dd4bf)](#how-it-fits-together)
 [![Built with](https://img.shields.io/badge/rust%20%2B%20C-daemon%20%C2%B7%20CLI%20%C2%B7%20GUI%20%C2%B7%20kernel%20module-a855f7)](#layout)
 [![License](https://img.shields.io/badge/license-GPL--2.0--only-lightgrey)](LICENSE)
+[![CI](https://github.com/WinTone01/omen-linux-driver/actions/workflows/ci.yml/badge.svg)](https://github.com/WinTone01/omen-linux-driver/actions/workflows/ci.yml)
 
-<img src="docs/screenshots/vitals.png" width="900" alt="System Vitals: GPU, CPU, RAM and fan gauges above storage and process lists">
+**[Install](#install)** · **[The window](#the-window)** · **[Measured](#measured-not-guessed)** ·
+**[Terminal](#from-the-terminal)** · **[How it works](#how-it-fits-together)** · **[Findings](#what-was-found)**
+
+<img src="docs/screenshots/vitals.png" width="920" alt="System Vitals: GPU, CPU, RAM and fan gauges above storage, processes and a temperature history">
 
 </div>
 
@@ -31,6 +35,43 @@ git clone https://github.com/WinTone01/omen-linux-driver.git && cd omen-linux-dr
 
 It identifies the machine before touching anything, and stops if it is not an
 HP OMEN or Victus. [What it installs, and the flags →](#what-installsh-does)
+
+<table>
+<tr>
+<td width="33%" valign="top">
+<b>🌀 Fans</b><br>
+<sub>OMEN Gaming Hub's own curve, draggable, with presets. Safety overrides
+force full power; the fans are never left to an EC that will not drive them.</sub>
+</td>
+<td width="33%" valign="top">
+<b>⚡ Performance</b><br>
+<sub>The firmware's thermal profiles, measured: 32 / 55 / 60 W on the CPU.
+cTGP and Dynamic Boost follow the profile, as they do on Windows.</sub>
+</td>
+<td width="33%" valign="top">
+<b>🖥️ Graphics</b><br>
+<sub>The mux (hybrid, discrete, integrated), the dGPU's sleep, and which
+program is keeping it awake.</sub>
+</td>
+</tr>
+<tr>
+<td valign="top">
+<b>🌈 Lighting</b><br>
+<sub>Four RGB zones, seven effects at 30 fps, Fn+F4 followed, colours
+restored after sleep and reboot.</sub>
+</td>
+<td valign="top">
+<b>🎮 Automation</b><br>
+<sub>Per game, per machine state (hot, idle, lid shut, battery low) and per
+power source, restored when it ends.</sub>
+</td>
+<td valign="top">
+<b>🩺 Diagnosis</b><br>
+<sub>Every part of the installation checked, with the fix for anything wrong,
+in the window and as <code>omenctl doctor</code>.</sub>
+</td>
+</tr>
+</table>
 
 ## Which machines
 
@@ -53,26 +94,71 @@ your machine can be asked to do, and why anything missing is missing.
 
 ## The window
 
+Laid out the way OMEN Gaming Hub is: the machine's features as tabs, the
+chosen one marked with the Hub's violet-to-orange sweep.
+
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/fan.png" alt="Fan Control"><br><b>Fan Control</b><br><sub>The curve, draggable, with presets and a log of every setpoint change.</sub></td>
-<td width="50%"><img src="docs/screenshots/performance.png" alt="Performance Control"><br><b>Performance Control</b><br><sub>The firmware's thermal profile, and what each mode actually does.</sub></td>
+<td width="50%"><img src="docs/screenshots/performance.png" alt="Performance Control"><br><b>Performance Control</b><br><sub>The firmware's thermal profiles as tiles, with what each was measured to allow, and the Hub's green temperature strip.</sub></td>
+<td width="50%"><img src="docs/screenshots/fan.png" alt="Fan Control"><br><b>Fan Control</b><br><sub>The curve, draggable, with presets, a shareable code, and a log of every setpoint the service chose.</sub></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/graphics.png" alt="Graphics"><br><b>Graphics</b><br><sub>The mux, the discrete GPU's power state, and what is holding it awake.</sub></td>
-<td><img src="docs/screenshots/automation.png" alt="Game Profiles"><br><b>Game Profiles</b><br><sub>Rules per application, per machine state and per power source, restored on exit.</sub></td>
+<td><img src="docs/screenshots/graphics.png" alt="Graphics"><br><b>Graphics</b><br><sub>The mux, the GPU power allowance (cTGP, Dynamic Boost), and what is keeping the discrete GPU awake.</sub></td>
+<td><img src="docs/screenshots/lighting.png" alt="Lighting"><br><b>Lighting</b><br><sub>Four zones, a hue strip, and seven effects: breathing, pulse, wave, chase, spectrum, gradient.</sub></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/lighting.png" alt="Lighting"><br><b>Lighting</b><br><sub>Four zones, a hue strip, effects, and colours that survive a reboot.</sub></td>
-<td><img src="docs/screenshots/diagnosis.png" alt="Diagnosis"><br><b>Diagnosis</b><br><sub>Named checks with remedies. Also <code>omenctl doctor</code>.</sub></td>
+<td><img src="docs/screenshots/automation.png" alt="Game Profiles"><br><b>Game Profiles</b><br><sub>Rules per application, per machine state and per power source, put back when they end.</sub></td>
+<td><img src="docs/screenshots/diagnosis.png" alt="Diagnosis"><br><b>Diagnosis</b><br><sub>Named checks with remedies, the same as <code>omenctl doctor</code>.</sub></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/settings.png" alt="Settings"><br><b>Settings</b><br><sub>Window settings, machine defaults, version skew, firmware through fwupd.</sub></td>
+<td><img src="docs/screenshots/settings.png" alt="Settings"><br><b>Settings</b><br><sub>Language, notifications, autostart, machine defaults, version skew, firmware through fwupd.</sub></td>
 <td valign="top"><br><b>And</b><br><sub>English and Turkish · a tray icon with profile and fan actions ·
-one window however many times you click the icon · it reopens on the page you
-left it on.</sub></td>
+the OMEN key opens it · one window however many times you click the icon ·
+it reopens on the page you left it on · desktop notifications when something
+fails.</sub></td>
 </tr>
 </table>
+
+<sub>The pictures are rendered by <a href="ui/screenshots.py"><code>ui/screenshots.py</code></a>
+with WebKitGTK, the engine the window runs on, from the window's built-in
+sample data.</sub>
+
+## Measured, not guessed
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**What each profile allows** — all cores loaded, on mains
+(`omenctl profile measure`)
+
+| Profile | CPU | Clock | GPU limit |
+|:--|--:|--:|--:|
+| low-power | 31.7 W | 1992 MHz | 80 W |
+| balanced | 55.0 W | 3479 MHz | 80 W |
+| performance | **60.0 W** | 3552 MHz | **100 W** |
+
+<sub>→ <a href="docs/research/profile-power.md">profile-power.md</a></sub>
+
+</td>
+<td width="50%" valign="top">
+
+**Why keyboard effects stuttered** — frames reaching the firmware
+(`probe-fps.sh`)
+
+| | Frames | Longest write |
+|:--|--:|--:|
+| before | 70–80 % | 270 ms |
+| after | **100 %** | **~20 ms** |
+
+<sub>hp-wmi reads the fan speed through an SMI that takes 264 ms and
+blocks every other ACPI call. The module reads the same numbers from EC RAM
+instead. → <a href="docs/usage.md#smooth-effects">usage.md</a></sub>
+
+</td>
+</tr>
+</table>
+
 
 ## How it fits together
 
@@ -189,7 +275,11 @@ omenctl caps                   # what this machine can be asked to do
 omenctl report                 # one file for a bug report
 omenctl fix                    # what needs root here, and it asks for you
 omenctl curve code             # the curve as one line, to share
-omenctl effect wave 7          # none / breathing / wave / spectrum
+omenctl effect wave 7          # none / breathing / pulse / wave / chase / spectrum / gradient
+omenctl effect fps 30          # frames a second for effects, 1-60
+omenctl profile measure        # what each profile actually allows, measured
+omenctl gpu boost              # cTGP and Dynamic Boost, and whether they follow the profile
+omenctl keys check             # which keys send the wrong thing; fixes only those
 omenctl gpu                    # what is holding the discrete GPU awake
 omenctl gpu mux discrete       # which GPU drives the screen, from the next boot
 omenctl version                # what is running vs what is installed
@@ -319,7 +409,7 @@ They are the interesting part, so they are not buried.
 ```
 install.sh          one command, with a hardware check in front of it
 crates/             omen-core · omend (the daemon) · omenctl (the CLI)
-ui/                 omen-ui — the window
+ui/                 omen-ui — the window (and screenshots.py for the pictures)
 kernel/
   hp-wmi-8d24/      the board entry: patch, build script, verify.sh
   omen-kbd-rgb/     4 RGB zones, the graphics mux, the dGPU temperature
