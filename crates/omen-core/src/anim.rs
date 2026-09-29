@@ -26,6 +26,12 @@ pub enum Effect {
     Wave,
     /// Every zone on the same hue, cycling through the spectrum.
     Spectrum,
+    /// One colour beating: a quick rise and a slower fall, then a rest.
+    Pulse,
+    /// A light running left to right across the zones, trailing off.
+    Chase,
+    /// A still blend from one colour on the left to another on the right.
+    Gradient,
 }
 
 impl Effect {
@@ -35,6 +41,9 @@ impl Effect {
             "breathing" | "breathe" => Some(Self::Breathing),
             "wave" => Some(Self::Wave),
             "spectrum" | "rainbow" | "cycle" => Some(Self::Spectrum),
+            "pulse" => Some(Self::Pulse),
+            "chase" => Some(Self::Chase),
+            "gradient" => Some(Self::Gradient),
             _ => None,
         }
     }
@@ -45,13 +54,41 @@ impl Effect {
             Self::Breathing => "breathing",
             Self::Wave => "wave",
             Self::Spectrum => "spectrum",
+            Self::Pulse => "pulse",
+            Self::Chase => "chase",
+            Self::Gradient => "gradient",
         }
     }
 
-    /// Whether this effect uses the configured base colour. Breathing does;
-    /// the two hue effects supply their own.
+    /// Every effect, in the order a list of them should show.
+    pub const ALL: [Effect; 7] = [
+        Self::None,
+        Self::Breathing,
+        Self::Wave,
+        Self::Spectrum,
+        Self::Pulse,
+        Self::Chase,
+        Self::Gradient,
+    ];
+
+    /// Whether this effect uses the configured base colour. The two hue
+    /// effects supply their own.
     pub fn uses_base_color(self) -> bool {
-        self == Self::Breathing
+        matches!(
+            self,
+            Self::Breathing | Self::Pulse | Self::Chase | Self::Gradient
+        )
+    }
+
+    /// Whether it also uses the second colour - the right-hand end of the
+    /// gradient.
+    pub fn uses_second_color(self) -> bool {
+        self == Self::Gradient
+    }
+
+    /// Whether it moves. A gradient does not, so it has no speed.
+    pub fn is_animated(self) -> bool {
+        !matches!(self, Self::None | Self::Gradient)
     }
 }
 
@@ -72,6 +109,9 @@ pub struct EffectSpec {
     /// Base colour, for the effects that take one.
     #[serde(default = "default_color")]
     pub color: Rgb,
+    /// The second colour: where a gradient ends, on the right.
+    #[serde(default = "default_color2")]
+    pub color2: Rgb,
 }
 
 fn default_speed() -> u8 {
@@ -87,12 +127,23 @@ fn default_color() -> Rgb {
     }
 }
 
+fn default_color2() -> Rgb {
+    // A cool blue, far enough round the wheel from OMEN red that a gradient
+    // between them reads as one.
+    Rgb {
+        r: 0,
+        g: 110,
+        b: 255,
+    }
+}
+
 impl Default for EffectSpec {
     fn default() -> Self {
         Self {
             effect: Effect::None,
             speed: default_speed(),
             color: default_color(),
+            color2: default_color2(),
         }
     }
 }
@@ -145,6 +196,56 @@ impl EffectSpec {
                 Some([c; ZONE_COUNT])
             }
 
+            Effect::Pulse => {
+                // A heartbeat, not a breath: up in the first tenth of the
+                // cycle, then an exponential fall, which is how a pulse of
+                // light looks when it decays. Same gamma as breathing.
+                let perceived = if phase < 0.1 {
+                    phase / 0.1
+                } else {
+                    (-(phase - 0.1) * 7.0).exp()
+                };
+                let level = 0.04 + 0.96 * perceived.powf(2.2);
+                Some([scale(self.color, level); ZONE_COUNT])
+            }
+
+            Effect::Chase => {
+                // A head moving left to right, one cycle to cross the
+                // keyboard and wrap. Each zone lights by its distance behind
+                // the head, so the light has a tail rather than jumping from
+                // zone to zone - with four zones, a hard step is all there
+                // would otherwise be.
+                let head = phase * ZONE_COUNT as f32;
+                let mut out = [Rgb { r: 0, g: 0, b: 0 }; ZONE_COUNT];
+                let n = ZONE_COUNT as f32;
+                for (i, zone) in out.iter_mut().enumerate() {
+                    // How far the head is past this zone's centre, wrapped
+                    // into -n/2..n/2: negative while it is still coming.
+                    let past = (head - (i as f32 + 0.5) + n / 2.0).rem_euclid(n) - n / 2.0;
+                    let perceived = if past < 0.0 {
+                        // Arriving: a quick rise over half a zone.
+                        (1.0 + past / 0.5).max(0.0)
+                    } else {
+                        // Gone past: the tail, over a zone and a half.
+                        (1.0 - past / 1.5).max(0.0)
+                    };
+                    let level = 0.04 + 0.96 * perceived.powf(2.2);
+                    *zone = scale(self.color, level);
+                }
+                Some(out)
+            }
+
+            Effect::Gradient => {
+                // Blended in linear light, not in the byte values: a straight
+                // mix of red and blue bytes goes through a muddy dark purple.
+                let mut out = [Rgb { r: 0, g: 0, b: 0 }; ZONE_COUNT];
+                for (i, zone) in out.iter_mut().enumerate() {
+                    let t = i as f32 / (ZONE_COUNT - 1) as f32;
+                    *zone = mix(self.color, self.color2, t);
+                }
+                Some(out)
+            }
+
             Effect::Wave => {
                 let mut out = [Rgb { r: 0, g: 0, b: 0 }; ZONE_COUNT];
                 for (i, zone) in out.iter_mut().enumerate() {
@@ -165,6 +266,19 @@ fn scale(c: Rgb, factor: f32) -> Rgb {
         r: (c.r as f32 * f).round() as u8,
         g: (c.g as f32 * f).round() as u8,
         b: (c.b as f32 * f).round() as u8,
+    }
+}
+
+/// A blend of two colours, `t` from 0 (all `a`) to 1 (all `b`), mixed in
+/// linear light and brought back to the byte scale.
+fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
+    let lin = |v: u8| (v as f32 / 255.0).powf(2.2);
+    let back = |v: f32| (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0).round() as u8;
+    let ch = |x: u8, y: u8| back(lin(x) + (lin(y) - lin(x)) * t);
+    Rgb {
+        r: ch(a.r, b.r),
+        g: ch(a.g, b.g),
+        b: ch(a.b, b.b),
     }
 }
 
@@ -207,6 +321,7 @@ mod tests {
                 g: 255,
                 b: 255,
             },
+            ..EffectSpec::default()
         };
         let cycle = spec.cycle_secs();
         let start = spec.frame(0.0).unwrap()[0];
@@ -230,6 +345,7 @@ mod tests {
                 g: 255,
                 b: 255,
             },
+            ..EffectSpec::default()
         };
         let frame = 1.0 / 30.0;
         let mut t = 0.0;
@@ -284,5 +400,66 @@ mod tests {
             ..Default::default()
         };
         assert!(silly.cycle_secs() >= FASTEST_CYCLE_S);
+    }
+
+    fn spec(effect: Effect) -> EffectSpec {
+        EffectSpec {
+            effect,
+            speed: 5,
+            color: Rgb { r: 255, g: 0, b: 0 },
+            color2: Rgb { r: 0, g: 0, b: 255 },
+        }
+    }
+
+    #[test]
+    fn a_pulse_rises_fast_and_falls_slowly() {
+        let s = spec(Effect::Pulse);
+        let c = s.cycle_secs();
+        let at = |p: f32| s.frame(p * c).unwrap()[0].r;
+        // Peak at a tenth of the way in, brighter than the start.
+        assert!(at(0.1) > at(0.0));
+        assert_eq!(at(0.1), 255);
+        // Still well lit shortly after the peak, nearly dark by the end.
+        assert!(at(0.2) > at(0.9));
+        assert!(at(0.95) < 40);
+    }
+
+    #[test]
+    fn the_chase_moves_left_to_right() {
+        let s = spec(Effect::Chase);
+        let c = s.cycle_secs();
+        let brightest = |p: f32| {
+            let f = s.frame(p * c).unwrap();
+            (0..ZONE_COUNT).max_by_key(|&i| f[i].r).unwrap()
+        };
+        // Over one cycle the head crosses the zones in order.
+        let seen: Vec<usize> = [0.125, 0.375, 0.625, 0.875]
+            .iter()
+            .map(|&p| brightest(p))
+            .collect();
+        assert_eq!(seen, vec![0, 1, 2, 3]);
+        // And it has a tail: the zone behind the head is not dark.
+        let f = s.frame(0.375 * c).unwrap();
+        assert!(f[0].r > 0 && f[0].r < f[1].r);
+    }
+
+    #[test]
+    fn a_gradient_runs_from_one_colour_to_the_other_and_holds_still() {
+        let s = spec(Effect::Gradient);
+        let f = s.frame(0.0).unwrap();
+        assert_eq!(f[0], Rgb { r: 255, g: 0, b: 0 });
+        assert_eq!(f[ZONE_COUNT - 1], Rgb { r: 0, g: 0, b: 255 });
+        // Mixed in linear light, the middle stays bright rather than going
+        // through a dark, muddy purple.
+        assert!(f[1].r > 128 && f[2].b > 128);
+        assert_eq!(s.frame(3.7).unwrap(), f);
+        assert!(!Effect::Gradient.is_animated());
+    }
+
+    #[test]
+    fn every_effect_round_trips_through_its_name() {
+        for e in Effect::ALL {
+            assert_eq!(Effect::parse(e.as_str()), Some(e));
+        }
     }
 }

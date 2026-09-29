@@ -44,10 +44,12 @@ USAGE:
                                    behaviour, not for daily use.
 
     omenctl effect fps <1-60>        Frames a second for effects (default 30)
-    omenctl effect <NAME> [SPEED] [#RRGGBB]
+    omenctl effect <NAME> [SPEED] [#RRGGBB] [#RRGGBB]
                                    Keyboard lighting: none / breathing / wave /
-                                   spectrum. Speed is 1-10; the colour applies
-                                   to breathing. Persists across reboots.
+                                   spectrum / pulse / chase / gradient. Speed
+                                   is 1-10. The colour is for breathing, pulse
+                                   and chase; gradient takes two, left and
+                                   right. Persists across reboots.
 
     omenctl app                    List the per-application profiles
     omenctl app add <PROCESS> [PROFILE] [FAN]
@@ -261,11 +263,19 @@ fn set_effect(args: &[String]) -> Result<()> {
     }
 
     let name = args.get(1).ok_or_else(|| {
-        anyhow::anyhow!("an effect is required: none / breathing / wave / spectrum")
+        anyhow::anyhow!(
+            "an effect is required: none / breathing / wave / spectrum / pulse / chase / gradient"
+        )
     })?;
-    let effect = Effect::parse(name).ok_or_else(|| {
-        anyhow::anyhow!("unknown effect: {name} (none / breathing / wave / spectrum)")
-    })?;
+    let names = || {
+        Effect::ALL
+            .iter()
+            .map(|e| e.as_str())
+            .collect::<Vec<_>>()
+            .join(" / ")
+    };
+    let effect = Effect::parse(name)
+        .ok_or_else(|| anyhow::anyhow!("unknown effect: {name} ({})", names()))?;
 
     // Unspecified fields keep whatever the daemon is already using. Turning
     // effects off and back on should not quietly reset the colour you chose,
@@ -274,9 +284,18 @@ fn set_effect(args: &[String]) -> Result<()> {
         effect,
         ..current_effect().unwrap_or_default()
     };
+    // The first colour given is the base colour, a second one is where a
+    // gradient ends.
+    let mut colours = 0;
     for arg in &args[2..] {
         if arg.starts_with('#') || arg.len() == 6 && arg.chars().all(|c| c.is_ascii_hexdigit()) {
-            spec.color = parse_hex(arg)?;
+            let c = parse_hex(arg)?;
+            if colours == 0 {
+                spec.color = c;
+            } else {
+                spec.color2 = c;
+            }
+            colours += 1;
         } else {
             let speed: u8 = arg
                 .parse()

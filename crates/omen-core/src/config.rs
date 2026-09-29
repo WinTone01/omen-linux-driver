@@ -336,6 +336,11 @@ pub struct LightingConfig {
     #[serde(default = "default_effect_color")]
     pub color: [u8; 3],
 
+    /// Second colour, for the effects that take two (the right-hand end of
+    /// a gradient).
+    #[serde(default = "default_effect_color2")]
+    pub color2: [u8; 3],
+
     /// Put the zone colours back when the daemon starts.
     ///
     /// The LED class does not survive a reboot or a module reload - the
@@ -395,6 +400,7 @@ impl Default for LightingConfig {
             effect: spec.effect,
             speed: spec.speed,
             color: default_effect_color(),
+            color2: default_effect_color2(),
             restore_on_start: false,
             zones: Vec::new(),
             brightness: None,
@@ -415,6 +421,11 @@ impl LightingConfig {
                 g: self.color[1],
                 b: self.color[2],
             },
+            color2: crate::leds::Rgb {
+                r: self.color2[0],
+                g: self.color2[1],
+                b: self.color2[2],
+            },
         }
     }
 
@@ -422,6 +433,7 @@ impl LightingConfig {
         self.effect = spec.effect;
         self.speed = spec.speed;
         self.color = [spec.color.r, spec.color.g, spec.color.b];
+        self.color2 = [spec.color2.r, spec.color2.g, spec.color2.b];
     }
 
     pub fn frame_interval(&self) -> Duration {
@@ -439,6 +451,11 @@ fn default_speed() -> u8 {
 
 fn default_effect_color() -> [u8; 3] {
     let c = EffectSpec::default().color;
+    [c.r, c.g, c.b]
+}
+
+fn default_effect_color2() -> [u8; 3] {
+    let c = EffectSpec::default().color2;
     [c.r, c.g, c.b]
 }
 

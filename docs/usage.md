@@ -242,9 +242,12 @@ omenctl set curve             # automatic: the curve drives (default)
 omenctl set manual 2400       # fixed target
 omenctl set max               # full speed
 omenctl set auto              # advanced: hand the fans to the EC (see below)
-omenctl effect wave 7         # keyboard: none / breathing / wave / spectrum
+omenctl effect wave 7         # keyboard: none / breathing / wave / spectrum /
+                              #   pulse / chase / gradient
 omenctl effect breathing 4 '#00a0ff'
-                              # speed 1-10, colour for the effects that use one
+                              # speed 1-10, colour for breathing, pulse, chase
+omenctl effect gradient '#e81123' '#006eff'
+                              # a still blend, left colour to right colour
 omenctl effect fps 60         # frames a second, 1-60 (default 30)
 omenctl app                   # per-application profiles
 omenctl app add cs2 performance curve:performance

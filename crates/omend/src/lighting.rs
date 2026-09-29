@@ -75,6 +75,11 @@ impl Lighting {
                         // changes rather than wake ten times a second to do
                         // nothing.
                         Duration::from_secs(3600)
+                    } else if !spec.effect.is_animated() {
+                        // A still pattern (a gradient): drawn once, then the
+                        // same wait as no effect at all.
+                        painter.draw(&spec);
+                        Duration::from_secs(3600)
                     } else {
                         painter.draw(&spec);
                         let now = Instant::now();

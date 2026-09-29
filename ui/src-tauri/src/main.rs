@@ -372,13 +372,19 @@ fn set_curve(points: Vec<CurvePoint>, interpolation: String) -> Result<String, S
 /// Keyboard effects belong to the daemon, not to this process: an effect has
 /// to keep running when the window is closed.
 #[tauri::command]
-fn set_effect(effect: String, speed: u8, color: omen_core::leds::Rgb) -> Result<String, String> {
+fn set_effect(
+    effect: String,
+    speed: u8,
+    color: omen_core::leds::Rgb,
+    color2: Option<omen_core::leds::Rgb>,
+) -> Result<String, String> {
     let effect = omen_core::anim::Effect::parse(&effect)
         .ok_or_else(|| format!("unknown effect: {effect}"))?;
     talk(Request::SetEffect(omen_core::anim::EffectSpec {
         effect,
         speed,
         color,
+        color2: color2.unwrap_or(omen_core::anim::EffectSpec::default().color2),
     }))
 }
 
