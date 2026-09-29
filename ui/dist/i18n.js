@@ -526,3 +526,21 @@ Object.assign(I18N.tr, {
   "Smoothness": "Akıcılık",
 });
 
+/* Pulse, chase and gradient. */
+Object.assign(I18N.tr, {
+  "Pulse": "Nabız",
+  "Chase": "Kovalamaca",
+  "Gradient": "Geçiş",
+  "One colour beating: a quick rise and a slower fade. Uses the colour picked above.":
+    "Tek renk atıyor: hızlı yükseliş, daha yavaş sönüş. Yukarıda seçilen rengi kullanır.",
+  "A light running left to right across the zones, with a tail. Uses the colour picked above.":
+    "Bölgeler boyunca soldan sağa koşan, arkasında iz bırakan bir ışık. Yukarıda seçilen rengi kullanır.",
+  "A still blend from the leftmost zone's colour to the rightmost's. Set those two zones first, then choose Gradient.":
+    "En soldaki bölgenin renginden en sağdakine sabit bir geçiş. Önce bu iki bölgeyi ayarla, sonra Geçiş'i seç.",
+});
+
+/* The redrawn window. */
+Object.assign(I18N.tr, {
+  "Active Profile": "Etkin profil",
+});
+

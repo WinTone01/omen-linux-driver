@@ -56,6 +56,7 @@ const mockState = {
     problems: [],
   },
   daemon_error: null,
+  nvidia_powerd: true,
   leds: {
     brightness: 100,
     backlight_off: false,
@@ -87,10 +88,44 @@ const DEFAULT_CURVE = structuredClone(mockState.curve);
 
 let mockSettings = { poll_ms: 2000, alerts: true, autostart: false, start_hidden: false };
 
+/* What the sample machine reads at time t: a slow swell with some faster
+ * texture, the way a laptop under a light load actually looks. */
+function mockReading(t) {
+  const cpu = 64 + 8 * Math.sin(t / 40) + 2.5 * Math.sin(t / 13);
+  const gpu = 52 + 4 * Math.sin(t / 55 + 1) + 1.2 * Math.sin(t / 17);
+  const fan = 2100 + 380 * Math.sin(t / 40 - 0.4) + 60 * Math.sin(t / 19);
+  return {
+    cpu: +cpu.toFixed(1),
+    gpu: +gpu.toFixed(1),
+    fan1: Math.round(fan),
+    fan2: Math.round(fan * 0.9),
+  };
+}
+
 async function mockInvoke(cmd, args) {
   switch (cmd) {
-    case "get_state":
+    case "get_state": {
+      // A machine that is alive: the sample data drifts a little with time,
+      // so the rings, sparklines and history have something to draw.
+      const d = mockState.daemon;
+      const at = mockReading(Date.now() / 1000);
+      d.driver_temp_c = at.cpu;
+      d.temps = [["cpu/Tctl", at.cpu], ["igpu/edge", at.gpu], ["board/temp1", 46.0]];
+      d.fan1_rpm = at.fan1;
+      d.fan2_rpm = at.fan2;
       return structuredClone(mockState);
+    }
+    case "samples": {
+      // Ten minutes of the same drift, so the history is not blank when the
+      // page opens - which is what the daemon's own record does for real.
+      const now = Date.now() / 1000;
+      const rows = [];
+      for (let i = 300; i > 0; i--) {
+        const r = mockReading(now - i * 2);
+        rows.push({ uptime_secs: 4230 - i * 2, temp_c: r.cpu, fan_rpm: r.fan1, target_rpm: r.fan1 });
+      }
+      return rows;
+    }
     case "set_mode":
       mockState.daemon.mode = args.mode;
       mockState.daemon.target_rpm =
@@ -134,15 +169,39 @@ async function mockInvoke(cmd, args) {
           { title: "Hardware", checks: [
             { id: "board", title: "Board", verdict: "ok", detail: "8D24, the one this is built for", fix: null },
           ]},
+          { title: "Fan", checks: [
+            { id: "pwm", title: "Fan control", verdict: "ok", detail: "hp-wmi exposes pwm1 (the 8D24 entry)", fix: null },
+            { id: "profile", title: "Firmware thermal profile", verdict: "ok",
+              detail: "hp-wmi is a platform_profile handler (amd-pmf, hp-wmi)", fix: null },
+            { id: "tacho", title: "Fan tachometers", verdict: "ok",
+              detail: "fan1 2104 RPM, fan2 1893 RPM (from EC RAM, through omen-kbd-rgb)", fix: null },
+          ]},
           { title: "Thermal", checks: [
-            { id: "dgpu_temp", title: "Discrete GPU temperature", verdict: "warn",
-              detail: "the service is not watching it - the curve only follows the CPU",
-              fix: "sudo modprobe ec_sys (read-only), then: sudo systemctl restart omend" },
+            { id: "sensors", title: "Temperature sensors", verdict: "ok",
+              detail: "cpu/Tctl, igpu/edge, dgpu/ec, board/temp1", fix: null },
+            { id: "dgpu_temp", title: "Discrete GPU temperature", verdict: "ok", detail: "being watched", fix: null },
+          ]},
+          { title: "Graphics", checks: [
+            { id: "dgpu_pm", title: "GPU runtime power", verdict: "ok",
+              detail: "may suspend; 42 minutes asleep so far", fix: null },
+            { id: "dynamic_boost", title: "GPU power allowance", verdict: "ok",
+              detail: "cTGP off, Dynamic Boost on", fix: null },
+            { id: "mux", title: "Graphics switcher", verdict: "ok", detail: "hybrid (supports uma, hybrid, discrete)", fix: null },
+          ]},
+          { title: "Lighting", checks: [
+            { id: "leds", title: "Keyboard lighting", verdict: "ok",
+              detail: "omen-kbd-rgb 0.2.0, four zones, writable by the omen group", fix: null },
+          ]},
+          { title: "Service", checks: [
+            { id: "daemon", title: "omend", verdict: "ok", detail: "running, the installed build", fix: null },
+            { id: "skew", title: "Versions", verdict: "warn",
+              detail: "the loaded omen-kbd-rgb is older than the installed one",
+              fix: "sudo modprobe -r omen-kbd-rgb && sudo modprobe omen-kbd-rgb" },
           ]},
         ],
       };
     case "diagnose_text":
-      return "omen-control 0.1.0 - 1 thing worth knowing about\n";
+      return "omen-control 0.1.0 - 1 thing worth knowing about, 11 working\n";
     case "firmware":
       return {
         available: true, error: null, updates: true,
@@ -371,7 +430,9 @@ function selectView(id) {
   }
 }
 
-$$(".device-link").forEach((el) =>
+// The sidebar entries and the tabs across the top go to the same places;
+// selectView marks both.
+$$(".device-link, .tab-link").forEach((el) =>
   el.addEventListener("click", () => selectView(el.dataset.view)),
 );
 
@@ -518,6 +579,10 @@ const EFFECT_HINT = {
   breathing: "One colour fading in and out. Uses the colour picked above; " +
              "pick a new one and set breathing again to change it.",
   wave: "A hue travelling along the four zones.",
+  pulse: "One colour beating: a quick rise and a slower fade. Uses the colour picked above.",
+  chase: "A light running left to right across the zones, with a tail. Uses the colour picked above.",
+  gradient: "A still blend from the leftmost zone's colour to the rightmost's. " +
+            "Set those two zones first, then choose Gradient.",
   spectrum: "All four zones on the same hue, cycling through the spectrum.",
 };
 
@@ -527,13 +592,24 @@ function currentEffect() {
 
 function sendEffect(name) {
   const now = currentEffect();
-  // The base colour for breathing is whatever the zones are showing - which
-  // is what "the colour picked above" means to someone looking at the page.
-  const base = state?.leds?.zones?.[1] ?? now.color ?? { r: 232, g: 17, b: 35 };
+  const zones = state?.leds?.zones ?? [];
+  // The base colour is whatever the zones are showing - which is what "the
+  // colour picked above" means to someone looking at the page. A gradient
+  // takes its two ends from the outer zones, so it needs no second picker.
+  // While an effect is running the zones show its frames, not a choice, so
+  // the colours already configured are kept instead.
+  const running = now.effect && now.effect !== "none";
+  const pick = (i, kept) => (running ? kept : zones[i]) ?? kept;
+  const oneColour = ["breathing", "pulse", "chase"].includes(name);
+  const color = name === "gradient"
+    ? pick(0, now.color)
+    : oneColour ? pick(1, now.color) : now.color;
+  const color2 = name === "gradient" ? pick(zones.length - 1, now.color2) : now.color2;
   act(() => invoke("set_effect", {
     effect: name,
     speed: Number($("#effect-speed").value),
-    color: name === "breathing" ? base : (now.color ?? base),
+    color: color ?? { r: 232, g: 17, b: 35 },
+    color2: color2 ?? null,
   }));
 }
 
@@ -558,8 +634,10 @@ function renderEffect(s) {
     $("#effect-speed").value = now.speed ?? 5;
     $("#effect-speed-out").textContent = String(now.speed ?? 5);
   }
-  $("#effect-speed-row").hidden = now.effect === "none";
-  $("#effect-fps-row").hidden = now.effect === "none";
+  // A gradient holds still, so it has neither a speed nor a frame rate.
+  const moves = now.effect !== "none" && now.effect !== "gradient";
+  $("#effect-speed-row").hidden = !moves;
+  $("#effect-fps-row").hidden = !moves;
   const fps = s.daemon?.lighting_fps ?? 30;
   $$("#effect-fps button").forEach((b) =>
     b.classList.toggle("is-active", Number(b.dataset.fps) === fps));

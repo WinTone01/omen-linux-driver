@@ -1,55 +1,71 @@
 /*
  * OMEN Control.
  *
- * Visual language: OMEN Gaming Hub. Near-black ground, one red accent, flat
- * cards with hairline borders, a 48px custom title bar over a 268px device
- * sidebar, horizontal tabs inside the main area, and ring gauges for the
- * live readings.
+ * Visual language: OMEN Gaming Hub as it looks in 2025. A dark title bar with
+ * the active profile on the right; a sidebar where the machine is a group and
+ * its features are entries under it; the same features as tabs across the top
+ * of the page; square-cornered cards; and one signature - the violet to
+ * magenta to orange sweep that marks whatever is selected, from the active tab
+ * to the chosen mode tile to the ring gauges.
  *
- * Written from scratch. The palette, the metrics and the layout follow HP's
- * application; no stylesheet was copied from any other project.
+ * Written from scratch against screenshots of HP's application. No stylesheet,
+ * font or image was taken from it, and the mark is this project's own.
  */
 
 :root {
   /* WebKitGTK draws form controls with the SYSTEM theme unless it is told
    * what kind of surface it is drawing on. Without this a <select> comes up
-   * as a white box with white text on a light desktop theme - which is what
-   * it did. It also darkens the option popup, which CSS cannot reach at all
-   * because the platform draws it. */
+   * as a white box with white text on a light desktop theme. It also darkens
+   * the option popup, which CSS cannot reach because the platform draws it. */
   color-scheme: dark;
 
-  --bg-app:      #0a0a0a;
-  --bg-sidebar:  #121212;
-  --bg-card:     #181818;
-  --bg-elevated: #222222;
-  --bg-hover:    #2a2a2a;
-  --border:      #2e2e2e;
-  --border-soft: #1f1f1f;
+  /* Surfaces, darkest to lightest. The Hub keeps them close together: depth
+   * comes from a hairline and a faint top-left sheen, not from contrast. */
+  --bg-app:      #121214;
+  --bg-content:  #151517;
+  --bg-titlebar: #1b1b1e;
+  --bg-sidebar:  #1d1d20;
+  --bg-card:     #1f1f22;
+  --bg-card-hi:  #262629;
+  --bg-elevated: #2a2a2e;
+  --bg-hover:    #303035;
+  --border:      #2e2e33;
+  --border-soft: #252529;
+  --border-strong: #3d3d43;
 
-  --text:        #f2f2f2;
-  --text-dim:    #c8c8c8;
-  --text-muted:  #8f8f8f;
+  --text:        #f4f4f5;
+  --text-dim:    #c9c9ce;
+  --text-muted:  #8e8e96;
+  --text-faint:  #5f5f67;
 
-  --omen-red:      #e81123;
-  --omen-red-dark: #a80f1a;
+  --omen-red:      #e8173a;
+  --omen-red-dark: #8c1024;
   --accent-teal:   #2dd4bf;
-  --accent-violet: #a855f7;
-  --accent-green:  #3ddc84;
-  --accent-amber:  #f0a92a;
+  --accent-violet: #b04ae0;
+  --accent-green:  #37e07f;
+  --accent-amber:  #f5a524;
 
-  --titlebar-h: 48px;
-  --sidebar-w:  268px;
+  /* The sweep. Top border of the active tab, the edge of a chosen tile, the
+   * thin bar under the title bar - the one thing that says "selected". */
+  --grad: linear-gradient(90deg, #7b3cf0 0%, #d23ab8 45%, #ff2d6a 70%, #ff8a2a 100%);
+  --grad-tile: linear-gradient(135deg, #ff2d6a 0%, #ff5a3c 50%, #ff9a2a 100%);
+  --grad-select: linear-gradient(90deg, rgba(190, 24, 58, .55) 0%, rgba(120, 18, 40, .22) 70%, transparent 100%);
+
+  --titlebar-h: 44px;
+  --sidebar-w:  264px;
+  --tabs-h:     46px;
 
   /* 2 * PI * 52, the ring gauge circumference. */
   --ring-circ: 326.7256;
 
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
+  /* The Hub is nearly square-cornered. */
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
 
-  --shadow-card: 0 1px 0 rgba(255,255,255,.04) inset, 0 8px 24px rgba(0,0,0,.35);
+  --shadow-card: 0 1px 0 rgba(255,255,255,.035) inset, 0 6px 18px rgba(0,0,0,.28);
 
-  --font: "Segoe UI", system-ui, -apple-system, "Ubuntu Sans", "Noto Sans", sans-serif;
+  --font: "Segoe UI Variable", "Segoe UI", "Inter", system-ui, "Ubuntu Sans", "Noto Sans", sans-serif;
   --mono: ui-monospace, "JetBrains Mono", "Fira Code", monospace;
 
   --ease-out: cubic-bezier(.22, 1, .36, 1);
@@ -70,74 +86,92 @@ html, body {
   overflow: hidden;
 }
 
-button, input { font-family: inherit; color: inherit; }
+button, input, select { font-family: inherit; color: inherit; }
 code { font-family: var(--mono); font-size: .92em; color: var(--text-dim); }
 
-:focus-visible { outline: 2px solid #f25563; outline-offset: 2px; }
+/* The gradient definitions live in an SVG that must not take up space. */
+.svg-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 
 .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* [hidden] has to beat every display rule in this file.
+ *
+ * The browser's own rule is `[hidden] { display: none }`, which any class
+ * with a `display` beats - so `.kv { display: grid }` quietly un-hid every
+ * row the script had hidden. Hiding is what `hidden` means; nothing here
+ * should have to opt in. */
+[hidden] { display: none !important; }
 
 /* ── Title bar ──────────────────────────────────────────────── */
 
 .titlebar {
+  position: relative;
   height: var(--titlebar-h);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   padding-left: 14px;
-  background: linear-gradient(180deg, #1c1c1c 0%, #161616 100%);
-  border-bottom: 1px solid var(--border-soft);
-  box-shadow: 0 1px 0 rgba(0,0,0,.4);
+  background: var(--bg-titlebar);
+}
+/* The sweep, as a hairline under the title bar. */
+.titlebar::after {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 1px;
+  background: var(--grad);
+  opacity: .55;
 }
 
 .titlebar__brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.omen-mark { width: 20px; height: 20px; fill: var(--omen-red); flex-shrink: 0; }
-.titlebar__title { font-weight: 600; font-size: 13px; letter-spacing: .01em; color: var(--text-dim); }
+.omen-mark { width: 18px; height: 18px; fill: var(--omen-red); flex-shrink: 0; }
+.titlebar__title { font-weight: 600; font-size: 12.5px; letter-spacing: .02em; color: var(--text); }
 
 .titlebar__tools {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
-  padding-right: 12px;
+  gap: 6px;
+  padding-right: 10px;
+  height: 100%;
 }
+.titlebar__sep { width: 1px; height: 20px; background: var(--border-strong); margin: 0 6px; }
 
-.profile-dd { display: flex; align-items: center; gap: 8px; margin: 0 8px; }
-.profile-dd__label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
+.profile-dd { display: flex; align-items: center; gap: 10px; }
+.profile-dd__label { font-size: 11.5px; font-weight: 600; color: var(--text-dim); }
 .profile-dd__btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 30px; padding: 0 10px;
-  border: 1px solid var(--border);
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-width: 132px; height: 26px; padding: 0 8px 0 10px;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: #1a1a1a;
+  background: #141416;
   font-size: 12px; cursor: pointer;
   text-transform: capitalize;
 }
-.profile-dd__btn:hover { background: var(--bg-hover); }
+.profile-dd__btn:hover { border-color: var(--text-muted); }
 .chev { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.6; }
 
 .icon-btn {
   display: flex; align-items: center; justify-content: center;
-  width: 36px; height: 32px;
+  width: 34px; height: 30px;
   border: none; border-radius: var(--radius-sm);
-  background: transparent; color: var(--text-muted);
+  background: transparent; color: var(--text-dim);
   cursor: pointer;
 }
-.icon-btn:hover { color: var(--text); background: rgba(255,255,255,.06); }
-.icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+.icon-btn:hover { color: var(--text); background: rgba(255,255,255,.07); }
+.icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 
 .titlebar__window-controls { display: flex; align-items: stretch; height: 100%; }
 
 .win-btn {
   width: 46px;
   border: none; background: transparent;
-  color: var(--text-muted);
+  color: var(--text-dim);
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
 }
 .win-btn:hover { background: rgba(255,255,255,.08); color: var(--text); }
-.win-btn--close:hover { background: var(--omen-red); color: #fff; }
+.win-btn--close:hover { background: #c42b1c; color: #fff; }
 /* SVG rather than an icon font: Segoe Fluent Icons does not exist on Linux
  * and the glyphs rendered as empty boxes. */
 .win-btn svg { width: 10px; height: 10px; }
@@ -150,111 +184,198 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-dim); }
 
 .body { flex: 1; display: flex; min-height: 0; }
 
+/* ── Sidebar ────────────────────────────────────────────────── */
+
 .sidebar {
   width: var(--sidebar-w);
   flex-shrink: 0;
   display: flex; flex-direction: column;
   background: var(--bg-sidebar);
-  border-right: 1px solid var(--border-soft);
+  border-right: 1px solid #0c0c0e;
   min-height: 0;
 }
 
-.sidebar-device { flex: 1; display: flex; flex-direction: column; min-height: 0; padding-top: 12px; overflow-y: auto; }
+.sidebar-device {
+  flex: 1; display: flex; flex-direction: column;
+  min-height: 0; padding-top: 10px; overflow-y: auto;
+}
+.sidebar-device::-webkit-scrollbar { width: 6px; }
+.sidebar-device::-webkit-scrollbar-thumb { background: #38383d; border-radius: 3px; }
 
-.device-sidebar__head { padding: 0 16px 14px; border-bottom: 1px solid var(--border-soft); }
+/* The machine, as the Hub heads its group: an icon and the model name in
+ * capitals. */
+.device-sidebar__head {
+  display: flex; gap: 11px; align-items: flex-start;
+  padding: 10px 16px 10px 18px;
+}
+.device-sidebar__icon {
+  width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px;
+  fill: none; stroke: var(--text-dim); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
+.device-sidebar__text { min-width: 0; }
 .device-sidebar__device-name {
   margin: 0;
-  font-size: 11px; font-weight: 700;
-  letter-spacing: .06em;
-  color: var(--text-dim);
+  font-size: 11.5px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text);
   line-height: 1.35;
 }
 .device-sidebar__board {
-  display: block; margin-top: 4px;
+  display: block; margin-top: 3px;
   font-family: var(--mono); font-size: 10px;
   letter-spacing: .08em; color: var(--text-muted);
 }
+/* The silicon, under the model name. Static facts, so they are quiet. */
+.device-sidebar__spec {
+  display: block; margin-top: 2px;
+  font-size: 10.5px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
-.device-list { display: flex; flex-direction: column; padding: 8px 0 12px; }
+.device-list { display: flex; flex-direction: column; padding: 2px 0 12px; }
 
+/* The features: indented under the group, sentence case, and marked by the
+ * Hub's wine-red wash with a bright bar at the edge when chosen. */
 .device-link {
   position: relative;
   display: flex; align-items: center; gap: 11px;
-  padding: 10px 16px 10px 17px;
+  padding: 9px 16px 9px 30px;
   border: none;
-  border-left: 3px solid transparent;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-dim);
   font-size: 12.5px;
   text-align: left;
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-out),
-              background var(--dur-fast) var(--ease-out),
-              border-color var(--dur-fast) var(--ease-out);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
-.device-link:hover { color: var(--text-dim); background: rgba(255,255,255,.04); }
+.device-link:hover { color: var(--text); background: rgba(255,255,255,.04); }
 .device-link.is-active {
   color: var(--text);
-  background: rgba(255,255,255,.06);
-  border-left-color: var(--omen-red);
-  font-weight: 500;
+  background: var(--grad-select);
+  font-weight: 600;
+}
+.device-link.is-active::before {
+  content: "";
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, #ff2d6a, #ff8a2a);
 }
 
-/* Stroked rather than filled, so one path per destination inherits the
- * colour the row already has - active, hover and idle come for free. */
+/* The program's own pages, at the foot: top-level entries, set in capitals
+ * with an icon, as the Hub sets its HOME and MY GAMES. */
+.app-links { display: flex; flex-direction: column; padding: 6px 0; border-top: 1px solid #2a2a2f; }
+.device-link--app {
+  padding-left: 18px;
+  font-size: 11.5px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+}
+/* Stroked, so one path per destination takes the row's own colour: white
+ * when chosen, dimmer otherwise. */
 .device-link__icon {
-  width: 17px; height: 17px; flex-shrink: 0;
-  fill: none; stroke: currentColor; stroke-width: 1.6;
+  width: 16px; height: 16px; flex-shrink: 0;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
   stroke-linecap: round; stroke-linejoin: round;
-  opacity: .85;
 }
-.device-link.is-active .device-link__icon { opacity: 1; color: var(--omen-red); }
 
-.sidebar__footer { margin-top: auto; border-top: 1px solid var(--border-soft); }
+.sidebar__footer { margin-top: auto; flex-shrink: 0; }
 .sidebar-status {
   display: flex; align-items: center; gap: 8px;
-  padding: 12px 16px;
-  font-size: 11.5px; color: var(--text-muted);
+  padding: 10px 18px 12px;
+  border-top: 1px solid #2a2a2f;
+  font-size: 11px; color: var(--text-muted);
 }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
-.status-dot.is-up   { background: var(--accent-teal); box-shadow: 0 0 8px rgba(45,212,191,.5); }
-.status-dot.is-down { background: var(--omen-red);    box-shadow: 0 0 8px rgba(232,17,35,.5); }
+.status-dot.is-up   { background: var(--accent-green); box-shadow: 0 0 8px rgba(55,224,127,.5); }
+.status-dot.is-down { background: var(--omen-red);     box-shadow: 0 0 8px rgba(232,23,58,.5); }
+
+/* The live panel: what the machine is doing, visible from every page. */
+.now {
+  margin: 6px 14px 14px;
+  padding: 11px 12px 9px;
+  background: #18181b;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.now__row { display: flex; gap: 12px; }
+.now__row--tight { margin-top: 8px; }
+.now__cell { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.now__label {
+  font-size: 9.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+.now__value {
+  font-size: 12.5px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-transform: capitalize;
+}
+.now__value--num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-transform: none; color: var(--accent-green); }
+.now__value.is-hot { color: var(--omen-red); }
+.now__value.is-warm { color: var(--accent-amber); }
+/* The last few minutes of temperature, as texture rather than as a chart. */
+.now__spark { display: block; width: 100%; height: 26px; margin-top: 8px; overflow: visible; }
+.now__spark-line { fill: none; stroke: url(#grad-ring); stroke-width: 1.4; opacity: .9; }
 
 /* ── Main ───────────────────────────────────────────────────── */
 
-.main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-content); }
 
-/* Where the second copy of the navigation used to be: the name of the page
- * you are on, and one line saying what it is for. */
-.page-head {
-  display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
-  padding: 18px 24px 14px;
+/* The feature tabs. Separate blocks with a hairline gap, as the Hub draws
+ * them; the chosen one is lifted and carries the sweep along its top. */
+.tabs {
+  display: flex; align-items: stretch; gap: 2px;
+  height: var(--tabs-h);
+  padding: 8px 14px 0;
+  background: var(--bg-app);
   border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab-link {
+  position: relative;
+  flex-shrink: 0;
+  padding: 0 16px;
+  border: none;
+  background: #1c1c1f;
+  color: var(--text-dim);
+  font-size: 12px; font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.tab-link:hover { background: #242428; color: var(--text); }
+.tab-link.is-active { background: #2b2b30; color: var(--text); }
+.tab-link.is-active::before {
+  content: "";
+  position: absolute; left: 0; right: 0; top: 0;
+  height: 3px;
+  background: var(--grad);
+}
+
+/* The page's name is the tab, so the head carries only what the page is for.
+ * The title stays in the document for screen readers and the window title. */
+.page-head {
+  padding: 12px 24px 0;
   flex-shrink: 0;
 }
 .page-head__title {
-  margin: 0;
-  font-size: 19px; font-weight: 600; letter-spacing: .01em;
-  color: var(--text);
+  position: absolute; width: 1px; height: 1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
-.page-head__sub {
-  margin: 3px 0 0;
-  font-size: 12px; color: var(--text-muted);
-  max-width: 68ch;
-}
+.page-head__sub { margin: 0; font-size: 12px; color: var(--text-muted); max-width: 90ch; }
 
-.main-scroll { flex: 1; overflow-y: auto; padding: 22px 24px 8px; min-height: 0; }
-
+.main-scroll { flex: 1; overflow-y: auto; padding: 16px 24px 8px; min-height: 0; }
 .main-scroll::-webkit-scrollbar { width: 10px; }
-.main-scroll::-webkit-scrollbar-thumb { background: #333; border-radius: 5px; border: 3px solid var(--bg-app); }
+.main-scroll::-webkit-scrollbar-thumb { background: #34343a; border-radius: 5px; border: 3px solid var(--bg-content); }
 
 .main-footer {
   flex-shrink: 0;
-  padding: 8px 24px 10px;
+  padding: 6px 24px 8px;
   border-top: 1px solid var(--border-soft);
   text-align: right;
 }
-.main-footer__ver { font-size: 10.5px; color: #5c5c5c; font-family: var(--mono); }
+.main-footer__ver { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono); }
 
 .view { display: none; }
 .view.is-active { display: block; animation: fade .18s var(--ease-out); }
@@ -263,24 +384,33 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-dim); }
 /* ── Cards & panels ─────────────────────────────────────────── */
 
 .card {
-  background: var(--bg-card);
+  background: linear-gradient(160deg, var(--bg-card-hi) 0%, var(--bg-card) 45%);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
   padding: 16px 18px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
 .panel-head { margin-bottom: 12px; }
+/* Card headings as the Hub sets them: bold capitals, white. */
 .panel-head__title {
   margin: 0;
-  font-size: 12px; font-weight: 600;
-  letter-spacing: .06em; text-transform: uppercase;
-  color: var(--text-dim);
+  font-size: 13px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text);
 }
+.panel-head__note { font-size: 11px; color: var(--text-muted); }
 
-.hint { margin: 12px 0 0; font-size: 12px; color: var(--text-muted); max-width: 70ch; line-height: 1.6; }
+.hint { margin: 12px 0 0; font-size: 12px; color: var(--text-muted); max-width: 78ch; line-height: 1.6; }
 .hint strong { color: var(--text-dim); }
+/* The explanation above a control, which needs more room than a footnote. */
+.hint--lede { margin: 0 0 16px; max-width: 86ch; }
+/* A warning, not a description: on this machine that mode does not cool. */
+.hint.is-warning { color: var(--accent-amber); }
+/* A card straight after a note under a control needs room to breathe. */
+.hint + .card { margin-top: 14px; }
 
 kbd {
   font-family: var(--mono); font-size: 11px;
@@ -294,16 +424,16 @@ kbd {
 .banner {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent-amber);
-  border-radius: var(--radius-sm);
-  background: rgba(240,169,42,.06);
+  border-radius: var(--radius-md);
+  background: rgba(245,165,36,.06);
   padding: 12px 14px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
   font-size: 12px;
   color: var(--text-dim);
   line-height: 1.6;
 }
 .banner strong { color: var(--text); }
-.banner.is-error { border-left-color: var(--omen-red); background: rgba(232,17,35,.07); }
+.banner.is-error { border-left-color: var(--omen-red); background: rgba(232,23,58,.08); }
 
 /* ── Ring gauges ────────────────────────────────────────────── */
 
@@ -312,98 +442,92 @@ kbd {
   /* Four across, as the Hub has them. They shrink rather than wrap: a
    * vitals row that becomes a vitals column stops reading as a dashboard. */
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 14px;
+  margin-bottom: 14px;
 }
 
 .ring-card {
   display: flex; flex-direction: column; align-items: center;
-  margin-bottom: 0; padding: 18px 16px 16px;
+  margin-bottom: 0; padding: 14px 16px 14px;
   position: relative;
 }
+/* The name sits top-left in bold capitals, the way the Hub labels GPU, CPU
+ * and RAM; the ring is centred under it. */
 .ring-card__head {
-  display: flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700; letter-spacing: .1em;
-  color: var(--text-muted); text-transform: uppercase;
-  margin-bottom: 12px;
+  align-self: stretch;
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px; font-weight: 700; letter-spacing: .04em;
+  color: var(--text); text-transform: uppercase;
+  margin-bottom: 10px;
 }
-.ring-card__foot { margin-top: 12px; font-size: 11.5px; color: var(--text-muted); }
+.ring-card__foot { align-self: stretch; margin-top: 10px; font-size: 11.5px; color: var(--text-muted); }
 
 .ring {
   position: relative;
-  /* Fixed sizes assumed a wide window. Narrow one and a 140px ring inside a
-   * 110px card overflowed it - taking the temperature badge, which hangs off
-   * the ring, outside the card with it. The SVG has a viewBox, so it scales
-   * for free. */
-  width: min(140px, 100%);
+  /* The SVG has a viewBox, so it scales with a narrow window for free. */
+  width: min(132px, 100%);
   aspect-ratio: 1;
 }
 .ring__svg { width: 100%; height: 100%; transform: rotate(-90deg); }
-.ring__track { fill: none; stroke: #262626; stroke-width: 9; }
+/* A thin dark-violet track and a thin violet-to-magenta arc: the Hub's
+ * gauge, which reads as a dial rather than as a progress bar. */
+.ring__track { fill: none; stroke: #33273d; stroke-width: 4; }
 .ring__prog {
   fill: none;
-  stroke: var(--omen-red);
-  stroke-width: 9;
+  stroke: url(#grad-ring);
+  stroke-width: 4;
   stroke-linecap: round;
   stroke-dasharray: var(--ring-circ);
   stroke-dashoffset: calc(var(--ring-circ) - (var(--ring-circ) * var(--p) / 100));
-  transition: stroke-dashoffset .5s var(--ease-out), stroke .3s var(--ease-out);
+  transition: stroke-dashoffset .5s var(--ease-out);
 }
-/* The Hub draws the ring in violet regardless of the value and puts the
- * colour-coding in the temperature badge instead. Utilization being amber
- * says nothing - a busy CPU is a CPU doing its job. Heat is the thing worth
- * colouring, and that is what the badge does. */
-.ring__prog { stroke: var(--accent-violet); }
+/* The ring is the utilisation; heat is coloured in the badge, as the Hub
+ * does it. Fans are the exception: their ring IS the measurement. */
 .ring.is-cool .ring__prog,
 .ring.is-warm .ring__prog,
-.ring.is-hot  .ring__prog { stroke: var(--accent-violet); }
-
-/* Fans are the exception: their ring IS the measurement, so it keeps the
- * colour of how hard they are working. */
+.ring.is-hot  .ring__prog { stroke: url(#grad-ring); }
 #ring-fan1.is-cool .ring__prog { stroke: var(--accent-teal); }
 #ring-fan1.is-warm .ring__prog { stroke: var(--accent-amber); }
-#ring-fan1.is-hot  .ring__prog { stroke: var(--omen-red); }
-
-/* The badge: a circle at the bottom-left of the ring, green until it is not,
- * exactly as the Hub does it. */
-.ring-card__badge {
-  /* In the head row, beside the card's own name.
-   *
-   * It began as a circle floating over the card, placed by measuring from the
-   * middle (left:50% and a -94px nudge). That put it outside the card in any
-   * window that was not wide; moved to a corner it sat on the caption
-   * instead. A thing in the layout cannot land on top of anything, at any
-   * width, which is the whole argument. */
-  display: inline-flex; align-items: center;
-  margin-left: 8px; padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 10.5px; font-variant-numeric: tabular-nums; letter-spacing: 0;
-  text-transform: none;
-  background: var(--bg-card);
-  border: 1px solid var(--accent-green);
-  color: var(--accent-green);
-}
-.ring-card__badge.is-warm { border-color: var(--accent-amber); color: var(--accent-amber); }
-.ring-card__badge.is-hot  { border-color: var(--omen-red);     color: var(--omen-red); }
-.ring-card__badge.is-cool { border-color: var(--accent-green);  color: var(--accent-green); }
+#ring-fan1.is-hot  .ring__prog { stroke: url(#grad-hot); }
 
 .ring__label {
   position: absolute; inset: 0;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  gap: 2px;
+  gap: 3px;
 }
-.ring__pct { font-size: 27px; font-weight: 300; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-/* Narrow enough to clear the badge that overlaps the ring at 7 o'clock. */
+.ring__pct { font-size: 28px; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
 .ring__sub {
-  font-size: 9px; color: var(--text-muted); text-transform: uppercase;
-  letter-spacing: .06em; max-width: 96px; text-align: center; line-height: 1.2;
+  font-size: 10px; color: var(--text-dim);
+  max-width: 96px; text-align: center; line-height: 1.2;
 }
+/* Which way it is going, next to the number itself. */
+.ring__trend {
+  position: absolute; top: 50%; right: -2px;
+  transform: translateY(-130%);
+  font-size: 10px; line-height: 1; color: var(--text-muted);
+}
+.ring__trend.is-up   { color: var(--accent-amber); }
+.ring__trend.is-down { color: var(--accent-teal); }
+
+/* The temperature, in the Hub's green, beside the card's name. */
+.ring-card__badge {
+  display: inline-flex; align-items: center;
+  margin-left: 8px;
+  font-size: 15px; font-weight: 700;
+  font-variant-numeric: tabular-nums; letter-spacing: 0;
+  text-transform: none;
+  color: var(--accent-green);
+}
+.ring-card__badge.is-cool { color: var(--accent-green); }
+.ring-card__badge.is-warm { color: var(--accent-amber); }
+.ring-card__badge.is-hot  { color: var(--omen-red); }
 
 /* ── Lists ──────────────────────────────────────────────────── */
 
-.panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 14px; }
 .panel-grid .card { margin-bottom: 0; }
+.panel-grid--wide { grid-template-columns: 1fr 1fr; }
 
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 9px 18px; margin: 0; }
 .kv dt { color: var(--text-muted); }
@@ -411,134 +535,253 @@ kbd {
 /* Only the words that are genuinely labels get capitalised - applying it to
  * every value turned "1 h 10 min" into "1 H 10 Min". */
 .kv dd.is-term { text-transform: capitalize; }
+.kv dd.is-warn { color: var(--accent-amber); }
+.kv--tight { margin: 12px 0; }
 
-.temp-list { display: grid; gap: 9px; }
+.temp-list { display: grid; gap: 10px; }
 .temp-row { display: flex; align-items: center; gap: 12px; }
 .temp-row__name { color: var(--text-dim); min-width: 104px; font-family: var(--mono); font-size: 11px; }
-.temp-row__bar { flex: 1; height: 4px; background: #262626; border-radius: 2px; overflow: hidden; }
-.temp-row__bar i { display: block; height: 100%; background: var(--omen-red); transition: width .45s var(--ease-out); }
-.temp-row__bar i.is-cool { background: var(--accent-teal); }
+.temp-row__bar { flex: 1; height: 5px; background: #2c2c31; border-radius: 1px; overflow: hidden; }
+.temp-row__bar i { display: block; height: 100%; background: var(--grad-tile); transition: width .45s var(--ease-out); }
+.temp-row__bar i.is-cool { background: var(--accent-green); }
 .temp-row__bar i.is-warm { background: var(--accent-amber); }
 .temp-row__val { font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
 
 .mini-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 16px; }
-.mini-label { display: block; font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
-.mini-value { display: block; margin-top: 4px; font-size: 21px; font-weight: 300; font-variant-numeric: tabular-nums; }
+.mini-label { display: block; font-size: 11px; font-weight: 600; color: var(--text-dim); }
+.mini-value { display: block; margin-top: 4px; font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
 
 /* ── Controls ───────────────────────────────────────────────── */
 
+/* Buttons are the Hub's outlined pills: dark fill, a red-tinted edge,
+ * capitals. The accent one is filled. */
 .btn {
-  padding: 8px 16px;
+  padding: 7px 16px;
+  border: 1px solid #7d2437;
+  border-radius: var(--radius-sm);
+  background: #19191c;
+  color: var(--text);
+  font-size: 11.5px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.btn:hover { background: #25151a; border-color: var(--omen-red); }
+.btn:active { transform: translateY(1px); }
+.btn--sm { padding: 4px 10px; font-size: 10.5px; }
+.btn--accent { background: var(--omen-red); border-color: var(--omen-red); color: #fff; }
+.btn--accent:hover { filter: brightness(1.12); background: var(--omen-red); }
+/* The armed state of a destructive button: the second click is the one that
+ * does it, so it should not look like the first. */
+.btn--sm.is-armed { background: var(--omen-red); border-color: var(--omen-red); color: #fff; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Segmented choices. Each option is its own block; the chosen one gets the
+ * tile treatment - lighter, and edged with the sweep. */
+.seg-4 { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.seg-4 button {
+  padding: 8px 18px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
+  background: #1c1c1f;
+  color: var(--text-dim);
+  font-weight: 600;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
-.btn:hover { background: var(--bg-hover); }
-
-.seg-4 { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
-.seg-4 button {
-  padding: 9px 22px;
-  border: none;
-  border-right: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+.seg-4 button:hover { background: #26262a; color: var(--text); }
+.seg-4 button.is-active {
+  color: var(--text);
+  border-color: transparent;
+  background:
+    linear-gradient(#2a2a2e, #2a2a2e) padding-box,
+    var(--grad-tile) border-box;
 }
-.seg-4 button:last-child { border-right: none; }
-.seg-4 button:hover { background: rgba(255,255,255,.05); color: var(--text-dim); }
-.seg-4 button.is-active { background: var(--omen-red); color: #fff; font-weight: 500; }
+.seg-4--two button { padding-left: 18px; padding-right: 18px; }
+/* Seven effects do not fit one row at the page's narrower widths; they
+ * become a grid of equal chips. */
+.seg-4--wrap {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 6px;
+}
+.seg-4--wrap button { padding: 9px 12px; }
 
-.power-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 16px; }
+/* The mode tiles: Eco / Balanced / Performance, as the Hub lays them out -
+ * a tile per mode, dim until chosen, and the chosen one lit and edged. */
+.power-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 14px; }
 
 .power-card {
-  background: var(--bg-card);
+  display: flex; flex-direction: column; align-items: center;
+  background: #1c1c1f;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
-  padding: 18px;
-  text-align: left;
+  padding: 20px 18px 16px;
+  text-align: center;
+  color: var(--text-muted);
   cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
-.power-card:hover { border-color: #444; background: #1c1c1c; }
+.power-card:hover { background: #222226; color: var(--text-dim); border-color: var(--border-strong); }
 .power-card.is-active {
-  border-color: var(--omen-red);
-  background: linear-gradient(180deg, rgba(232,17,35,.10), transparent 70%);
+  color: var(--text);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(160deg, #2c2c31, #232327) padding-box,
+    var(--grad-tile) border-box;
 }
-.power-card__icon { width: 22px; height: 22px; fill: none; stroke: var(--omen-red); stroke-width: 1.6; stroke-linecap: round; margin-bottom: 10px; }
-.power-card h3 { margin: 0 0 5px; font-size: 14px; font-weight: 600; text-transform: capitalize; }
-.power-card p  { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.power-card__icon {
+  width: 26px; height: 26px; margin-bottom: 10px;
+  fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round;
+}
+.power-card.is-active .power-card__icon { stroke: #fff; }
+.power-card h3 { margin: 0 0 6px; font-size: 15px; font-weight: 700; text-transform: capitalize; color: inherit; }
+.power-card p  { margin: 0; font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
+/* Which profile is in force, in words. Hidden until it is. */
+.power-card__active {
+  display: none;
+  margin-top: 10px; padding: 3px 10px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+  color: #fff;
+  background: var(--omen-red-dark);
+  border-radius: var(--radius-sm);
+}
+.power-card.is-active .power-card__active { display: inline-block; }
 
-.slider-row { display: flex; align-items: center; gap: 18px; }
+.slider-row { display: flex; align-items: center; gap: 18px; margin-top: 14px; }
 .slider-row output { font-variant-numeric: tabular-nums; min-width: 92px; text-align: right; color: var(--text-dim); }
 
 input[type="range"] {
   flex: 1;
   -webkit-appearance: none; appearance: none;
   height: 4px; border-radius: 2px;
-  background: #2c2c2c;
+  background: #34343a;
   cursor: pointer;
 }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 16px; height: 16px; border-radius: 50%;
-  background: var(--omen-red);
-  border: 3px solid #141414;
+  background: #fff;
+  border: 3px solid var(--omen-red);
   transition: transform var(--dur-fast) var(--ease-out);
 }
 input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.15); }
 
+/* The hue strip, as the Hub draws it: the choice is the colour itself, so
+ * the control shows every option at once. The base range rule sets a flat
+ * track and a 4px height; both are overridden or it is a hairline. */
+input[type="range"].hue-slider {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(to right,
+    #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%,
+    #0000ff 67%, #ff00ff 83%, #ff0000 100%);
+}
+input[type="range"].hue-slider::-webkit-slider-thumb {
+  width: 18px; height: 18px;
+  background: #fff;
+  border: 3px solid #141414;
+}
+
+/* A checkbox that reads as a switch. The input stays in the DOM and keeps
+ * its keyboard behaviour; only its appearance is replaced. */
+.switch { display: inline-flex; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch span {
+  width: 36px; height: 18px; border-radius: 9px;
+  background: #2c2c31; border: 1px solid var(--border-strong);
+  position: relative; transition: background .15s, border-color .15s;
+}
+.switch span::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--text-muted); transition: transform .15s, background .15s;
+}
+.switch input:checked + span { background: var(--grad-tile); border-color: transparent; }
+.switch input:checked + span::after { transform: translateX(18px); background: #fff; }
+.switch input:focus-visible + span { outline: 2px solid var(--omen-red); outline-offset: 2px; }
+
+/* ── form controls ───────────────────────────────────────────────
+ *
+ * One rule for every control. WebKitGTK does not draw a select the way it
+ * draws a div, so the native appearance is turned off explicitly and the
+ * arrow is ours: an inline SVG as a data URI, which the CSP allows. */
+
+.field, .app-add input, .app-add select, .kv select {
+  background: #151517;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  min-height: 30px;
+}
+.app-add select, .kv select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23c9c9ce' stroke-width='1.5' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  cursor: pointer;
+}
+/* The popup itself is drawn by the platform; color-scheme on :root makes it
+ * dark. These keep the entries readable where the engine honours them. */
+.app-add select option, .kv select option { background: var(--bg-card); color: var(--text); }
+.app-add input:focus, .app-add select:focus, .kv select:focus { outline: 1px solid var(--omen-red); outline-offset: -1px; }
+.app-add select:hover, .kv select:hover { border-color: var(--text-muted); }
+.app-add input::placeholder { color: var(--text-muted); }
+/* A disabled control should look unavailable rather than merely quiet. */
+.app-add select:disabled, .kv select:disabled { opacity: .5; cursor: default; }
+
+input[type="color"] {
+  -webkit-appearance: none; appearance: none;
+  width: 36px; height: 26px; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: transparent; cursor: pointer;
+}
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 1px; }
+
 /* ── Lighting ───────────────────────────────────────────────── */
 
 .kb-wrap { display: flex; justify-content: center; margin-bottom: 20px; }
-.kb { width: 100%; max-width: 540px; }
-.kb-body { fill: #101010; stroke: var(--border); stroke-width: 1; }
-.kb-zones rect { fill: #262626; stroke: rgba(255,255,255,.05); transition: fill .3s var(--ease-out); }
+.kb { width: 100%; max-width: 560px; }
+.kb-body { fill: #0e0e10; stroke: var(--border-strong); stroke-width: 1; }
+.kb-zones rect { fill: #262629; stroke: rgba(255,255,255,.05); transition: fill .3s var(--ease-out); }
 /* The keycaps sit on top of the zone colours as dark gaps, so the colour
- * reads as light coming through a keyboard rather than as four rectangles.
- * Kept light: a heavier overlay desaturates the zone colour. */
+ * reads as light coming through a keyboard. Kept light: a heavier overlay
+ * desaturates the zone colour. */
 .kb-keys rect { fill: rgba(0,0,0,.12); stroke: rgba(0,0,0,.62); stroke-width: 1.8; pointer-events: none; }
 .kb-labels text {
   fill: var(--text-muted);
-  font-size: 9.5px; font-family: var(--font);
+  font-size: 9.5px; font-family: var(--font); font-weight: 600;
   letter-spacing: .14em; text-anchor: middle;
   pointer-events: none;
 }
 
 .zone-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .zone-pick { display: flex; align-items: center; gap: 10px; }
-.zone-pick label { font-size: 12px; color: var(--text-dim); }
+.zone-pick label { font-size: 12px; font-weight: 600; color: var(--text-dim); }
 
 .swatch-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-
 .light-swatch {
-  width: 28px; height: 28px;
+  width: 26px; height: 26px;
   border-radius: 50%;
-  border: 2px solid var(--border);
+  border: 2px solid #3a3a40;
   background: var(--c, #333);
   cursor: pointer;
   padding: 0;
   transition: transform var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
-.light-swatch:hover { transform: scale(1.12); border-color: #555; }
+.light-swatch:hover { transform: scale(1.12); border-color: #fff; }
 .light-swatch--pick {
   display: grid; place-items: center;
-  background: conic-gradient(#e81123, #f0a92a, #78ff3c, #00e5ff, #a855f7, #e81123);
+  background: conic-gradient(#e8173a, #f5a524, #78ff3c, #00e5ff, #b04ae0, #e8173a);
   overflow: hidden;
 }
 .light-swatch--pick input[type="color"] { opacity: 0; width: 100%; height: 100%; cursor: pointer; border: 0; padding: 0; }
-
-input[type="color"] {
-  -webkit-appearance: none; appearance: none;
-  width: 36px; height: 26px; padding: 0;
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: transparent; cursor: pointer;
-}
-input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
-input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 
 /* ── Toast ──────────────────────────────────────────────────── */
 
@@ -546,68 +789,58 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
   position: fixed;
   left: 50%; bottom: 26px;
   transform: translateX(-50%);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: #232327;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent-green);
+  border-radius: var(--radius-md);
   padding: 10px 18px;
   font-size: 12px;
-  box-shadow: 0 8px 26px rgba(0,0,0,.5);
+  box-shadow: 0 10px 30px rgba(0,0,0,.55);
   animation: rise .2s var(--ease-out);
   z-index: 20;
   max-width: 72ch;
 }
-.hub-toast.is-error { border-color: var(--omen-red); }
+.hub-toast.is-error { border-left-color: var(--omen-red); }
 @keyframes rise { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
-/* The Auto mode explanation is a warning, not a description: on this machine
- * that mode genuinely does not cool. */
-.hint.is-warning { color: var(--accent-amber); }
-.kv dd.is-warn { color: var(--accent-amber); }
-
 /* ── Charts ─────────────────────────────────────────────────── */
-
-/* The reference metrics for the ring gauge: 132px across with a 6px stroke
- * over a #353535 track. Ours was heavier and read as a different control. */
-.ring { width: min(132px, 100%); }
-.ring__track { stroke: #353535; stroke-width: 6; }
-.ring__prog  { stroke-width: 6; }
-.ring__pct   { font-size: 25px; }
 
 .chart-card .panel-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 10px 12px;
-  /* Wrap rather than overflow. The curve card's row grew two buttons and
-   * pushed the page sideways in a narrow window - a horizontal scrollbar on
-   * a settings panel is always a layout bug, never a feature. */
+  /* Wrap rather than overflow: a horizontal scrollbar on a settings panel is
+   * always a layout bug, never a feature. */
   flex-wrap: wrap;
 }
 .chart-card .panel-head__note { flex: 1 1 6ch; min-width: 0; }
 
-.panel-head__note { font-size: 11px; color: var(--text-muted); }
-
 .chart-legend { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
 .chart-legend__key { width: 10px; height: 2px; border-radius: 1px; display: inline-block; }
-.chart-legend__key--temp { background: var(--omen-red); }
+.chart-legend__key--temp { background: #ff2d6a; }
 .chart-legend__key--fan  { background: var(--accent-teal); }
 .chart-legend__key--fan:not(:first-child) { margin-left: 8px; }
 
 .chart { width: 100%; height: 150px; display: block; }
-.chart--curve { height: 190px; }
+/* The fan curve sits on the Hub's plot: a dark field with a visible grid. */
+.chart--curve { height: 200px; background: #121214; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.chart--curve.is-editing { cursor: crosshair; }
 
-.chart-grid line { stroke: #242424; stroke-width: 1; }
-.chart-grid text { fill: #5a5a5a; font-size: 9px; font-family: var(--mono); }
+.chart-grid line { stroke: #2a2a30; stroke-width: 1; }
+.chart-grid text { fill: #6b6b74; font-size: 9px; font-family: var(--mono); }
 
 .chart-line { fill: none; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
-/* vector-effect keeps the stroke even width under the non-uniform scaling
- * that preserveAspectRatio="none" applies to the history chart. */
-.chart-line--temp  { stroke: var(--omen-red); vector-effect: non-scaling-stroke; }
+/* vector-effect keeps the stroke even under the non-uniform scaling that
+ * preserveAspectRatio="none" applies to the history chart. */
+.chart-line--temp  { stroke: #ff2d6a; vector-effect: non-scaling-stroke; }
 .chart-line--fan   { stroke: var(--accent-teal); opacity: .75; vector-effect: non-scaling-stroke; }
-.chart-line--curve { stroke: var(--omen-red); stroke-width: 2; }
+/* The curve itself in the Hub's blue, with its points as blue dots. */
+.chart-line--curve { stroke: #4f8cff; stroke-width: 2; }
+.chart-line--curve.is-draft { stroke-dasharray: 5 3; }
 
-#curve-now circle { fill: var(--omen-red); stroke: #101010; stroke-width: 2; }
-#curve-now line   { stroke: var(--omen-red); stroke-dasharray: 3 3; opacity: .5; }
+#curve-now circle { fill: #ff2d6a; stroke: #101010; stroke-width: 2; }
+#curve-now line   { stroke: #ff2d6a; stroke-dasharray: 3 3; opacity: .55; }
 #curve-now text   { fill: var(--text-dim); font-size: 10px; font-family: var(--mono); }
 
 .chart-scale {
@@ -619,181 +852,81 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
   font-family: var(--mono);
 }
 
-/* The explanation above the profile cards, which needs more room than a
- * footnote under a control. */
-.hint--lede { margin: 0 0 16px; max-width: 78ch; }
-
 /* ── curve editor ────────────────────────────────────────────── */
 
 .curve-tools { margin-left: auto; display: flex; gap: 6px; }
-.btn--sm { padding: 4px 10px; font-size: 11px; }
-.btn--accent { background: var(--omen-red); border-color: var(--omen-red); color: #fff; }
-.btn--accent:hover { filter: brightness(1.15); }
 
 /* The hit target is deliberately larger than the dot: dragging a 4px circle
  * with a trackpad is a test of patience, not a control. */
 #curve-handles circle.handle-hit { fill: transparent; cursor: grab; }
 #curve-handles circle.handle-dot {
-  fill: #101010; stroke: var(--omen-red); stroke-width: 2; pointer-events: none;
+  fill: #4f8cff; stroke: #121214; stroke-width: 2; pointer-events: none;
 }
 #curve-handles.is-dragging circle.handle-hit { cursor: grabbing; }
-#curve-handles text {
-  fill: var(--text-dim); font-size: 9px; font-family: var(--mono); pointer-events: none;
-}
-.chart--curve.is-editing { cursor: crosshair; }
-.chart-line--curve.is-draft { stroke-dasharray: 5 3; }
+#curve-handles text { fill: var(--text-dim); font-size: 9px; font-family: var(--mono); pointer-events: none; }
+/* The point under the pointer, so it is obvious which one is moving. */
+#curve-handles circle.handle-dot.is-active { fill: #fff; r: 5.5; }
 
-/* Which profile is in force, in words. Hidden until it is. */
-.power-card__active {
-  display: none;
-  margin-top: 10px; padding: 3px 0;
-  font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
-  color: var(--omen-red);
-  border-top: 1px solid var(--border-soft);
-}
-.power-card.is-active .power-card__active { display: block; }
+/* ── sparklines under the ring gauges ──────────────────────── */
 
-/* The silicon, under the model name. Static facts, so they are quiet: this
- * is the answer to "which machine is this report from", not something to
- * read every day. */
-.device-sidebar__spec {
-  display: block; margin-top: 4px;
-  font-size: 10.5px; color: var(--text-muted);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-
-/* ── the live panel in the sidebar ─────────────────────────────
- *
- * What the machine is doing, visible from every page. Built from the tokens
- * the rest of the app uses - no new colours, only a quieter surface and the
- * same hairline border as a card.
- */
-.now {
-  margin: 0 16px 14px;
-  padding: 11px 12px 9px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-}
-.now__row { display: flex; gap: 12px; }
-.now__row--tight { margin-top: 8px; }
-.now__cell { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.now__label {
-  font-size: 9.5px; letter-spacing: .09em; text-transform: uppercase;
-  color: var(--text-muted);
-}
-.now__value {
-  font-size: 12.5px; color: var(--text-dim);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.now__value--num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.now__value.is-hot { color: var(--omen-red); }
-.now__value.is-warm { color: var(--accent-amber); }
-
-/* The last few minutes of temperature, as a line thin enough to read as
- * texture rather than as a chart - the chart is on the Vitals page. */
-.now__spark { display: block; width: 100%; height: 26px; margin-top: 8px; overflow: visible; }
-.now__spark-line { fill: none; stroke: var(--omen-red); stroke-width: 1.25; opacity: .75; }
-
-/* ── sparklines under the ring gauges ──────────────────────────
- *
- * The rings say what is happening now; these say what happened in the last
- * few minutes, which is the difference between "54 degrees" and "54 degrees
- * and climbing". Fed from the same series the History chart draws.
- */
 .spark { display: block; width: 100%; height: 22px; margin-top: 10px; overflow: visible; }
-.spark__line { fill: none; stroke-width: 1.4; opacity: .8; }
-.spark__line--temp { stroke: var(--omen-red); }
+.spark__line { fill: none; stroke-width: 1.4; opacity: .85; }
+.spark__line--temp { stroke: url(#grad-ring); }
 .spark__line--fan  { stroke: var(--accent-teal); }
 
-/* Which way it is going, next to the number itself. */
-.ring__trend {
-  position: absolute; top: 50%; right: -2px;
-  transform: translateY(-130%);
-  font-size: 10px; line-height: 1; color: var(--text-muted);
+/* ── performance strip ─────────────────────────────────────── */
+
+/* The Hub's System Temperature panel: three big green numbers. */
+.perf-strip {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 24px; flex-wrap: wrap;
+  background: linear-gradient(160deg, var(--bg-card-hi) 0%, var(--bg-card) 45%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 16px 20px; margin-bottom: 14px;
 }
-.ring__trend.is-up   { color: var(--accent-amber); }
-.ring__trend.is-down { color: var(--accent-teal); }
-
-/* ── the small movements ───────────────────────────────────────
- *
- * Enough to make a card feel like a surface and a button feel pressed, and
- * no more. All of it is off under prefers-reduced-motion, which is not a
- * courtesy: an animated interface is genuinely unusable for some people.
- */
-.card { transition: border-color var(--dur-fast) var(--ease-out); }
-.ring-card:hover, .power-card:hover { border-color: var(--border); }
-.btn:active { transform: translateY(1px); }
-
-/* Keyboard users could not see where they were: the platform's own focus
- * ring is invisible on this ground. */
-:focus-visible {
-  outline: 2px solid var(--omen-red);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm);
+.perf-strip__fan { display: flex; align-items: center; gap: 14px; }
+.perf-strip__numbers { display: flex; gap: 40px; }
+.perf-strip__numbers div { display: flex; flex-direction: column; align-items: center; }
+.perf-strip__numbers b {
+  font-size: 30px; font-weight: 700; color: var(--accent-green);
+  font-variant-numeric: tabular-nums; line-height: 1.1;
 }
-
-@media (prefers-reduced-motion: reduce) {
-  * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
-  .btn:active { transform: none; }
-}
-
-/* [hidden] has to beat every display rule in this file.
- *
- * The browser's own rule is `[hidden] { display: none }`, which any class
- * with a `display` beats - so `.kv { display: grid }` quietly un-hid every
- * row the script had hidden. This started as two targeted overrides, and the
- * second time it bit (the battery card showed its control AND the "this
- * machine has no such control" warning, at once) it earned a general one.
- * Hiding is what `hidden` means; nothing here should have to opt in. */
-[hidden] { display: none !important; }
-
-/* The armed state of a destructive button: the second click is the one that
- * does it, so it should not look like the first. */
-.btn--sm.is-armed { background: var(--omen-red); border-color: var(--omen-red); color: #fff; }
-
-/* The point under the pointer, so it is obvious which one is moving. */
-#curve-handles circle.handle-dot.is-active { fill: var(--omen-red); r: 5.5; }
+.perf-strip__numbers b.is-warm { color: var(--accent-amber); }
+.perf-strip__numbers b.is-hot  { color: var(--omen-red); }
+.perf-strip__numbers span { margin-top: 3px; font-size: 11px; color: var(--text-muted); }
 
 /* ── application profiles ────────────────────────────────────── */
 
 .app-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .app-list:empty { display: none; }
-
 .app-row {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 10px; border-radius: var(--radius-md);
-  background: var(--bg-elevated); border: 1px solid var(--border);
+  background: #1a1a1d; border: 1px solid var(--border);
 }
-.app-row.is-active { border-color: var(--omen-red); }
+.app-row.is-active {
+  border-color: transparent;
+  background: linear-gradient(#1f1f23, #1f1f23) padding-box, var(--grad-tile) border-box;
+}
 .app-row__name { font-family: var(--mono); font-size: 12px; }
 .app-row__what { color: var(--text-dim); font-size: 11px; margin-left: auto; }
-.app-row__badge {
-  font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
-  color: var(--omen-red);
-}
+.app-row__badge { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #ff5a6e; }
 .app-row__drop {
   background: none; border: 0; color: var(--text-dim); cursor: pointer;
   font-size: 15px; line-height: 1; padding: 0 2px;
 }
 .app-row__drop:hover { color: var(--omen-red); }
-
 .app-add { display: flex; gap: 8px; flex-wrap: wrap; }
-.app-add input, .app-add select {
-  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px;
-  color: var(--text); font: inherit; font-size: 12px; padding: 6px 8px;
-}
 .app-add input { flex: 1 1 180px; font-family: var(--mono); }
-.app-add input:focus, .app-add select:focus { outline: 1px solid var(--omen-red); }
+
+/* Two controls in one definition cell, right-aligned with the rest. */
+.power-rule { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 
 /* ── graphics ────────────────────────────────────────────────── */
 
-.seg-4--two button { padding-left: 18px; padding-right: 18px; }
-.kv--tight { margin: 12px 0; }
-
 .copy-row {
   display: flex; align-items: center; gap: 8px;
-  background: var(--bg-elevated); border: 1px solid var(--border);
+  background: #151517; border: 1px solid var(--border);
   border-radius: var(--radius-md); padding: 8px 10px;
 }
 /* The command is long and must not push the card wider than the window. */
@@ -801,100 +934,28 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 
 /* ── settings ────────────────────────────────────────────────── */
 
-/* A checkbox that reads as a switch. The input stays in the DOM and keeps
- * its keyboard behaviour; only its appearance is replaced. */
-.switch { display: inline-flex; cursor: pointer; }
-.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
-.switch span {
-  width: 34px; height: 18px; border-radius: 9px;
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  position: relative; transition: background .15s, border-color .15s;
-}
-.switch span::after {
-  content: ""; position: absolute; top: 2px; left: 2px;
-  width: 12px; height: 12px; border-radius: 50%;
-  background: var(--text-muted); transition: transform .15s, background .15s;
-}
-.switch input:checked + span { background: var(--omen-red-dark); border-color: var(--omen-red); }
-.switch input:checked + span::after { transform: translateX(16px); background: #fff; }
-.switch input:focus-visible + span { outline: 2px solid var(--omen-red); outline-offset: 2px; }
-
-.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
-
 .diag {
   margin-top: 12px; max-height: 320px; overflow: auto;
-  background: var(--bg-elevated); border: 1px solid var(--border);
+  background: #151517; border: 1px solid var(--border);
   border-radius: var(--radius-md); padding: 10px;
   font-family: var(--mono); font-size: 11px; color: var(--text-dim);
   white-space: pre;
 }
 .ver-stale { color: var(--omen-red); }
 
-
-/* ── form controls ───────────────────────────────────────────────
- *
- * One rule for every control in the app. They were styled twice before, in
- * the two places that happened to need one, and both relied on the engine
- * drawing a select the way it draws a div - which WebKitGTK does not. The
- * native appearance has to be turned off explicitly, and then the arrow is
- * ours to draw: an inline SVG as a data URI, which the CSP allows under
- * img-src.
- */
-
-.field, .app-add input, .app-add select, .kv select {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  padding: 6px 8px;
-  min-height: 30px;
-}
-
-.app-add select, .kv select {
-  appearance: none;
-  -webkit-appearance: none;
-  padding-right: 26px;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23c8c8c8' stroke-width='1.5' stroke-linecap='round'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 9px center;
-  cursor: pointer;
-}
-
-/* The popup itself is drawn by the platform; color-scheme on :root is what
- * makes it dark. These keep the entries readable where the engine does
- * honour them. */
-.app-add select option, .kv select option {
-  background: var(--bg-card);
-  color: var(--text);
-}
-
-.app-add input:focus, .app-add select:focus, .kv select:focus {
-  outline: 1px solid var(--omen-red);
-  outline-offset: -1px;
-}
-.app-add select:hover, .kv select:hover { border-color: var(--text-muted); }
-
-.app-add input::placeholder { color: var(--text-muted); }
-
-/* A disabled control should look unavailable rather than merely quiet. */
-.app-add select:disabled, .kv select:disabled { opacity: .5; cursor: default; }
-
 /* ── firmware ────────────────────────────────────────────────── */
 
 .fw-list { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; }
 .fw-list:empty { display: none; }
-
 .fw-row {
   display: flex; align-items: baseline; gap: 10px;
   padding: 7px 10px; border-radius: var(--radius-md);
-  background: var(--bg-elevated); border: 1px solid var(--border);
+  background: #1a1a1d; border: 1px solid var(--border);
 }
 .fw-row.has-update { border-color: var(--omen-red); }
 .fw-row__name { font-size: 12px; }
 .fw-row__ver { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
-.fw-row__new { font-family: var(--mono); font-size: 11px; color: var(--omen-red); }
+.fw-row__new { font-family: var(--mono); font-size: 11px; color: #ff5a6e; }
 .fw-row__flag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
 
 /* ── diagnosis ───────────────────────────────────────────────── */
@@ -909,21 +970,20 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .diag-counts:empty { display: none; }
 .diag-count {
   display: inline-flex; align-items: baseline; gap: 6px;
-  padding: 5px 10px; border-radius: var(--radius-md);
+  padding: 5px 10px; border-radius: var(--radius-sm);
   background: var(--bg-card); border: 1px solid var(--border);
   font-size: 11px; color: var(--text-muted);
 }
-.diag-count b { font-size: 13px; color: var(--text); }
+.diag-count b { font-size: 14px; color: var(--text); }
 .diag-count.is-fail b { color: var(--omen-red); }
 .diag-count.is-warn b { color: var(--accent-amber); }
-.diag-count.is-ok   b { color: var(--accent-teal); }
+.diag-count.is-ok   b { color: var(--accent-green); }
 
 .diag-section { margin-bottom: 18px; }
 .diag-section__title {
-  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--text-muted); margin: 0 0 8px 2px;
+  font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--text); margin: 0 0 8px 2px;
 }
-
 .diag-row {
   display: grid; grid-template-columns: 58px 1fr; gap: 10px;
   padding: 10px 12px; border-radius: var(--radius-md);
@@ -932,30 +992,23 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 }
 .diag-row.is-fail { border-color: var(--omen-red); }
 .diag-row.is-warn { border-color: var(--accent-amber); }
-
 .diag-badge {
   align-self: start; text-align: center;
-  font-size: 10px; letter-spacing: .06em; font-weight: 600;
+  font-size: 10px; letter-spacing: .06em; font-weight: 700;
   padding: 3px 0; border-radius: var(--radius-sm);
-  background: var(--bg-elevated); color: var(--text-muted);
+  background: #26262a; color: var(--text-muted);
 }
-.diag-badge.is-ok   { color: var(--accent-teal); }
+.diag-badge.is-ok   { color: var(--accent-green); }
 .diag-badge.is-warn { color: var(--accent-amber); }
 .diag-badge.is-fail { background: var(--omen-red); color: #fff; }
-
-.diag-row__title { font-size: 12px; font-weight: 600; }
+.diag-row__title { font-size: 12px; font-weight: 700; }
 .diag-row__detail { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
-/* The fix is the half a diagnostic usually leaves out, so it is set apart
- * rather than run on from the finding. */
+/* The fix is the half a diagnostic usually leaves out, so it is set apart. */
 .diag-row__fix {
   font-size: 11px; color: var(--text-muted); margin-top: 7px;
-  padding-left: 9px; border-left: 2px solid var(--border);
+  padding-left: 9px; border-left: 2px solid var(--border-strong);
 }
 .diag-row__fix code { font-size: 11px; }
-
-/* Two controls in one definition cell, right-aligned with the rest of the
- * key/value rows. */
-.power-rule { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 
 /* ── decision log ────────────────────────────────────────────── */
 
@@ -969,27 +1022,24 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
   padding: 5px 8px; border-radius: var(--radius-sm);
   font-size: 11px; font-family: var(--mono); color: var(--text-dim);
 }
-.hist-row:nth-child(odd) { background: rgba(255,255,255,.02); }
+.hist-row:nth-child(odd) { background: rgba(255,255,255,.025); }
 .hist-row__when { color: var(--text-muted); }
 .hist-row__target { text-align: right; color: var(--text); }
-.hist-row.is-max .hist-row__target { color: var(--omen-red); }
+.hist-row.is-max .hist-row__target { color: #ff5a6e; }
 .hist-row.is-off .hist-row__target { color: var(--accent-teal); }
-
 
 /* ── storage and processes ───────────────────────────────────── */
 
-.panel-grid--wide { grid-template-columns: 1fr 1fr; }
-
-.disk-list, .proc-list { display: flex; flex-direction: column; gap: 8px; }
-
+.disk-list, .proc-list { display: flex; flex-direction: column; gap: 9px; }
 .disk-row { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; }
 .disk-row__name { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+/* The Hub's storage bar: a grey track and a red fill. */
 .disk-row__bar {
-  height: 6px; border-radius: 3px; background: var(--bg-elevated);
+  height: 8px; border-radius: 1px; background: #3a3a40;
   overflow: hidden; display: block;
 }
-.disk-row__bar i { display: block; height: 100%; background: var(--accent-teal); }
-.disk-row__bar i.is-hot { background: var(--omen-red); }
+.disk-row__bar i { display: block; height: 100%; background: var(--omen-red); }
+.disk-row__bar i.is-hot { background: var(--grad-tile); }
 .disk-row__free { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
 .proc-row {
@@ -1002,43 +1052,40 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
   color: var(--text-muted); font-variant-numeric: tabular-nums;
 }
 
-/* ── performance strip ───────────────────────────────────────── */
+/* ── focus and motion ────────────────────────────────────────── */
 
-.perf-strip {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 24px; flex-wrap: wrap;
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: 14px 18px; margin-bottom: 16px;
-}
-.perf-strip__fan { display: flex; align-items: center; gap: 12px; }
-.perf-strip__numbers { display: flex; gap: 34px; }
-.perf-strip__numbers div { display: flex; flex-direction: column; align-items: flex-end; }
-/* Large and green, the way the Hub shows them - these are the three numbers
- * someone opens this page to see. */
-.perf-strip__numbers b {
-  font-size: 24px; font-weight: 400; color: var(--accent-green);
-  font-variant-numeric: tabular-nums; line-height: 1.1;
-}
-.perf-strip__numbers b.is-warm { color: var(--accent-amber); }
-.perf-strip__numbers b.is-hot  { color: var(--omen-red); }
-.perf-strip__numbers span {
-  font-size: 10px; color: var(--text-muted);
-  text-transform: uppercase; letter-spacing: .06em;
+/* Keyboard users could not see where they were: the platform's own focus
+ * ring is invisible on this ground. */
+:focus-visible {
+  outline: 2px solid #ff2d6a;
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
-/* The hue strip, as the Hub draws it: the choice is the colour itself, so
- * the control shows every option at once. */
-/* The base range rule sets a flat track and a 4px height; both have to be
- * overridden here or the gradient is a hairline nobody can aim at. */
-input[type="range"].hue-slider {
-  height: 10px;
-  border-radius: 5px;
-  background: linear-gradient(to right,
-    #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%,
-    #0000ff 67%, #ff00ff 83%, #ff0000 100%);
+/* All of it off under prefers-reduced-motion, which is not a courtesy: an
+ * animated interface is genuinely unusable for some people. */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+  .btn:active { transform: none; }
 }
-input[type="range"].hue-slider::-webkit-slider-thumb {
-  width: 18px; height: 18px;
-  background: #fff;
-  border: 3px solid #141414;
+
+/* ── narrow windows ──────────────────────────────────────────── */
+
+@media (max-width: 1040px) {
+  /* Six tabs fit the smallest window the program allows (940px) only a
+   * little tighter. */
+  .tab-link { padding: 0 11px; font-size: 11.5px; }
+}
+@media (max-width: 900px) {
+  :root { --sidebar-w: 212px; }
+  .vitals-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .panel-grid--wide { grid-template-columns: 1fr; }
+  .profile-dd__label { display: none; }
+}
+@media (max-width: 640px) {
+  /* Kept, not hidden: Diagnosis and Settings are only reachable from it. */
+  :root { --sidebar-w: 176px; }
+  .now { display: none; }
+  .main-scroll { padding: 14px 14px 8px; }
+  .page-head { padding: 10px 14px 0; }
 }
