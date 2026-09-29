@@ -24,6 +24,7 @@
 #include <linux/debugfs.h>
 #include <linux/dmi.h>
 #include <linux/hwmon.h>
+#include <linux/ktime.h>
 #include <linux/led-class-multicolor.h>
 #include <linux/leds.h>
 #include <linux/module.h>
@@ -237,10 +238,20 @@ struct omen_rgb {
 	struct mc_subled subled[ZONE_COUNT][COLORS_PER_ZONE];
 	char zone_name[ZONE_COUNT][32];
 	/* Zone writes, coalesced - see omen_zone_set(). */
-	struct work_struct zone_work;
+	struct delayed_work zone_work;
+	/*
+	 * How many LM03 calls there have been, and how long they took - for
+	 * finding out what frame rate the firmware can actually take (debugfs
+	 * zone_stats). Under the lock, like the writes they measure.
+	 */
+	u64 zone_writes;
+	u64 zone_ns_total;
+	u64 zone_ns_max;
 	struct delayed_work poll_work;
 	/* The extended EC RAM lighting block, 8D24 only - see debugfs below. */
 	void __iomem *h2ra;
+	/* The fan tachometers in the same RAM, 8D24 only - see omen_hwmon_read. */
+	void __iomem *fans;
 	struct dentry *debugfs;
 };
 
@@ -442,36 +453,54 @@ static int omen_write_zones(struct omen_rgb *rgb)
 
 static void omen_zone_work(struct work_struct *work)
 {
-	struct omen_rgb *rgb = container_of(work, struct omen_rgb, zone_work);
+	struct omen_rgb *rgb = container_of(to_delayed_work(work),
+					    struct omen_rgb, zone_work);
+	u64 took;
+	ktime_t t0;
 	int ret;
 
 	guard(mutex)(&rgb->lock);
+	t0 = ktime_get();
 	ret = omen_write_zones(rgb);
+	took = ktime_to_ns(ktime_sub(ktime_get(), t0));
+	rgb->zone_writes++;
+	rgb->zone_ns_total += took;
+	rgb->zone_ns_max = max(rgb->zone_ns_max, took);
 	if (ret)
 		dev_warn_ratelimited(rgb->dev, "could not write the zone colours: %d\n",
 				     ret);
 }
 
 /*
+ * How long a change waits for the rest of its frame.
+ *
+ * One LM03 carries all four zones, but the LED class delivers them one zone
+ * at a time. Started at once, the write went out with the first zone of a
+ * frame, a second followed with the rest, and for that moment the keyboard
+ * showed half of one frame and half of the last - visible in an effect as a
+ * stutter. Four zones written back to back arrive well inside this, and a
+ * few milliseconds of latency are invisible on a keyboard.
+ */
+#define ZONE_FRAME_MS		4
+
+/*
  * Queues the write rather than doing it.
  *
- * One LM03 carries all four zones, and each costs an ACPI evaluation with
- * two firmware stalls in it. Changing the whole keyboard through the LED
- * class is at least four writes - eight when brightness and multi_intensity
- * are both set, which is what omend does - and an effect does it many times
- * a second. Every change that arrives before the work runs is folded into
- * the same LM03.
- *
- * Nothing is lost by not being synchronous: the LED class already defers
- * brightness_set_blocking to a work item and drops its errors, so the only
- * difference is that four zones now share one.
+ * Every change that arrives while the write is pending is folded into the
+ * same LM03 (see ZONE_FRAME_MS). Nothing is lost by not being synchronous:
+ * the LED class already defers brightness_set_blocking to a work item and
+ * drops its errors, so the only difference is that four zones share one.
  */
 static void omen_zone_set(struct led_classdev *cdev, enum led_brightness brightness)
 {
 	struct omen_rgb *rgb = dev_get_drvdata(cdev->dev->parent);
 
-	/* The class has already stored the new brightness; the work reads it. */
-	schedule_work(&rgb->zone_work);
+	/*
+	 * The class has already stored the new brightness; the work reads it.
+	 * Not re-armed while pending, so the window opens with the first zone
+	 * of a frame and closes a fixed time later.
+	 */
+	schedule_delayed_work(&rgb->zone_work, msecs_to_jiffies(ZONE_FRAME_MS));
 }
 
 /* --- global brightness --- */
@@ -912,11 +941,36 @@ static const struct attribute_group *omen_rgb_groups[] = {
  */
 #define EC_GPU_TEMP		0xB7
 
+/*
+ * The two fan tachometers: FS1H/FS1L and FS2H/FS2L, big-endian RPM, at
+ * 0x530-0x533 of the memory-mapped extended EC RAM (DSDT OperationRegion
+ * H2RA, 0xFE700000).
+ *
+ * hp-wmi reads the same numbers through WMI command 0x2D, whose method
+ * (GM2D) starts with an SMI and waits for it: 264 ms per read, measured on
+ * 8D24, and while it runs no other ACPI method can. omend read three of them
+ * every two seconds, and every keyboard frame that arrived meanwhile waited
+ * - that was the stutter in the effects. Read from the RAM they are a
+ * handful of bus cycles. GM11, the other WMI command that returns them,
+ * reads them from here too, which is the evidence that these are the same
+ * values.
+ */
+#define H2RA_FANS	0x530
+#define H2RA_FANS_LEN	4
+
 static int omen_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 			   u32 attr, int channel, long *val)
 {
+	struct omen_rgb *rgb = dev_get_drvdata(dev);
 	u8 raw;
 	int ret;
+
+	if (type == hwmon_fan) {
+		const void __iomem *at = rgb->fans + channel * 2;
+
+		*val = (readb(at) << 8) | readb(at + 1);
+		return 0;
+	}
 
 	ret = ec_read(EC_GPU_TEMP, &raw);
 	if (ret)
@@ -940,12 +994,20 @@ static int omen_hwmon_read_string(struct device *dev,
 	return 0;
 }
 
-/* A callback rather than .visible, which only newer kernels have. */
+/*
+ * A callback rather than .visible, which only newer kernels have - and
+ * needed anyway: the temperature is there on the whole family, the fans only
+ * where their address is known.
+ */
 static umode_t omen_hwmon_is_visible(const void *data,
 				     enum hwmon_sensor_types type, u32 attr,
 				     int channel)
 {
-	return 0444;
+	const struct omen_rgb *rgb = data;
+
+	if (type == hwmon_fan)
+		return rgb->fans ? 0444 : 0;
+	return omen_has_dgpu_temp ? 0444 : 0;
 }
 
 static const struct hwmon_ops omen_hwmon_ops = {
@@ -956,6 +1018,7 @@ static const struct hwmon_ops omen_hwmon_ops = {
 
 static const struct hwmon_channel_info * const omen_hwmon_info[] = {
 	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT | HWMON_T_LABEL),
+	HWMON_CHANNEL_INFO(fan, HWMON_F_INPUT, HWMON_F_INPUT),
 	NULL,
 };
 
@@ -1042,6 +1105,51 @@ static int lbrt_set(void *data, u64 val)
 }
 DEFINE_DEBUGFS_ATTRIBUTE(lbrt_fops, lbrt_get, lbrt_set, "0x%02llx\n");
 
+/*
+ * LM03 calls since the last reset, and how long they took. Writing anything
+ * resets the counters. Read after an effect has run for a known time, the
+ * count says how many frames actually reached the firmware and the times say
+ * whether the firmware is what limits them.
+ */
+static int zone_stats_show(struct seq_file *s, void *unused)
+{
+	struct omen_rgb *rgb = s->private;
+
+	guard(mutex)(&rgb->lock);
+	seq_printf(s, "writes %llu\nmean_us %llu\nmax_us %llu\n",
+		   rgb->zone_writes,
+		   rgb->zone_writes ?
+			div64_u64(rgb->zone_ns_total, rgb->zone_writes) / 1000 : 0,
+		   div64_u64(rgb->zone_ns_max, 1000));
+	return 0;
+}
+
+static int zone_stats_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, zone_stats_show, inode->i_private);
+}
+
+static ssize_t zone_stats_write(struct file *file, const char __user *buf,
+				size_t count, loff_t *ppos)
+{
+	struct omen_rgb *rgb = ((struct seq_file *)file->private_data)->private;
+
+	guard(mutex)(&rgb->lock);
+	rgb->zone_writes = 0;
+	rgb->zone_ns_total = 0;
+	rgb->zone_ns_max = 0;
+	return count;
+}
+
+static const struct file_operations zone_stats_fops = {
+	.owner		= THIS_MODULE,
+	.open		= zone_stats_open,
+	.read		= seq_read,
+	.write		= zone_stats_write,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
 static void omen_debugfs_init(struct omen_rgb *rgb)
 {
 	if (!omen_has_lighting && !dmi_check_system(omen_h2ra_boards))
@@ -1051,9 +1159,12 @@ static void omen_debugfs_init(struct omen_rgb *rgb)
 	rgb->debugfs = debugfs_create_dir("omen-kbd-rgb", NULL);
 	devm_add_action_or_reset(rgb->dev, omen_debugfs_remove, rgb->debugfs);
 
-	if (omen_has_lighting)
+	if (omen_has_lighting) {
 		debugfs_create_file_unsafe("lbrt", 0600, rgb->debugfs, rgb,
 					   &lbrt_fops);
+		debugfs_create_file("zone_stats", 0600, rgb->debugfs, rgb,
+				    &zone_stats_fops);
+	}
 
 	if (!dmi_check_system(omen_h2ra_boards))
 		return;
@@ -1078,7 +1189,7 @@ static void omen_cancel_work(void *data)
 	struct omen_rgb *rgb = data;
 
 	cancel_delayed_work_sync(&rgb->poll_work);
-	cancel_work_sync(&rgb->zone_work);
+	cancel_delayed_work_sync(&rgb->zone_work);
 }
 
 static int omen_lighting_probe(struct omen_rgb *rgb)
@@ -1089,7 +1200,7 @@ static int omen_lighting_probe(struct omen_rgb *rgb)
 	struct device *dev = rgb->dev;
 	int i, c, ret;
 
-	INIT_WORK(&rgb->zone_work, omen_zone_work);
+	INIT_DELAYED_WORK(&rgb->zone_work, omen_zone_work);
 	INIT_DELAYED_WORK(&rgb->poll_work, omen_poll_work);
 	/*
 	 * Registered before the LEDs, so it runs after they are unregistered:
@@ -1201,7 +1312,11 @@ static int omen_rgb_probe(struct platform_device *pdev)
 		return ret;
 	platform_set_drvdata(pdev, rgb);
 
-	if (omen_has_dgpu_temp) {
+	if (dmi_check_system(omen_h2ra_boards))
+		rgb->fans = devm_ioremap(dev, H2RA_BASE + H2RA_FANS,
+					 H2RA_FANS_LEN);
+
+	if (omen_has_dgpu_temp || rgb->fans) {
 		struct device *hwmon;
 
 		/* Not fatal: the keyboard and the mux do not need it. */
@@ -1209,7 +1324,7 @@ static int omen_rgb_probe(struct platform_device *pdev)
 							     &omen_hwmon_chip,
 							     NULL);
 		if (IS_ERR(hwmon))
-			dev_warn(dev, "could not register the GPU temperature: %ld\n",
+			dev_warn(dev, "could not register the hwmon device: %ld\n",
 				 PTR_ERR(hwmon));
 	}
 
@@ -1230,7 +1345,7 @@ static int omen_rgb_suspend(struct device *dev)
 		return 0;
 
 	cancel_delayed_work_sync(&rgb->poll_work);
-	flush_work(&rgb->zone_work);
+	flush_delayed_work(&rgb->zone_work);
 	return 0;
 }
 
