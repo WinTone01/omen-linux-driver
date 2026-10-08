@@ -551,6 +551,11 @@ fn set_fan_algorithm(algorithm: String) -> Result<String, String> {
     talk(Request::SetFanAlgorithm { algorithm })
 }
 
+#[tauri::command]
+fn set_gamemode_rule(rule: omen_core::power::PowerRule) -> Result<String, String> {
+    talk(Request::SetGameModeRule { rule })
+}
+
 /// The running curve as one line of text, to hand to somebody else.
 #[tauri::command]
 fn curve_code() -> Result<String, String> {
@@ -999,6 +1004,7 @@ fn main() {
             get_state,
             set_power,
             set_fan_algorithm,
+            set_gamemode_rule,
             set_mode,
             set_profile,
             reload_config,

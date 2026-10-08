@@ -953,3 +953,22 @@ MANGOHUD_CONFIGFILE=/usr/share/omen-control/mangohud-omen.conf mangohud %command
 
 MangoHud shows one OMEN line from `omenctl overlay`: the profile, both fans,
 the CPU, GPU and surface temperatures, and PL1.
+
+### In the window, and in `omenctl doctor`
+
+The Game Profiles page has all of this as well:
+
+* a refresh rate next to each application and power rule
+* a GameMode card, with the lines to add to `gamemode.ini`
+
+The History graph on System Vitals draws the surface temperature as a dashed
+line, on machines that report it.
+
+`omenctl doctor` and the Diagnosis page have a **Power** section. It checks:
+
+* that the loaded omen-kbd-rgb is new enough for Unleashed and PL1
+* that the surface sensor answered
+* that EPP matches the profile, or names whatever else is managing it
+* when a rule asks for a refresh rate, that `omen-session` is running to
+  apply it
+* when GameMode has a rule, that `gamemode.ini` actually calls omenctl

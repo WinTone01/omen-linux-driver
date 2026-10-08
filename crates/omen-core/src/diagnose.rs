@@ -178,6 +178,7 @@ pub fn run() -> Report {
             service(&snapshot),
             lighting(),
             graphics(),
+            power(&snapshot),
             conflicts(),
         ],
     }
@@ -886,6 +887,223 @@ fn graphics() -> Section {
         title: "Graphics".into(),
         checks,
     }
+}
+
+/// What OMEN Gaming Hub sets around its modes: Unleashed, PL1, the surface
+/// sensor, the CPU's EPP hint - and the two helpers that live outside the
+/// daemon, the session one for refresh rates and GameMode's hook.
+fn power(snapshot: &DaemonView) -> Section {
+    let mut checks = Vec::new();
+    let snap = snapshot.as_ref().ok();
+    let rgb = about::module_status("omen_kbd_rgb");
+    let board = read("/sys/class/dmi/id/board_name").unwrap_or_default();
+
+    // On 8D24 the controls are expected; elsewhere their absence is the
+    // answer, not a fault.
+    let limits_here = crate::limits::has_unleashed();
+    checks.push(match (limits_here, board.as_str(), rgb.loaded) {
+        (true, _, _) => Check::new(
+            "power_limits",
+            "Unleashed and PL1",
+            Verdict::Ok,
+            format!(
+                "available; PL1 {}",
+                crate::limits::pl1().map_or("unreadable".into(), |w| format!("{w} W"))
+            ),
+        ),
+        (false, "8D24", true) => Check::new(
+            "power_limits",
+            "Unleashed and PL1",
+            Verdict::Warn,
+            "omen-kbd-rgb is loaded but older than 0.3.0, which adds them",
+        )
+        .with_fix(
+            "./install.sh updates the module; then \
+             sudo modprobe -r omen-kbd-rgb && sudo modprobe omen-kbd-rgb",
+        ),
+        (false, "8D24", false) => Check::new(
+            "power_limits",
+            "Unleashed and PL1",
+            Verdict::Skip,
+            "omen-kbd-rgb is not loaded - it is what offers them",
+        ),
+        (false, _, _) => Check::new(
+            "power_limits",
+            "Unleashed and PL1",
+            Verdict::Skip,
+            "only on board 8D24, whose firmware they were read from",
+        ),
+    });
+
+    // The surface sensor, where the module would publish it.
+    if limits_here {
+        let surface = Thermal::discover().ok().and_then(|t| t.surface());
+        checks.push(match surface {
+            Some(c) => Check::new(
+                "surface_temp",
+                "Surface temperature",
+                Verdict::Ok,
+                format!("{c:.0} °C (EC 0x48)"),
+            ),
+            None => Check::new(
+                "surface_temp",
+                "Surface temperature",
+                Verdict::Warn,
+                "not published - EC 0x48 did not read like a temperature at load",
+            )
+            .with_fix(
+                "Unleashed then holds PL1 without its surface limit. What the register \
+                 read is in: sudo dmesg | grep omen",
+            ),
+        });
+    }
+
+    // EPP: only meaningful in active mode, and only ours when nothing else
+    // keeps it.
+    let follows = snap.is_none_or(|s| {
+        s.power
+            .as_ref()
+            .is_none_or(|p| p.config.epp_follows_profile)
+    });
+    let profile = PlatformProfile::discover().and_then(|p| p.get().ok());
+    let want = profile.as_deref().and_then(crate::epp::for_profile);
+    let now = crate::epp::current();
+    let title = "CPU energy preference";
+    checks.push(
+        match (crate::epp::files().is_empty(), crate::epp::owner(), follows) {
+            (true, _, _) => Check::new(
+                "epp",
+                title,
+                Verdict::Skip,
+                "the CPU frequency driver takes no hint (not in active mode)",
+            ),
+            (false, Some(owner), _) => Check::new(
+                "epp",
+                title,
+                Verdict::Ok,
+                format!("{} - kept in step by {owner}", now.unwrap_or_default()),
+            ),
+            (false, None, false) => Check::new(
+                "epp",
+                title,
+                Verdict::Ok,
+                format!("{} - left alone, as configured", now.unwrap_or_default()),
+            ),
+            (false, None, true) if want.is_some() && now.as_deref() != want => Check::new(
+                "epp",
+                title,
+                Verdict::Warn,
+                format!(
+                    "{} while the profile is {} - {} was expected",
+                    now.unwrap_or_else(|| "?".into()),
+                    profile.unwrap_or_default(),
+                    want.unwrap_or_default()
+                ),
+            )
+            .with_fix(
+                "omend sets it when the profile changes. A service older than this \
+                 feature does not: sudo systemctl restart omend",
+            ),
+            (false, None, true) => Check::new(
+                "epp",
+                title,
+                Verdict::Ok,
+                format!("{} - follows the profile", now.unwrap_or_default()),
+            ),
+        },
+    );
+
+    // Refresh rates are applied in the session, by a helper that has to be
+    // turned on. Only worth a word when a rule asks for one.
+    if let Some(s) = snap {
+        let asks = s.apps.iter().any(|a| a.refresh_hz.is_some())
+            || [&s.power_ac, &s.power_battery, &s.gamemode_rule]
+                .iter()
+                .any(|r| r.refresh_hz.is_some());
+        let title = "Refresh rate helper";
+        checks.push(if !asks {
+            Check::new(
+                "session_helper",
+                title,
+                Verdict::Skip,
+                "no rule asks for a refresh rate",
+            )
+        } else if session_helper_running() {
+            Check::new(
+                "session_helper",
+                title,
+                Verdict::Ok,
+                "omenctl session is running",
+            )
+        } else {
+            let why = match crate::display::detect() {
+                Ok(b) => format!("it would use {}", b.tool()),
+                Err(e) => format!("and in this session it could not: {e}"),
+            };
+            Check::new(
+                "session_helper",
+                title,
+                Verdict::Warn,
+                format!("a rule asks for a refresh rate, but nothing applies it - {why}"),
+            )
+            .with_fix("systemctl --user enable --now omen-session")
+        });
+
+        if !s.gamemode_rule.is_empty() {
+            checks.push(if gamemode_hooked() {
+                Check::new(
+                    "gamemode",
+                    "GameMode",
+                    Verdict::Ok,
+                    format!(
+                        "gamemode.ini calls omenctl; while a game runs: {}",
+                        s.gamemode_rule.summary()
+                    ),
+                )
+            } else {
+                Check::new(
+                    "gamemode",
+                    "GameMode",
+                    Verdict::Warn,
+                    "a GameMode rule is set, but gamemode.ini does not call omenctl",
+                )
+                .with_fix("omenctl gamemode setup  (prints the two lines to add)")
+            });
+        }
+    }
+
+    Section {
+        title: "Power".into(),
+        checks,
+    }
+}
+
+/// Whether `omenctl session` is running, for this user or any.
+fn session_helper_running() -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        std::fs::read(e.path().join("cmdline")).is_ok_and(|raw| {
+            let mut args = raw.split(|b| *b == 0);
+            let exe = args.next().unwrap_or_default();
+            exe.ends_with(b"omenctl") && args.next() == Some(b"session".as_slice())
+        })
+    })
+}
+
+/// Whether a gamemode.ini this user's GameMode reads calls omenctl.
+fn gamemode_hooked() -> bool {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| home.map(|h| h.join(".config")));
+    config
+        .map(|c| c.join("gamemode.ini"))
+        .into_iter()
+        .chain([std::path::PathBuf::from("/etc/gamemode.ini")])
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .any(|text| text.contains("omenctl gamemode on"))
 }
 
 /// Other software that drives the same knobs.

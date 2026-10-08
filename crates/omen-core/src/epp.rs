@@ -95,12 +95,19 @@ pub fn owner() -> Option<&'static str> {
         let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) else {
             continue;
         };
-        let comm = comm.trim();
-        if let Some(owner) = OWNERS.iter().find(|o| comm == **o) {
+        if let Some(owner) = OWNERS.iter().find(|o| is_comm_of(comm.trim(), o)) {
             return Some(owner);
         }
     }
     None
+}
+
+/// Whether `comm` is what the kernel shows for a program called `name`.
+/// The kernel keeps 15 characters: power-profiles-daemon is
+/// `power-profiles-` in /proc, and an exact comparison never finds it.
+fn is_comm_of(comm: &str, name: &str) -> bool {
+    const COMM_MAX: usize = 15;
+    comm == &name[..name.len().min(COMM_MAX)]
 }
 
 #[cfg(test)]
@@ -120,6 +127,13 @@ mod tests {
         assert!(rank("balanced") < rank("performance"));
         assert_eq!(rank("performance"), rank("unleashed"));
         assert_eq!(for_profile("custom"), None);
+    }
+
+    #[test]
+    fn a_truncated_name_is_still_recognised() {
+        assert!(is_comm_of("power-profiles-", "power-profiles-daemon"));
+        assert!(is_comm_of("tuned", "tuned"));
+        assert!(!is_comm_of("tuned", "tuned-ppd"));
     }
 
     #[test]

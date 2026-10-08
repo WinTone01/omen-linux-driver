@@ -110,6 +110,10 @@ pub struct Sample {
     pub fan_rpm: Option<u32>,
     /// The setpoint in force. `None` means control was with the EC.
     pub target_rpm: Option<u32>,
+    /// The palm rest, on a machine whose module reports it. Defaulted so a
+    /// window newer than the daemon still reads its samples.
+    #[serde(default)]
+    pub surface_c: Option<f32>,
 }
 
 /// A curve as it travels over the wire: the points plus how to read between

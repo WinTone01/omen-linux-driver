@@ -821,6 +821,7 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 1px; }
 .chart-legend__key--temp { background: #ff2d6a; }
 .chart-legend__key--fan  { background: var(--accent-teal); }
 .chart-legend__key--fan:not(:first-child) { margin-left: 8px; }
+.chart-legend__key--surface { background: #ffb02e; margin-left: 8px; }
 
 .chart { width: 100%; height: 150px; display: block; }
 /* The fan curve sits on the Hub's plot: a dark field with a visible grid. */
@@ -835,6 +836,8 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 1px; }
  * preserveAspectRatio="none" applies to the history chart. */
 .chart-line--temp  { stroke: #ff2d6a; vector-effect: non-scaling-stroke; }
 .chart-line--fan   { stroke: var(--accent-teal); opacity: .75; vector-effect: non-scaling-stroke; }
+/* The palm rest: slow, low, and only on a machine whose module reports it. */
+.chart-line--surface { stroke: #ffb02e; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
 /* The curve itself in the Hub's blue, with its points as blue dots. */
 .chart-line--curve { stroke: #4f8cff; stroke-width: 2; }
 .chart-line--curve.is-draft { stroke-dasharray: 5 3; }

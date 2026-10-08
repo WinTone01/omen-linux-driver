@@ -42,7 +42,7 @@ const mockState = {
     on_ac: true,
     battery_percent: 82,
     power_ac: {},
-    power_battery: { profile: "low-power", fan: { mode: "curve" }, curve: "quiet" },
+    power_battery: { profile: "low-power", fan: { mode: "curve" }, curve: "quiet", refresh_hz: 60 },
     curve_preset: null,
     gpu: {
       address: "0000:04:00.0", control: "auto", status: "active",
@@ -64,6 +64,8 @@ const mockState = {
       surface_c: 38, surface_hot: false, epp: "balance_performance", epp_owner: null,
     },
     fan_algorithm: "curve",
+    gamemode: false,
+    gamemode_rule: { profile: "performance", fan: { mode: "curve" }, curve: "performance", refresh_hz: 165 },
     hub_tables: null,
     cpu_average_c: null,
   },
@@ -134,7 +136,8 @@ async function mockInvoke(cmd, args) {
       const rows = [];
       for (let i = 300; i > 0; i--) {
         const r = mockReading(now - i * 2);
-        rows.push({ uptime_secs: 4230 - i * 2, temp_c: r.cpu, fan_rpm: r.fan1, target_rpm: r.fan1 });
+        rows.push({ uptime_secs: 4230 - i * 2, temp_c: r.cpu, fan_rpm: r.fan1, target_rpm: r.fan1,
+                  surface_c: 36 + (r.cpu - 64) / 4 });
       }
       return rows;
     }
@@ -202,7 +205,18 @@ async function mockInvoke(cmd, args) {
           ]},
           { title: "Lighting", checks: [
             { id: "leds", title: "Keyboard lighting", verdict: "ok",
-              detail: "omen-kbd-rgb 0.2.0, four zones, writable by the omen group", fix: null },
+              detail: "omen-kbd-rgb 0.3.0, four zones, writable by the omen group", fix: null },
+          ]},
+          { title: "Power", checks: [
+            { id: "power_limits", title: "Unleashed and PL1", verdict: "ok",
+              detail: "available; PL1 55 W", fix: null },
+            { id: "surface_temp", title: "Surface temperature", verdict: "ok",
+              detail: "38 °C (EC 0x48)", fix: null },
+            { id: "epp", title: "CPU energy preference", verdict: "ok",
+              detail: "balance_performance - follows the profile", fix: null },
+            { id: "session_helper", title: "Refresh rate helper", verdict: "warn",
+              detail: "a rule asks for a refresh rate, but nothing applies it - it would use kscreen-doctor",
+              fix: "systemctl --user enable --now omen-session" },
           ]},
           { title: "Service", checks: [
             { id: "daemon", title: "omend", verdict: "ok", detail: "running, the installed build", fix: null },
@@ -292,6 +306,9 @@ async function mockInvoke(cmd, args) {
     case "set_profile":
       mockState.daemon.profile = args.profile;
       return `profile ${args.profile}`;
+    case "set_gamemode_rule":
+      mockState.daemon.gamemode_rule = { ...args.rule };
+      return "GameMode rule saved";
     case "set_power":
       mockState.daemon.power.config = { ...args.power };
       return "power settings saved";
@@ -973,7 +990,7 @@ const NS = "http://www.w3.org/2000/svg";
 // spike that made somebody open it - by the time the window is up, the moment
 // has gone. It is seeded from the daemon's own log instead; see seedHistory.
 const HISTORY_MAX = 900;
-const history = { temp: [], fan: [], spanSecs: 0 };
+const history = { temp: [], fan: [], surface: [], spanSecs: 0 };
 
 const TEMP_MIN = 30, TEMP_MAX = 100;
 const FAN_MAX = 4800;
@@ -1012,6 +1029,11 @@ function drawHistory() {
   drawGrid("#chart-grid", 4, 600, 150);
   $("#line-temp").setAttribute("d", seriesPath(history.temp, TEMP_MIN, TEMP_MAX));
   $("#line-fan").setAttribute("d", seriesPath(history.fan, 0, FAN_MAX));
+  // Zero is "no reading": a machine without the sensor draws no line, and
+  // says nothing about it in the legend either.
+  const hasSurface = history.surface.some((v) => v > 0);
+  $("#line-surface").setAttribute("d", hasSurface ? seriesPath(history.surface, TEMP_MIN, TEMP_MAX) : "");
+  $("#legend-surface").hidden = !hasSurface;
   const secs = Math.round(history.spanSecs);
   $("#chart-window").textContent =
     secs >= 60 ? `last ${Math.round(secs / 60)} min` : `last ${secs} s`;
@@ -1127,13 +1149,15 @@ function renderNow(s) {
   put("#now-rpm", rpm || null, "", Infinity, Infinity);
 }
 
-function pushHistory(temp, fan) {
+function pushHistory(temp, fan, surface) {
   history.temp.push(temp ?? 0);
   history.fan.push(fan ?? 0);
+  history.surface.push(surface ?? 0);
   history.spanSecs += POLL_MS / 1000;
   while (history.temp.length > HISTORY_MAX) {
     history.temp.shift();
     history.fan.shift();
+    history.surface.shift();
   }
   drawHistory();
   drawSparks();
@@ -1157,6 +1181,7 @@ async function seedHistory() {
 
   history.temp = rows.map((r) => r.temp_c ?? 0);
   history.fan = rows.map((r) => r.fan_rpm ?? 0);
+  history.surface = rows.map((r) => r.surface_c ?? 0);
   // From the daemon's own clock rather than assumed: its interval is
   // configurable, and a graph labelled "last 30 min" that covers ten is worse
   // than no label.
@@ -1556,6 +1581,7 @@ function appSummary(app) {
   // rather than being listed next to it.
   if (app.curve) parts.push(`${t(app.curve)} ${t("curve")}`);
   else if (app.fan) parts.push(fanLabel(app.fan));
+  if (app.refresh_hz) parts.push(`${app.refresh_hz} Hz`);
   return parts.join(" · ") || t("nothing to apply");
 }
 
@@ -1605,6 +1631,7 @@ function renderApps(s) {
   translatePage(list);
 
   fillChoices($("#app-fan"), FAN_CHOICES, "fan");
+  fillChoices($("#app-refresh"), REFRESH_CHOICES, "refresh");
 
   // The profile choices come from the machine, so this cannot offer one the
   // firmware does not have.
@@ -1662,15 +1689,16 @@ function bindApps() {
     }
     const profile = $("#app-profile").value || null;
     const fanRaw = $("#app-fan").value;
-    if (!profile && !fanRaw) {
-      toast(t("pick a profile, a fan mode, or both - otherwise there is nothing to apply"), true);
+    const refresh_hz = refreshFromValue($("#app-refresh").value);
+    if (!profile && !fanRaw && !refresh_hz) {
+      toast(t("pick a profile, a fan mode or a refresh rate - otherwise there is nothing to apply"), true);
       return;
     }
     const { fan, curve } = fanRuleFromValue(fanRaw);
 
     const apps = (state?.daemon?.apps ?? []).filter(
       (a) => a.process.toLowerCase() !== process.toLowerCase());
-    apps.push({ process, profile, fan, curve });
+    apps.push({ process, profile, fan, curve, refresh_hz });
     $("#app-process").value = "";
     saveApps(apps, `${process} added`);
   };
@@ -2552,6 +2580,22 @@ const FAN_CHOICES = [
   ["3600", "fan: 3600 RPM"],
 ];
 
+/* Refresh rates a rule can ask for. The session helper picks the panel's
+ * nearest, so these need not match the panel exactly. */
+const REFRESH_CHOICES = [
+  ["", "refresh: leave alone"],
+  ["60", "60 Hz"],
+  ["90", "90 Hz"],
+  ["120", "120 Hz"],
+  ["144", "144 Hz"],
+  ["165", "165 Hz"],
+  ["240", "240 Hz"],
+];
+
+function refreshFromValue(v) {
+  return v ? Number(v) : null;
+}
+
 /* A rule's fan + curve as one select value, and back. */
 function fanRuleValue(rule) {
   if (rule?.curve) return `curve:${rule.curve}`;
@@ -2599,18 +2643,18 @@ function renderPowerRules(s) {
   for (const id of ["#power-ac-fan", "#power-bat-fan"]) {
     fillChoices($(id), FAN_CHOICES, "fan");
   }
+  for (const id of ["#power-ac-refresh", "#power-bat-refresh"]) {
+    fillChoices($(id), REFRESH_CHOICES, "refresh");
+  }
 
   const ac = s.daemon?.power_ac ?? {};
   const bat = s.daemon?.power_battery ?? {};
-  // Not while someone is choosing: overwriting an open select mid-decision is
-  // what makes a settings page feel haunted.
-  const set = (sel, value) => {
-    if (document.activeElement !== sel) sel.value = value;
-  };
-  set($("#power-ac-profile"), ac.profile ?? "");
-  set($("#power-ac-fan"), fanRuleValue(ac));
-  set($("#power-bat-profile"), bat.profile ?? "");
-  set($("#power-bat-fan"), fanRuleValue(bat));
+  setRuleSelect($("#power-ac-profile"), ac.profile ?? "");
+  setRuleSelect($("#power-ac-fan"), fanRuleValue(ac));
+  setRefreshSelect($("#power-ac-refresh"), ac.refresh_hz);
+  setRuleSelect($("#power-bat-profile"), bat.profile ?? "");
+  setRuleSelect($("#power-bat-fan"), fanRuleValue(bat));
+  setRefreshSelect($("#power-bat-refresh"), bat.refresh_hz);
 
   const onAc = s.daemon?.on_ac;
   const pct = s.daemon?.battery_percent;
@@ -2620,21 +2664,76 @@ function renderPowerRules(s) {
     : "";
 }
 
+/* Not while someone is choosing: overwriting an open select mid-decision is
+ * what makes a settings page feel haunted. */
+function setRuleSelect(sel, value) {
+  if (document.activeElement !== sel) sel.value = value;
+}
+
+/* A rate set from the command line may not be one of the choices; it is
+ * added rather than shown as "leave alone", which saving would then write. */
+function setRefreshSelect(sel, hz) {
+  if (document.activeElement === sel) return;
+  const value = hz ? String(hz) : "";
+  if (value && ![...sel.options].some((o) => o.value === value)) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = `${value} Hz`;
+    sel.append(opt);
+  }
+  sel.value = value;
+}
+
+/* One rule from its three selects. */
+function ruleFrom(profileSel, fanSel, refreshSel) {
+  return {
+    profile: $(profileSel).value || null,
+    ...fanRuleFromValue($(fanSel).value),
+    refresh_hz: refreshFromValue($(refreshSel).value),
+  };
+}
+
 function bindPowerRules() {
   const send = () => {
-    const rule = (p, f) => ({
-      profile: $(p).value || null,
-      ...fanRuleFromValue($(f).value),
-    });
     act(() => invoke("set_power_rules", {
-      onAc: rule("#power-ac-profile", "#power-ac-fan"),
-      onBattery: rule("#power-bat-profile", "#power-bat-fan"),
+      onAc: ruleFrom("#power-ac-profile", "#power-ac-fan", "#power-ac-refresh"),
+      onBattery: ruleFrom("#power-bat-profile", "#power-bat-fan", "#power-bat-refresh"),
     }));
   };
 
-  for (const id of ["#power-ac-profile", "#power-ac-fan",
-                    "#power-bat-profile", "#power-bat-fan"]) {
+  for (const id of ["#power-ac-profile", "#power-ac-fan", "#power-ac-refresh",
+                    "#power-bat-profile", "#power-bat-fan", "#power-bat-refresh"]) {
     $(id).addEventListener("change", send);
+  }
+}
+
+/* ── GameMode ────────────────────────────────────────────────────
+ *
+ * The same three choices as a power rule, applied while Feral GameMode says
+ * a game is running.
+ */
+
+function renderGameMode(s) {
+  const choices = s.profile_choices ?? [];
+  fillChoices($("#gamemode-profile"),
+    [["", t("profile: leave alone")]].concat(choices.map((c) => [c, `${t("profile")}: ${c}`])),
+    String(choices.length));
+  fillChoices($("#gamemode-fan"), FAN_CHOICES, "fan");
+  fillChoices($("#gamemode-refresh"), REFRESH_CHOICES, "refresh");
+
+  const rule = s.daemon?.gamemode_rule ?? {};
+  setRuleSelect($("#gamemode-profile"), rule.profile ?? "");
+  setRuleSelect($("#gamemode-fan"), fanRuleValue(rule));
+  setRefreshSelect($("#gamemode-refresh"), rule.refresh_hz);
+  $("#gamemode-note").textContent = s.daemon?.gamemode ? t("a game is running") : "";
+}
+
+function bindGameMode() {
+  for (const id of ["#gamemode-profile", "#gamemode-fan", "#gamemode-refresh"]) {
+    $(id).addEventListener("change", () =>
+      act(() => invoke("set_gamemode_rule", {
+        rule: ruleFrom("#gamemode-profile", "#gamemode-fan", "#gamemode-refresh"),
+      })));
   }
 }
 
@@ -3061,7 +3160,7 @@ function renderPower(s) {
   if (p.tpp_w != null) parts.push(`${t("shared")} ${p.tpp_w} W`);
   if (p.surface_c != null) parts.push(`${t("surface")} ${Math.round(p.surface_c)} °C`);
   if (p.surface_hot) parts.push(t("held down for the surface"));
-  $("#power-note").textContent = parts.join(" · ");
+  $("#power-limits-note").textContent = parts.join(" · ");
 
   // Not while somebody is dragging: the poll would yank the slider back.
   if (card.contains(document.activeElement) && card.dataset.dirty) return;
@@ -3183,6 +3282,7 @@ async function refresh() {
   renderGraphics(state);
   renderBoost(state);
   renderPowerRules(state);
+  renderGameMode(state);
   renderExtras(state);
   renderSystem();
   renderMux(state);
@@ -3197,7 +3297,7 @@ async function refresh() {
   renderLightMode(state);
 
   const d = state.daemon;
-  pushHistory(d?.driver_temp_c, d?.fan1_rpm);
+  pushHistory(d?.driver_temp_c, d?.fan1_rpm, d?.power?.surface_c);
   // While the editor is open the chart belongs to the draft. Redrawing the
   // saved curve here would undo a drag every two seconds.
   if (!curveEditing()) {
@@ -3228,6 +3328,7 @@ bindSettings();
 bindFirmware();
 bindDiagnosis();
 bindPowerRules();
+bindGameMode();
 bindHistory();
 bindExtras();
 bindPerfStrip();

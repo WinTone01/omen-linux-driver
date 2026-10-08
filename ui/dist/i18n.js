@@ -349,6 +349,21 @@ const I18N = {
     "CPU average": "CPU ortalaması",
     "The curve below drives the fans from the hottest CPU or GPU reading.":
       "Aşağıdaki eğri fanları en sıcak CPU ya da GPU okumasına göre sürer.",
+
+    /* ── rules: refresh rate, GameMode ──────────────────────── */
+    "refresh: leave alone": "yenileme: dokunma",
+    "pick a profile, a fan mode or a refresh rate - otherwise there is nothing to apply":
+      "bir profil, bir fan modu ya da bir yenileme hızı seç - yoksa uygulanacak bir şey yok",
+    "A refresh rate is applied by a helper in your desktop session, because the screen belongs to it and not to the service. Turn the helper on once with":
+      "Yenileme hızını masaüstü oturumundaki bir yardımcı uygular, çünkü ekran servise değil oturuma aittir. Yardımcıyı bir kez şununla aç:",
+    ". It works on KDE, Hyprland, sway and X11; GNOME offers no way to do it.":
+      ". KDE, Hyprland, sway ve X11'de çalışır; GNOME bunu yapmanın bir yolunu sunmuyor.",
+    "Feral GameMode knows when any game is running, not just the ones listed above. While it says one is, these settings apply, and they go back afterwards. An application profile that names the game wins.":
+      "Feral GameMode yalnızca yukarıdakileri değil, çalışan her oyunu bilir. Bir oyun çalışıyor dediği sürece bu ayarlar uygulanır, sonra geri alınır. Oyunun adını veren bir uygulama profili önceliklidir.",
+    "GameMode has to be told about this once, with two lines in its configuration file:":
+      "GameMode'a bunu bir kez, yapılandırma dosyasına iki satır ekleyerek söylemek gerekir:",
+    "While a game runs": "Oyun çalışırken",
+    "a game is running": "bir oyun çalışıyor",
   },
 };
 

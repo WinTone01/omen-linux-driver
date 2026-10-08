@@ -676,6 +676,7 @@ impl Runtime {
                 Applied::Max => Some(self.cfg.fan.max_rpm),
                 _ => None,
             },
+            surface_c: self.thermal.surface(),
         });
         while self.samples.len() > SAMPLE_MAX {
             self.samples.pop_front();

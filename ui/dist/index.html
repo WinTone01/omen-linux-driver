@@ -282,12 +282,14 @@
               <div class="chart-legend">
                 <span class="chart-legend__key chart-legend__key--temp"></span>Temperature
                 <span class="chart-legend__key chart-legend__key--fan"></span>Fan
+                <span id="legend-surface" hidden><span class="chart-legend__key chart-legend__key--surface"></span>Surface</span>
               </div>
             </div>
             <svg class="chart" id="history-chart" viewBox="0 0 600 150" preserveAspectRatio="none">
               <g class="chart-grid" id="chart-grid"></g>
               <path class="chart-line chart-line--fan"  id="line-fan"  d=""/>
               <path class="chart-line chart-line--temp" id="line-temp" d=""/>
+              <path class="chart-line chart-line--surface" id="line-surface" d=""/>
             </svg>
             <div class="chart-scale">
               <span>30 °C / 0 RPM</span>
@@ -346,7 +348,7 @@
           <div class="card" id="power-card" hidden>
             <div class="panel-head">
               <h2 class="panel-head__title">Power limits</h2>
-              <span class="panel-head__note" id="power-note"></span>
+              <span class="panel-head__note" id="power-limits-note"></span>
             </div>
             <p class="hint">
               What OMEN Gaming Hub sets around its modes, with HP's own ranges for
@@ -517,6 +519,7 @@
               <datalist id="running-programs"></datalist>
               <select id="app-profile"></select>
               <select id="app-fan"></select>
+              <select id="app-refresh"></select>
               <button class="btn btn--sm" id="btn-app-add">Add</button>
             </div>
           </div>
@@ -566,11 +569,49 @@
               <dd class="power-rule">
                 <select id="power-ac-profile"></select>
                 <select id="power-ac-fan"></select>
+                <select id="power-ac-refresh"></select>
               </dd>
               <dt>On battery</dt>
               <dd class="power-rule">
                 <select id="power-bat-profile"></select>
                 <select id="power-bat-fan"></select>
+                <select id="power-bat-refresh"></select>
+              </dd>
+            </dl>
+            <p class="hint">
+              A refresh rate is applied by a helper in your desktop session, because
+              the screen belongs to it and not to the service. Turn the helper on
+              once with <code>systemctl --user enable --now omen-session</code>. It
+              works on KDE, Hyprland, sway and X11; GNOME offers no way to do it.
+            </p>
+          </div>
+
+          <div class="card" id="gamemode-card">
+            <div class="panel-head">
+              <h2 class="panel-head__title">GameMode</h2>
+              <span class="panel-head__note" id="gamemode-note"></span>
+            </div>
+            <p class="hint">
+              Feral GameMode knows when any game is running, not just the ones
+              listed above. While it says one is, these settings apply, and they go
+              back afterwards. An application profile that names the game wins.
+            </p>
+            <p class="hint">
+              GameMode has to be told about this once, with two lines in its
+              configuration file:
+            </p>
+            <p class="hint">
+              <code>~/.config/gamemode.ini</code><br>
+              <code>[custom]</code><br>
+              <code>start=omenctl gamemode on</code><br>
+              <code>end=omenctl gamemode off</code>
+            </p>
+            <dl class="kv kv--tight">
+              <dt>While a game runs</dt>
+              <dd class="power-rule">
+                <select id="gamemode-profile"></select>
+                <select id="gamemode-fan"></select>
+                <select id="gamemode-refresh"></select>
               </dd>
             </dl>
           </div>
