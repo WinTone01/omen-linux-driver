@@ -171,3 +171,28 @@ Not taken, and why:
 * Low-power drew 17.3 W, against 31.7 W in September. power-profiles-daemon
   now keeps EPP in step and sets `power` there, which may explain it. Not
   investigated.
+
+### After the fix (3389406, same evening)
+
+`omenctl profile measure`, all cores loaded, on mains:
+
+| Profile | CPU package | Clock | GPU limit |
+|---|---|---|---|
+| low-power | 17.7 W | 1990 MHz | 80 W |
+| balanced | **55.0 W** | 3745 MHz | 80 W |
+| performance | **60.0 W** | 3775 MHz | 100 W |
+| unleashed | **71.0 W** | 3872 MHz | 100 W |
+
+* **Every profile holds its own PL1 again.** omend's log shows
+  `balanced: PL1 back to 55 W` and `performance: PL1 back to 60 W` at each
+  change, and Unleashed is 11 W above performance.
+* **The shared limit is 65 W in Unleashed and 45 W elsewhere.** The
+  firmware's own value read 45 W this time, so the earlier 30 W reading
+  depended on the state the machine was in.
+* **The Hub's fan tables ran under a real load for the first time.** With
+  the CPU average at 70.4, 72.3 and 75.0 °C, the Unleashed tables gave 2400,
+  2600 and 2900 RPM, one step per cycle.
+* **The power-profiles-daemon echo was not exercised.** The run entered
+  Unleashed from performance, so the profile file did not change and
+  there was nothing for PPD to react to. It stays a hypothesis until
+  Unleashed is selected from another profile.
