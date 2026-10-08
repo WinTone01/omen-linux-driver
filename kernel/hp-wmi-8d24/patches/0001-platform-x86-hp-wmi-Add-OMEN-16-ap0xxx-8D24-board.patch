@@ -1,7 +1,7 @@
-From eacf0d4f49590727d356161bb22edb3f79eb1fc1 Mon Sep 17 00:00:00 2001
+From c3b91ded391e38fcb4b1bfa5100b758e9741631d Mon Sep 17 00:00:00 2001
 From: WinTone <mertbay295@gmail.com>
 Date: Fri, 11 Sep 2026 05:58:45 +0300
-Subject: [PATCH] platform/x86: hp-wmi: Add OMEN 16-ap0xxx (8D24) board
+Subject: [PATCH 1/2] platform/x86: hp-wmi: Add OMEN 16-ap0xxx (8D24) board
 
 The OMEN 16-ap0xxx family already has two entries in the board list,
 added by commit 0aab31d47c2e ("platform/x86: hp-wmi: Add support for
@@ -38,7 +38,7 @@ Signed-off-by: WinTone <mertbay295@gmail.com>
  1 file changed, 4 insertions(+)
 
 diff --git a/drivers/platform/x86/hp/hp-wmi.c b/drivers/platform/x86/hp/hp-wmi.c
-index b2773fc..f1ef61c 100644
+index 615b4cf..2f4230e 100644
 --- a/drivers/platform/x86/hp/hp-wmi.c
 +++ b/drivers/platform/x86/hp/hp-wmi.c
 @@ -319,6 +319,10 @@ static const struct dmi_system_id hp_wmi_feature_boards[] __initconst = {
@@ -53,5 +53,5 @@ index b2773fc..f1ef61c 100644
  		.matches = { DMI_MATCH(DMI_BOARD_NAME, "8D26") },
  		.driver_data = (void *)&omen_v1_legacy_board_params,
 -- 
-2.55.0
+2.56.0.windows.1
 

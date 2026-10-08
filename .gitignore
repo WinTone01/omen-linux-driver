@@ -10,6 +10,7 @@ verify-*.txt
 
 # build-module.sh working directory
 kernel/hp-wmi-8d24/build/
+kernel/hp-wmi-8d24/build-series/
 
 # Rust build output
 /target/

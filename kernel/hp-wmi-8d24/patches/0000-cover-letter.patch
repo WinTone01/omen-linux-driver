@@ -1,0 +1,35 @@
+From a41aafedf49897b30149d91c96a614001391c19a Mon Sep 17 00:00:00 2001
+From: WinTone <mertbay295@gmail.com>
+Date: Thu, 8 Oct 2026 22:59:30 +0300
+Subject: [PATCH 0/2] platform/x86: hp-wmi: OMEN 16-ap0xxx (8D24) board, and automatic fan mode
+
+Two patches for the HP OMEN 16-ap0xxx with board 8D24.
+
+The first adds the board to the list, with the omen_v1_legacy parameters
+its siblings 8D26 and 8E35 already use. That gives it the platform
+profile and hwmon fan control.
+
+The second fixes the automatic fan mode on omen_v1_legacy boards. On 8D24,
+pwm1_enable=2 leaves the fans stopped for up to two minutes, even under
+load. hp-wmi renews the firmware's user-defined fan state and then writes
+0 as the setpoint, and the EC obeys that 0 until the state times out.
+Reading the EC while the state runs out shows the firmware writing 0xff
+as its own automatic setpoint. Writing 0xff instead hands the fans to the
+EC's curve within two seconds. The commit message has the details, and
+the raw measurements are at:
+https://github.com/WinTone01/omen-linux-driver/blob/main/docs/research/ec-handover.md
+
+Only 8D24 has been measured. Testing on an 8D26 or 8E35 would be welcome:
+with pwm1_enable=2 under load, the fans should follow the load within
+seconds instead of stopping.
+
+WinTone (2):
+  platform/x86: hp-wmi: Add OMEN 16-ap0xxx (8D24) board
+  platform/x86: hp-wmi: Fix automatic fan mode on omen_v1_legacy boards
+
+ drivers/platform/x86/hp/hp-wmi.c | 65 ++++++++++++++++++++++++--------
+ 1 file changed, 50 insertions(+), 15 deletions(-)
+
+-- 
+2.56.0.windows.1
+

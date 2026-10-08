@@ -1,15 +1,37 @@
 # Upstream submission
 
-`0001-platform-x86-hp-wmi-Add-OMEN-16-ap0xxx-8D24-board.patch` adds this
-machine's board to `hp_wmi_feature_boards[]`. It is four lines, generated
-against `torvalds/linux` master, and `checkpatch.pl --strict` reports **0
-errors and 0 checks**. The two remaining warnings are "Unknown commit id",
-which is what checkpatch says about any commit reference when it is run
-outside a kernel tree; both hashes were verified against the real history.
+A two-patch series against `torvalds/linux` master, with a cover letter
+(`0000-cover-letter.patch`):
 
-Checked again on 2026-09-28: 8D24 is still not in `torvalds/linux` master,
-and the patch applies to it cleanly (`git apply --check`), so it can go as
-it is.
+1. **`0001-…-Add-OMEN-16-ap0xxx-8D24-board.patch`** adds this machine's
+   board to `hp_wmi_feature_boards[]`. Four lines. `checkpatch.pl --strict`
+   reports 0 errors and 0 checks. The two remaining warnings are "Unknown
+   commit id", which checkpatch gives for any commit reference when run
+   outside a kernel tree; both hashes were checked against the real history.
+2. **`0002-…-Fix-automatic-fan-mode-on-omen_v….patch`** makes
+   `pwm1_enable = 2` hand the fans to the EC on `omen_v1_legacy` boards,
+   instead of stopping them for up to two minutes. The setpoint written on
+   return to automatic becomes a per-board parameter (`0xff` for these
+   boards, the firmware's own value), and the keep-alive keeps running in
+   automatic so the thermal profile survives. `checkpatch.pl --strict`:
+   clean. The measurements behind it are in
+   [`docs/research/ec-handover.md`](../../../docs/research/ec-handover.md).
+   This is the upstream form of what `../fix-auto.sh` does to this
+   project's own build.
+
+Checked on 2026-10-09: 8D24 is still not in master, and the series applies
+to it cleanly.
+
+## Before sending: compile 0002 on the machine
+
+`fix-auto.sh` has been run on this machine, but the upstream form of the
+same change had only been compiled in isolation when it was written. Build
+and try it first:
+
+```bash
+bash kernel/hp-wmi-8d24/check-series.sh          # fetch master, apply, build
+bash kernel/hp-wmi-8d24/check-series.sh --load   # also load it and test auto
+```
 
 ## Before sending: the Signed-off-by needs a real name
 
@@ -43,8 +65,11 @@ git send-email --to=hansg@kernel.org \
                --to=ilpo.jarvinen@linux.intel.com \
                --cc=platform-driver-x86@vger.kernel.org \
                --cc=linux-kernel@vger.kernel.org \
-               0001-platform-x86-hp-wmi-Add-OMEN-16-ap0xxx-8D24-board.patch
+               0000-cover-letter.patch 0001-*.patch 0002-*.patch
 ```
+
+The `Signed-off-by` and `From:` lines in all three files need the real
+name, as above.
 
 Its two siblings went in the same way, so the precedent is good:
 `0aab31d47c2e` (8D26) and `56b7981c6f21` (8E35).
@@ -56,6 +81,10 @@ stay that way — but both affect other people's machines, and neither is
 written down anywhere upstream.
 
 ### `HP_FAN_SPEED_AUTOMATIC` does not hand the fans back
+
+**Superseded by 0002.** The mechanism has since been measured and the fix
+written, so this goes upstream as a patch, not a report. What follows is
+kept as the record of what was known before.
 
 A ready-to-send report is in
 [`report-pwm1-enable-auto.txt`](report-pwm1-enable-auto.txt): headers, the

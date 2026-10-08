@@ -1,0 +1,179 @@
+From a41aafedf49897b30149d91c96a614001391c19a Mon Sep 17 00:00:00 2001
+From: WinTone <mertbay295@gmail.com>
+Date: Thu, 8 Oct 2026 22:59:16 +0300
+Subject: [PATCH 2/2] platform/x86: hp-wmi: Fix automatic fan mode on
+ omen_v1_legacy boards
+
+On the OMEN 16-ap0xxx (8D24), selecting automatic fan control with
+pwm1_enable=2 stops the fans for up to two minutes, even under load.
+The PWM_MODE_AUTO path first calls
+hp_wmi_get_fan_count_userdefine_trigger(), which renews the user-defined
+fan state for another 120 seconds, and then writes HP_FAN_SPEED_AUTOMATIC
+(0) as the setpoint. The EC treats that 0 as a literal setpoint and keeps
+the fans stopped until the user-defined state times out.
+
+Reading the EC while this happens shows the mechanism. EC 0x63 counts down
+one per second from the 120 that 0x10 sets. When it reaches zero the
+firmware clears EC 0x62, writes 0xff to both setpoints (EC 0x34/0x35),
+resets the thermal profile (EC 0x95) to 0, and its own curve takes over.
+So 0xff, not 0, is this firmware's "automatic". Writing 0xff through
+command 0x2E puts the fans on the EC's curve within two seconds, under
+load, and the thermal profile is kept as long as 0x10 keeps being called.
+
+Make the setpoint written on return to automatic a per-board parameter.
+Use 0xff for the omen_v1_legacy boards, and keep the keep-alive running in
+automatic mode for them, so the user-defined state, and with it the
+thermal profile, does not time out. Boards that keep 0 are unchanged. A
+manual pwm of 0 still writes 0.
+
+Only 8D24 has been measured. The other omen_v1_legacy boards share its
+firmware interface. On one where 0xff were not the automatic value, it
+would be a setpoint above the fan's maximum, so the failure mode is loud
+fans rather than stopped ones.
+
+Tested on an OMEN Gaming Laptop 16-ap0xxx (8D24), BIOS F.11, kernel 7.2.9:
+with pwm1_enable=2 under an all-core load, the fans went from 1680 to
+2414 RPM within four seconds and the platform profile stayed at
+performance. Without this patch they stay at the last setpoint, or at 0,
+for up to 120 seconds.
+
+Signed-off-by: WinTone <mertbay295@gmail.com>
+---
+ drivers/platform/x86/hp/hp-wmi.c | 61 ++++++++++++++++++++++++--------
+ 1 file changed, 46 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/platform/x86/hp/hp-wmi.c b/drivers/platform/x86/hp/hp-wmi.c
+index 2f4230e..4cb6cda 100644
+--- a/drivers/platform/x86/hp/hp-wmi.c
++++ b/drivers/platform/x86/hp/hp-wmi.c
+@@ -59,6 +59,12 @@ enum hp_ec_offsets {
+ };
+ 
+ #define HP_FAN_SPEED_AUTOMATIC	 0x00
++/*
++ * Some boards take 0 as a literal setpoint and stop the fans until the
++ * user-defined state times out; their firmware's own automatic setpoint
++ * is 0xff, which is what it writes itself when that state expires.
++ */
++#define HP_FAN_SPEED_FIRMWARE_AUTO 0xff
+ #define HP_POWER_LIMIT_DEFAULT	 0x00
+ #define HP_POWER_LIMIT_NO_CHANGE 0xFF
+ #define HPWMI_MUX_MODE_UMA		BIT(0)
+@@ -145,6 +151,8 @@ static const struct thermal_profile_params omen_v1_no_ec_thermal_params = {
+ struct hp_wmi_fan_profile_params {
+ 	int (*get_fan_speed)(int fan);
+ 	bool fan_table;
++	/* Setpoint that returns the fans to the firmware's own curve. */
++	u8 auto_speed;
+ };
+ 
+ struct hp_wmi_board_params {
+@@ -169,9 +177,15 @@ static const struct hp_wmi_board_params omen_v1_board_params = {
+ 	.fan_profile		= &victus_s_fan_profile_params,
+ };
+ 
++static const struct hp_wmi_fan_profile_params omen_v1_legacy_fan_profile_params = {
++	.get_fan_speed	= hp_wmi_get_fan_speed_victus_s,
++	.fan_table	= true,
++	.auto_speed	= HP_FAN_SPEED_FIRMWARE_AUTO,
++};
++
+ static const struct hp_wmi_board_params omen_v1_legacy_board_params = {
+ 	.thermal_profile	= &omen_v1_legacy_thermal_params,
+-	.fan_profile		= &victus_s_fan_profile_params,
++	.fan_profile		= &omen_v1_legacy_fan_profile_params,
+ };
+ 
+ static const struct hp_wmi_board_params omen_v1_no_ec_board_params = {
+@@ -582,6 +596,7 @@ struct hp_wmi_hwmon_priv {
+ 	u8 mode;
+ 	u8 cpu_pwm;
+ 	u8 gpu_pwm;
++	u8 auto_speed;
+ 	struct delayed_work keep_alive_dwork;
+ };
+ 
+@@ -908,10 +923,25 @@ static int hp_wmi_fan_speed_max_set(int enabled)
+ 	return enabled;
+ }
+ 
++static int hp_wmi_fan_speed_write(u8 cpu_speed, u8 gpu_speed)
++{
++	u8 fan_speed[2] = { cpu_speed, gpu_speed };
++	int ret;
++
++	ret = hp_wmi_get_fan_count_userdefine_trigger();
++	if (ret < 0)
++		return ret;
++	/* Max fans need to be explicitly disabled */
++	ret = hp_wmi_fan_speed_max_set(0);
++	if (ret < 0)
++		return ret;
++	return hp_wmi_perform_query(HPWMI_VICTUS_S_FAN_SPEED_SET_QUERY, HPWMI_GM,
++				    &fan_speed, sizeof(fan_speed), 0);
++}
++
+ static int hp_wmi_fan_speed_set(struct hp_wmi_hwmon_priv *priv)
+ {
+ 	u8 fan_speed[2];
+-	int ret;
+ 
+ 	if (priv->cpu_pwm == HP_FAN_SPEED_AUTOMATIC)
+ 		fan_speed[CPU_FAN] = HP_FAN_SPEED_AUTOMATIC;
+@@ -923,24 +953,14 @@ static int hp_wmi_fan_speed_set(struct hp_wmi_hwmon_priv *priv)
+ 	else
+ 		fan_speed[GPU_FAN] = pwm_to_rpm(priv->gpu_pwm, priv);
+ 
+-	ret = hp_wmi_get_fan_count_userdefine_trigger();
+-	if (ret < 0)
+-		return ret;
+-	/* Max fans need to be explicitly disabled */
+-	ret = hp_wmi_fan_speed_max_set(0);
+-	if (ret < 0)
+-		return ret;
+-	ret = hp_wmi_perform_query(HPWMI_VICTUS_S_FAN_SPEED_SET_QUERY, HPWMI_GM,
+-				   &fan_speed, sizeof(fan_speed), 0);
+-
+-	return ret;
++	return hp_wmi_fan_speed_write(fan_speed[CPU_FAN], fan_speed[GPU_FAN]);
+ }
+ 
+ static int hp_wmi_fan_speed_reset(struct hp_wmi_hwmon_priv *priv)
+ {
+ 	priv->cpu_pwm = HP_FAN_SPEED_AUTOMATIC;
+ 	priv->gpu_pwm = HP_FAN_SPEED_AUTOMATIC;
+-	return hp_wmi_fan_speed_set(priv);
++	return hp_wmi_fan_speed_write(priv->auto_speed, priv->auto_speed);
+ }
+ 
+ static int hp_wmi_fan_speed_max_reset(struct hp_wmi_hwmon_priv *priv)
+@@ -2671,7 +2691,16 @@ static int hp_wmi_apply_fan_settings(struct hp_wmi_hwmon_priv *priv)
+ 		}
+ 		if (ret < 0)
+ 			return ret;
+-		cancel_delayed_work(&priv->keep_alive_dwork);
++		/*
++		 * Where automatic is a setpoint of its own, the user-defined
++		 * state has to be kept alive like any other, or it times out
++		 * and the firmware resets the thermal profile with it.
++		 */
++		if (priv->auto_speed != HP_FAN_SPEED_AUTOMATIC)
++			mod_delayed_work(system_dfl_wq, &priv->keep_alive_dwork,
++					 secs_to_jiffies(KEEP_ALIVE_DELAY_SECS));
++		else
++			cancel_delayed_work(&priv->keep_alive_dwork);
+ 		return 0;
+ 	default:
+ 		/* shouldn't happen */
+@@ -2857,6 +2886,8 @@ static int hp_wmi_setup_fan_settings(struct hp_wmi_hwmon_priv *priv)
+ 
+ 	/* Default behaviour on hwmon init is automatic mode */
+ 	priv->mode = PWM_MODE_AUTO;
++	priv->auto_speed = hp_wmi_fan_profile() ?
++			   hp_wmi_fan_profile()->auto_speed : HP_FAN_SPEED_AUTOMATIC;
+ 
+ 	/* Bypass devices without fan control support. */
+ 	if (!hp_wmi_fan_table_supported())
+-- 
+2.56.0.windows.1
+
