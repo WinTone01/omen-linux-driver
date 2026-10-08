@@ -1808,6 +1808,7 @@ impl Runtime {
             gamemode: self.gamemode,
             gamemode_rule: self.cfg.automation.gamemode.clone(),
             refresh_hz: self.wanted_refresh(),
+            auto_hands_over: omen_core::fan::auto_hands_over(),
             uptime_secs: self.started.elapsed().as_secs(),
         }
     }

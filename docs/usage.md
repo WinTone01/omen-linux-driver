@@ -52,14 +52,21 @@ project fix it" is that it does not. Its EC-handover path writes `0x62`
 take up to two minutes, which is exactly what ours does, minus the stall
 detector that forces full power when the fans stop while hot.
 
-Why the handover takes two minutes is now understood. hp-wmi's
-"automatic" first renews the firmware's "software is in charge" state (WMI
-`0x10`), then writes a setpoint of zero. The EC obeys that zero until the
-state times out 120 s later. The firmware also has a direct handover, a byte
-the vendor software calls `fanControlByBios`. Both routes go through
-firmware methods rather than raw EC writes, and neither has been measured
-yet. [ec-handover.md](research/ec-handover.md) covers the mechanism, and
-`kernel/omen-kbd-rgb/probe-handover.sh` is the measurement.
+Why the handover takes two minutes is now understood, and fixed:
+
+* **The cause.** hp-wmi's "automatic" first renews the firmware's "software
+  is in charge" state (WMI `0x10`), then writes a setpoint of 0. The EC
+  obeys that 0 until the state times out 120 s later.
+* **What was measured.** The firmware's own "automatic" setpoint is `0xff`.
+  Written through the same WMI call, the EC's curve takes over within two
+  seconds.
+* **The fix.** The hp-wmi this project builds (`fix-auto.sh`, 8D24 only,
+  turned off with `hp_wmi.firmware_auto=0`) writes `0xff` and keeps the state
+  renewed, so the thermal profile survives too. `omenctl doctor` says which
+  hp-wmi is loaded.
+
+Every step goes through firmware methods rather than raw EC writes. The
+details are in [ec-handover.md](research/ec-handover.md).
 
 ## Living with power-profiles-daemon
 
@@ -542,11 +549,14 @@ a loose analogy: Phase 1 §6.4 found HP's Auto runs the curve **in the Windows
 application**, writing setpoints continuously, exactly as this daemon does.
 Nobody's "automatic" hands the fans to the EC.
 
-`EC default` does hand them over, which is why it is set apart in the UI. It is
-there for comparing against stock behaviour, not for daily use - on this
-machine the EC does not take the fans at all (see below). The earlier naming
-had this backwards: `Curve` sounded like the advanced option and `Auto` like
-the safe default, when the opposite is true.
+`EC default` does hand them over, which is why it is set apart in the UI.
+With stock hp-wmi it is there for comparing against stock behaviour, not for
+daily use: the EC does not drive the fans for up to two minutes (see below).
+With the hp-wmi this project builds, the handover is real. The EC's curve
+takes over within two seconds, and the daemon also uses it when it stops,
+even on a hot machine. The earlier naming had this backwards: `Curve`
+sounded like the advanced option and `Auto` like the safe default, when the
+opposite is true.
 
 ### The incident that rewrote rules 1 to 4 (2026-09-11)
 

@@ -18,6 +18,13 @@
 //! would leave it with no cooling at all. Above the stall threshold we
 //! therefore leave the fans at full power instead - loud, but the machine
 //! survives being unattended.
+//!
+//! That was stock hp-wmi's doing, and the hp-wmi this project builds fixes it
+//! (docs/research/ec-handover.md): its automatic mode writes the firmware's
+//! own "automatic" setpoint, and the EC's curve takes over within two
+//! seconds. With that module loaded the fans are handed to the EC whatever
+//! the temperature - its curve is the one the machine ships with - and full
+//! power is only the fallback for a handover that fails.
 
 use log::{error, info, warn};
 use omen_core::fan::{Fan, PwmMode};
@@ -61,6 +68,20 @@ pub fn park(fan: &Fan, thermal: Option<&Thermal>, hot_above_c: f32) {
         Some((_, c)) => *c >= hot_above_c,
         None => true,
     };
+
+    if omen_core::fan::auto_hands_over() {
+        match fan.restore_auto() {
+            Ok(()) => {
+                info!("fan control handed to the EC's own curve (hp-wmi firmware_auto)");
+                return;
+            }
+            Err(e) => error!("could not hand the fans to the EC ({e}) - full power instead"),
+        }
+        if let Err(e) = fan.set_mode(PwmMode::Max) {
+            error!("CRITICAL: could not put the fans in a safe state: {e}");
+        }
+        return;
+    }
 
     if hot {
         let where_from = match &temp {

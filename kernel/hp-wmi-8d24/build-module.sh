@@ -105,14 +105,32 @@ case $ADD_RC in
   3)
     # The stock driver already has this board. Building a module identical to
     # the one already loaded, and then keeping it alive through DKMS for every
-    # future kernel, is maintenance for nothing.
-    echo
-    echo "  Nothing to patch: the kernel's own hp-wmi already covers this board."
-    echo "  If fan control still does not work, the module may simply need loading:"
-    echo "      sudo modprobe hp_wmi   # then: omenctl doctor"
-    exit 3
+    # future kernel, is maintenance for nothing - except on 8D24, where the
+    # automatic-mode fix below is still worth a module of its own.
+    if [ "$(cat /sys/class/dmi/id/board_name 2>/dev/null)" = 8D24 ]; then
+      echo "  The kernel's own hp-wmi covers this board; building anyway for the"
+      echo "  automatic-mode fix (step 3b)."
+    else
+      echo
+      echo "  Nothing to patch: the kernel's own hp-wmi already covers this board."
+      echo "  If fan control still does not work, the module may simply need loading:"
+      echo "      sudo modprobe hp_wmi   # then: omenctl doctor"
+      exit 3
+    fi
     ;;
   *) die "the board entry could not be added" ;;
+esac
+
+say "3b. Automatic fan mode"
+# On 8D24 hp-wmi's "automatic" stops the fans for two minutes; this makes it
+# hand them to the EC instead (docs/research/ec-handover.md). The change is
+# guarded by the board at run time, so building it for another board leaves
+# that board's behaviour as upstream has it.
+FIX_RC=0
+bash "$HERE/fix-auto.sh" "$WORK/hp-wmi.c" || FIX_RC=$?
+case $FIX_RC in
+  0|3) ;;
+  *) echo "  WARNING: the automatic-mode fix did not apply to this hp-wmi.c; building without it" ;;
 esac
 
 say "4. Building"

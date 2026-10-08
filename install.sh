@@ -196,7 +196,25 @@ hp_wmi_is_ours() {
     modinfo -n hp_wmi 2>/dev/null | grep -q '/updates/'
 }
 
+# Whether the loaded hp_wmi has the automatic-mode fix (fix-auto.sh), which
+# only matters on 8D24: without it "automatic" stops the fans for two minutes.
+hp_wmi_needs_auto_fix() {
+    [ "$(cat /sys/class/dmi/id/board_name 2>/dev/null)" = 8D24 ] &&
+        [ ! -e /sys/module/hp_wmi/parameters/firmware_auto ]
+}
+
 install_hp_wmi() {
+    if have_pwm1 && hp_wmi_needs_auto_fix; then
+        info "the loaded hp-wmi stops the fans in automatic mode; rebuilding it with the fix"
+        local rc=0
+        bash "$REPO/kernel/hp-wmi-8d24/build-module.sh" --install --board auto || rc=$?
+        case $rc in
+            0) ok "hp-wmi rebuilt; it takes effect after: sudo modprobe -r hp_wmi && sudo modprobe hp_wmi" ;;
+            *) warn "could not rebuild hp-wmi with the automatic-mode fix; fan control still works" ;;
+        esac
+        return 0
+    fi
+
     if have_pwm1; then
         if hp_wmi_is_ours; then
             ok "fan control is already there, from the module this project installed"

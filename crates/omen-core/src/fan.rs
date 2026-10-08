@@ -25,6 +25,17 @@ use crate::sysfs::Hwmon;
 /// catches a future rename.
 const HWMON_NAMES: &[&str] = &["hp", "hp_wmi"];
 
+/// Whether hp-wmi's automatic mode really hands the fans to the EC.
+///
+/// True with the hp-wmi this project builds (kernel/hp-wmi-8d24/fix-auto.sh),
+/// which says so through its `firmware_auto` parameter; measured in
+/// docs/research/ec-handover.md. False with stock hp-wmi, whose automatic
+/// mode leaves this board's fans stopped for two minutes.
+pub fn auto_hands_over() -> bool {
+    std::fs::read_to_string("/sys/module/hp_wmi/parameters/firmware_auto")
+        .is_ok_and(|v| v.trim() == "Y")
+}
+
 /// Phase 1 §6.3: OGH's own `profiles.json` bounds are 18-48, i.e. 1800-4800 RPM.
 pub const DEFAULT_MIN_RPM: u32 = 1800;
 pub const DEFAULT_MAX_RPM: u32 = 4800;
@@ -35,9 +46,11 @@ pub enum PwmMode {
     Max,
     /// We drive the setpoint.
     Manual,
-    /// Control belongs to the EC. Verified in Phase 2: in this mode EC
-    /// 0x34/0x35 are written as 0, which means "revert to automatic"
-    /// (HP_FAN_SPEED_AUTOMATIC), not "fans off".
+    /// Control belongs to the EC. Stock hp-wmi writes EC 0x34/0x35 as 0
+    /// here, which on 8D24 means stopped until the firmware's user-defined
+    /// state times out two minutes later. With hp-wmi built by this project
+    /// it writes 0xff, the firmware's own "automatic", and the EC's curve
+    /// takes over within two seconds - see [`auto_hands_over`].
     Auto,
 }
 

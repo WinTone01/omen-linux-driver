@@ -166,6 +166,53 @@ What this settles:
 the firmware treats bit 0 as a request it acknowledges, and bits 1-2 as the
 state itself. That is not certain.
 
-B and C still to run (`probe-handover.sh B C`). C is new: the firmware's
-own fallback writes `0xff` as the setpoint, so writing `0xff` through GM
-`0x2E` might ask for its curve straight away, without waiting for the timer.
+**B and C, 2026-10-09** (same machine). Both started under load at 70-74 °C,
+in performance, with hp-wmi in manual mode at pwm 96. That reads back as
+setpoints `0x11`/`0x0f` (1700/1500 RPM), and the fans ran 1680/1520.
+
+| | written | fans after 2 s / 4 s | `HPCM` | `0x63` |
+|---|---|---|---|---|
+| **B** | GM `0x1A`, byte 2 = 1 (`FAMC` 0x02 → 0x03) | 2316 / 2417 | `0x31`, kept | reset to 120 by the call |
+| B, undone | GM `0x1A`, byte 2 = 0 | 1801 / 1679, back on the setpoint | `0x31` | reset again |
+| **C** | GM `0x2E`, setpoints `0xff`/`0xff` | 2284 / 2414 | `0x31`, kept | keeps counting down |
+
+Both hand over **within two seconds**. The EC's curve then holds 2410-2420
+RPM at 70-74 °C, the same as after A's timeout. So it is the same curve,
+reached immediately instead of after up to 120 s.
+
+* **B works on this board, on mains.** The setpoint is ignored while `FAMC`
+  is set and obeyed again as soon as it is cleared. Each GM `0x1A` call also
+  renewed the user-defined state, `OMCC` bit 0 included, which matters for
+  anyone who writes the profile often. The Hub does not use this here; its
+  platform data says it is not supported on battery.
+* **C works too, and it is the firmware's own value.** Writing `0xff` does at
+  once what the firmware does when the timer runs out. The difference is
+  that the timer keeps counting. When it reaches zero the firmware resets
+  `HPCM` as in A, so a handover that should keep the profile must keep
+  calling GM `0x10`.
+
+### What this means
+
+The fix is C with the state kept alive: setpoints `0xff`, and GM `0x10`
+inside every 120 s. The fans are on the EC's curve within two seconds, and
+the profile survives.
+
+### Done
+
+* **hp-wmi** (`kernel/hp-wmi-8d24/fix-auto.sh`, applied by `build-module.sh`).
+  On 8D24 the automatic mode writes `0xff`, and the keep-alive keeps running
+  in it. A manual pwm of 0 still means stopped, which is what omend's silent
+  idle uses. The module parameter `firmware_auto` turns the change off, and
+  its presence is how the rest of the project knows the fix is loaded.
+  `install.sh` rebuilds an older hp-wmi on 8D24 to get it.
+* **omend.** On the way out, with that module loaded, the fans go to the
+  EC's curve whatever the temperature, and full power is only the fallback
+  for a failed handover. Without it the behaviour is unchanged: full power
+  when hot.
+* **`omenctl doctor`** says which of the two hp-wmi modules is loaded. The
+  window drops its warning about "EC default" once the fix is there.
+
+For upstream it is a one-value change. On this board `HP_FAN_SPEED_AUTOMATIC`
+should be `0xff`, not `0`, and `PWM_MODE_AUTO` should keep its keep-alive
+running. The `0` it writes today is not "automatic" here; it is "stopped,
+for two minutes".

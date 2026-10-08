@@ -363,6 +363,8 @@ const I18N = {
     "GameMode has to be told about this once, with two lines in its configuration file:":
       "GameMode'a bunu bir kez, yapılandırma dosyasına iki satır ekleyerek söylemek gerekir:",
     "While a game runs": "Oyun çalışırken",
+    "Hands the fans to the EC's own curve, the one the machine ships with. The hp-wmi this project builds writes the firmware's own automatic setpoint, so the EC takes over within two seconds and keeps the thermal profile. omend stops driving them until you choose another mode.":
+      "Fanları EC'nin makineyle gelen kendi eğrisine bırakır. Bu projenin derlediği hp-wmi firmware'in kendi otomatik hedef değerini yazar; EC iki saniye içinde devralır ve termal profil korunur. Başka bir mod seçene kadar omend fanları sürmez.",
     "a game is running": "bir oyun çalışıyor",
   },
 };

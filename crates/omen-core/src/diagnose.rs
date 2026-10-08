@@ -1072,6 +1072,32 @@ fn power(snapshot: &DaemonView) -> Section {
         }
     }
 
+    // What "automatic" does on this board depends on which hp-wmi is loaded
+    // (ec-handover.md). Only 8D24 was measured, so only 8D24 is judged.
+    if board == "8D24" && crate::fan::Fan::discover(1800, 4800).is_ok() {
+        let title = "Handing the fans to the EC";
+        checks.push(if crate::fan::auto_hands_over() {
+            Check::new(
+                "ec_handover",
+                title,
+                Verdict::Ok,
+                "automatic mode gives the fans to the EC's curve within seconds",
+            )
+        } else {
+            Check::new(
+                "ec_handover",
+                title,
+                Verdict::Warn,
+                "stock hp-wmi: automatic mode stops the fans for up to two minutes, so \
+                 omend leaves them at full power when it stops on a hot machine",
+            )
+            .with_fix(
+                "./install.sh rebuilds hp-wmi with the fix; then \
+                 sudo modprobe -r hp_wmi && sudo modprobe hp_wmi",
+            )
+        });
+    }
+
     Section {
         title: "Power".into(),
         checks,

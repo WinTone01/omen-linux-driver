@@ -570,6 +570,12 @@ const MODE_HELP = {
     "daily use.",
 };
 
+const MODE_HELP_AUTO_FIXED =
+  "Hands the fans to the EC's own curve, the one the machine ships with. The " +
+  "hp-wmi this project builds writes the firmware's own automatic setpoint, so " +
+  "the EC takes over within two seconds and keeps the thermal profile. omend " +
+  "stops driving them until you choose another mode.";
+
 $$("#fan-modes button").forEach((b) =>
   b.addEventListener("click", () => {
     const mode = b.dataset.mode;
@@ -810,8 +816,11 @@ function renderDaemon(s) {
   $$("#fan-modes button").forEach((b) =>
     b.classList.toggle("is-active", b.dataset.mode === active),
   );
-  $("#fan-mode-help").textContent = t(MODE_HELP[active] ?? "");
-  $("#fan-mode-help").classList.toggle("is-warning", active === "auto");
+  // With the hp-wmi this project builds, "EC default" is a real handover and
+  // the warning no longer applies.
+  const help = active === "auto" && d.auto_hands_over ? MODE_HELP_AUTO_FIXED : MODE_HELP[active];
+  $("#fan-mode-help").textContent = t(help ?? "");
+  $("#fan-mode-help").classList.toggle("is-warning", active === "auto" && !d.auto_hands_over);
   $("#manual-card").style.opacity = active === "manual" ? "1" : ".55";
 
   if (active === "manual" && d.mode.rpm != null && Date.now() > holdUntil) {

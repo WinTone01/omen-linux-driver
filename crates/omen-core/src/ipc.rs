@@ -375,6 +375,10 @@ pub struct Snapshot {
     pub gamemode: bool,
     #[serde(default)]
     pub gamemode_rule: crate::power::PowerRule,
+    /// Whether hp-wmi's automatic mode hands the fans to the EC's curve
+    /// (fan::auto_hands_over), so a client can say what "EC default" does.
+    #[serde(default)]
+    pub auto_hands_over: bool,
     /// The refresh rate the rules in force ask of the panel. Applied by
     /// `omenctl session`, which runs inside the desktop session.
     #[serde(default)]
