@@ -142,7 +142,17 @@ check_deps() {
     pm=$(pkg_manager)
     info "distribution uses $pm"
 
-    have cargo || missing+=("rust")
+    # rustup puts a cargo shim on PATH even with no toolchain installed, so
+    # finding cargo is not enough; it has to run.
+    if ! have cargo; then
+        missing+=("rust")
+    elif ! cargo --version >/dev/null 2>&1; then
+        fail "cargo is on PATH but does not run"
+        if have rustup; then
+            info "rustup has no default toolchain; run: rustup default stable"
+        fi
+        exit 1
+    fi
     have dkms  || missing+=("dkms")
     have make  || missing+=("base-devel / build-essential")
     has_headers || missing+=("kernel headers for $(uname -r)")

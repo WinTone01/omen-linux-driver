@@ -1302,7 +1302,7 @@ mod tests {
         // nothing panics and no section is silently dropped when hardware is
         // missing.
         let r = run();
-        assert_eq!(r.sections.len(), 7);
+        assert_eq!(r.sections.len(), 8);
         assert!(r.checks().count() > 10);
     }
 }
