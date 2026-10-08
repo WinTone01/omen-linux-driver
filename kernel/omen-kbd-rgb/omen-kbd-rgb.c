@@ -1444,6 +1444,29 @@ static int fan_bios_set(void *data, u64 val)
 }
 DEFINE_DEBUGFS_ATTRIBUTE(fan_bios_fops, fan_bios_get, fan_bios_set, "%llu\n");
 
+/*
+ * fan_setpoint_auto writes 0xFF to both setpoints through GM2E, the method
+ * hp-wmi's own setpoint writes use. 0xFF is what the firmware itself leaves
+ * in SRP1/SRP2 when the user-defined state times out and its curve takes
+ * over (measured, ec-handover.md) - the question is whether writing it asks
+ * for the same at once. Only that value: anything else is hp-wmi's job.
+ */
+#define OMEN_FAN_SETPOINT	0x2E
+#define SETPOINT_AUTO		0xFF
+
+static int fan_setpoint_auto_set(void *data, u64 val)
+{
+	u8 setpoints[2] = { SETPOINT_AUTO, SETPOINT_AUTO };
+
+	if (val != 1)
+		return -EINVAL;
+	guard(mutex)(&omen_power_lock);
+	return omen_wmi_call(HPWMI_GAMING, OMEN_FAN_SETPOINT, setpoints,
+			     sizeof(setpoints), 0);
+}
+DEFINE_DEBUGFS_ATTRIBUTE(fan_setpoint_auto_fops, NULL, fan_setpoint_auto_set,
+			 "%llu\n");
+
 static void omen_debugfs_init(struct omen_rgb *rgb)
 {
 	if (!omen_has_lighting && !dmi_check_system(omen_h2ra_boards))
@@ -1465,6 +1488,8 @@ static void omen_debugfs_init(struct omen_rgb *rgb)
 	debugfs_create_file("fan_state", 0400, rgb->debugfs, rgb, &fan_state_fops);
 	debugfs_create_file_unsafe("fan_bios_control", 0600, rgb->debugfs, rgb,
 				   &fan_bios_fops);
+	debugfs_create_file_unsafe("fan_setpoint_auto", 0200, rgb->debugfs, rgb,
+				   &fan_setpoint_auto_fops);
 	rgb->h2ra = devm_ioremap(rgb->dev, H2RA_BASE + H2RA_LIGHTING,
 				 H2RA_DUMP_LEN);
 	if (rgb->h2ra)

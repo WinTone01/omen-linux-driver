@@ -100,6 +100,12 @@ over. Within hp-wmi this would mean `PWM_MODE_AUTO` skips the GM `0x10`
 call and the 0,0 write. That is a small, upstreamable change, but the
 handover is up to 120 s late.
 
+**(c) Write the firmware's own "automatic".** Measured since: when the timer
+runs out the firmware writes `0xff` to both setpoints. If writing `0xff`
+through GM `0x2E` does the same at once, that is the handover, and it is
+one call. `fan_setpoint_auto` in debugfs writes exactly that and nothing
+else.
+
 **(b) Ask the firmware directly.** GM `0x1A` with the profile in force and
 byte 2 set to 1, the call the Hub makes on platforms where it does this. If
 8D24's EC honours it, the handover is immediate. The Hub not using it here
@@ -127,4 +133,39 @@ fan flags. If `0x63` counts down, that is the timer.
 
 ### Results
 
-*Not yet run.*
+**A, 2026-10-08** (BIOS F.11, kernel 7.2.9). Under load, at 70-75 °C, from
+manual at pwm 128. The setpoints read `0x17`/`0x15`, which is 2300 and 2100
+RPM: fan 2 runs two hundred below fan 1, the same pairing the Hub uses.
+
+| | `OMCC` | `0x63` | `SRP1`/`SRP2` | `HPCM` | fans |
+|---|---|---|---|---|---|
+| unloaded, +0 s | `0x06` | `0x6c` (108) | `0x17`/`0x15` | `0x31` | 2284 / 2122 |
+| +104 s | `0x06` | `0x02` | `0x17`/`0x15` | `0x31` | 2291 / 2124 |
+| +106 s | `0x00` | `0x00` | **`0xff`/`0xff`** | **`0x00`** | 2291 / 2120 |
+| +108 s | `0x00` | `0x00` | `0xff`/`0xff` | `0x00` | 2091 / 1923 |
+| +138 s | `0x00` | `0x00` | `0xff`/`0xff` | `0x00` | 2420 / 2126 |
+
+What this settles:
+
+* **EC `0x63` is the timer.** It counts down one per second; it read 112, 8 s
+  after a GM `0x10`, so GM `0x10` sets it to 120. It is the remaining life of
+  the user-defined state, readable at any moment.
+* **At zero the firmware falls back by itself.** It clears `OMCC`, writes
+  `0xff` to both setpoints, and puts `HPCM` back to `0`. From then on the
+  EC's own curve drives the fans. Here it went to 2100 RPM first and to
+  2420 RPM half a minute later, at the same 73 °C.
+* **Option (a) works.** With the last setpoint left in place and nothing
+  renewing the state, the fans never stopped. The handover took exactly as
+  long as `0x63` had left.
+* **The fallback costs the thermal profile.** `HPCM` 0 is none of hp-wmi's
+  values. After a handover the profile has to be written again, or the
+  machine runs on the firmware's default.
+
+`OMCC` read `0x07` at rest and `0x06` in manual mode. Bit 0, the one GM
+`0x10` sets, was clear while the state was plainly in force. It looks like
+the firmware treats bit 0 as a request it acknowledges, and bits 1-2 as the
+state itself. That is not certain.
+
+B and C still to run (`probe-handover.sh B C`). C is new: the firmware's
+own fallback writes `0xff` as the setpoint, so writing `0xff` through GM
+`0x2E` might ask for its curve straight away, without waiting for the timer.
