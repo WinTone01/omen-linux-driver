@@ -541,6 +541,16 @@ fn set_charge_limit(percent: Option<u8>) -> Result<String, String> {
     talk(Request::SetChargeLimit { percent })
 }
 
+#[tauri::command]
+fn set_power(power: omen_core::limits::PowerConfig) -> Result<String, String> {
+    talk(Request::SetPower(power))
+}
+
+#[tauri::command]
+fn set_fan_algorithm(algorithm: String) -> Result<String, String> {
+    talk(Request::SetFanAlgorithm { algorithm })
+}
+
 /// The running curve as one line of text, to hand to somebody else.
 #[tauri::command]
 fn curve_code() -> Result<String, String> {
@@ -987,6 +997,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
+            set_power,
+            set_fan_algorithm,
             set_mode,
             set_profile,
             reload_config,

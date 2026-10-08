@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * HP OMEN extras that in-tree hp-wmi does not cover: the 4-zone RGB keyboard,
- * the graphics mux, and the discrete GPU's temperature. Measured on the OMEN
- * 16-ap0xxx (board 8D24).
+ * the graphics mux, the discrete GPU's temperature, the surface temperature,
+ * and the power controls the vendor software uses beyond the three thermal
+ * profiles - Unleashed, PL1 and the CPU+GPU shared limit. Measured on the
+ * OMEN 16-ap0xxx (board 8D24).
  *
  * Protocol: docs/research/rgb-protocol.md - all of it extracted from the DSDT.
  *
@@ -102,6 +104,12 @@ static int omen_mux_at_load = -1;
 static bool omen_has_dgpu_temp;
 /* GM21/GM22 answer and there is an NVIDIA GPU for them to be about. */
 static bool omen_has_gpu_power;
+/* EC 0x48 holds a believable skin temperature - see omen_surface_detect. */
+static bool omen_has_surface_temp;
+/* Unleashed and PL1: 8D24, whose DSDT these were read out of. */
+static bool omen_has_power_limits;
+/* The shared CPU+GPU limit: as above, and the firmware reports one. */
+static bool omen_has_tpp;
 
 enum lighting_query {
 	LIGHTING_CAPS		= 0x01,	/* LM01 */
@@ -894,6 +902,181 @@ static bool omen_nvidia_gpu_present(void)
 	return false;
 }
 
+/* --- power: Unleashed, PL1 and the shared CPU+GPU limit --- */
+
+/*
+ * What OMEN Gaming Hub does around its fourth mode, read out of its logs and
+ * the platform configuration it ships for this board
+ * (docs/research/hub-gap.md):
+ *
+ *   GM1A  {0xFF, HPCM, 0, 0}   the thermal profile. HPCM 0x04 is Unleashed,
+ *                              which hp-wmi's platform_profile has no name
+ *                              for - so it is offered here, on its own.
+ *   GM29  {PL2, PL1, PL4, TDP} power limits in watts, 0xFF = leave alone.
+ *                              Byte 1 lands in OSPL (EC 0x37), byte 0 in
+ *                              OSPT (EC 0x38), byte 3 in NPCF.DATP (x8) with
+ *                              a notify to the NVIDIA platform controller.
+ *   GM2A                       reads them back: byte 7 is NPCF.ATPP / 8,
+ *                              the shared limit in force.
+ *
+ * The Hub sends PL1 in both of the first two bytes on AMD - "60,60,255,255"
+ * is its performance default - so this does too.
+ *
+ * Writes go through the firmware's own methods; the EC is only read. 8D24
+ * only: the registers behind these commands are this board's DSDT, and
+ * omen-space keeps 8D24 on its list of boards where a wrong EC access ends
+ * in a Caps Lock panic.
+ */
+#define OMEN_THERMAL_PROFILE	0x1A
+#define OMEN_POWER_LIMITS_SET	0x29
+#define OMEN_POWER_DATA_GET	0x2A
+#define POWER_LIMITS_LEN	4
+#define POWER_DATA_LEN		128
+#define POWER_DATA_TDP		7
+#define POWER_KEEP		0xFF
+
+#define EC_PL1			0x37
+#define EC_THERMAL_PROFILE	0x95
+#define HPCM_PERFORMANCE	0x31
+#define HPCM_UNLEASHED		0x04
+
+/*
+ * The range the kernel accepts. Wider than HP's own (PL1 25-71 W, shared
+ * limit 45-65 W on this board), which omend enforces: this is the line past
+ * which a number is a mistake rather than a preference.
+ */
+#define PL1_MIN_W		10
+#define PL1_MAX_W		95
+#define TDP_MIN_W		10
+#define TDP_MAX_W		100
+
+static DEFINE_MUTEX(omen_power_lock);
+
+static int omen_power_limits_set(u8 pl1, u8 tdp)
+{
+	u8 limits[POWER_LIMITS_LEN] = { pl1, pl1, POWER_KEEP, tdp };
+
+	guard(mutex)(&omen_power_lock);
+	return omen_wmi_call(HPWMI_GAMING, OMEN_POWER_LIMITS_SET, limits,
+			     sizeof(limits), 0);
+}
+
+/* The shared limit in force, in watts; 0 when the firmware reports none. */
+static int omen_tdp_get(u8 *watts)
+{
+	u8 *data;
+	int ret;
+
+	data = kzalloc(POWER_DATA_LEN, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+	ret = omen_wmi_call(HPWMI_GAMING, OMEN_POWER_DATA_GET, data, 0,
+			    POWER_DATA_LEN);
+	if (!ret)
+		*watts = data[POWER_DATA_TDP];
+	kfree(data);
+	return ret;
+}
+
+static ssize_t omen_watts_store(const char *buf, size_t count, u8 min, u8 max,
+				bool tdp)
+{
+	u8 watts;
+	int ret;
+
+	ret = kstrtou8(buf, 0, &watts);
+	if (ret)
+		return ret;
+	if (watts < min || watts > max)
+		return -ERANGE;
+	ret = tdp ? omen_power_limits_set(POWER_KEEP, watts) :
+		    omen_power_limits_set(watts, POWER_KEEP);
+	return ret ? ret : count;
+}
+
+/* PL1, the sustained CPU package limit, in watts. */
+static ssize_t cpu_pl1_show(struct device *dev,
+			    struct device_attribute *attr, char *buf)
+{
+	u8 watts;
+	int ret;
+
+	ret = ec_read(EC_PL1, &watts);
+	if (ret)
+		return ret;
+	return sysfs_emit(buf, "%u\n", watts);
+}
+
+static ssize_t cpu_pl1_store(struct device *dev,
+			     struct device_attribute *attr,
+			     const char *buf, size_t count)
+{
+	return omen_watts_store(buf, count, PL1_MIN_W, PL1_MAX_W, false);
+}
+static DEVICE_ATTR_RW(cpu_pl1);
+
+/*
+ * What the Hub calls TPP and its code "concurrent TDP": the power the CPU and
+ * the GPU may draw together, in watts.
+ */
+static ssize_t gpu_tpp_show(struct device *dev,
+			    struct device_attribute *attr, char *buf)
+{
+	u8 watts;
+	int ret;
+
+	ret = omen_tdp_get(&watts);
+	if (ret)
+		return ret;
+	return sysfs_emit(buf, "%u\n", watts);
+}
+
+static ssize_t gpu_tpp_store(struct device *dev,
+			     struct device_attribute *attr,
+			     const char *buf, size_t count)
+{
+	return omen_watts_store(buf, count, TDP_MIN_W, TDP_MAX_W, true);
+}
+static DEVICE_ATTR_RW(gpu_tpp);
+
+/*
+ * Unleashed: 1 while HPCM reads 0x04. Writing 0 puts the performance profile
+ * back, which is the mode Unleashed sits above; anything else is for
+ * platform_profile to choose, and writing it there ends Unleashed too.
+ */
+static ssize_t unleashed_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	u8 hpcm;
+	int ret;
+
+	ret = ec_read(EC_THERMAL_PROFILE, &hpcm);
+	if (ret)
+		return ret;
+	return sysfs_emit(buf, "%d\n", hpcm == HPCM_UNLEASHED);
+}
+
+static ssize_t unleashed_store(struct device *dev,
+			       struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+	u8 mode[POWER_LIMITS_LEN] = { POWER_KEEP, HPCM_PERFORMANCE, 0, 0 };
+	bool on;
+	int ret;
+
+	ret = kstrtobool(buf, &on);
+	if (ret)
+		return ret;
+	if (on)
+		mode[1] = HPCM_UNLEASHED;
+
+	guard(mutex)(&omen_power_lock);
+	ret = omen_wmi_call(HPWMI_GAMING, OMEN_THERMAL_PROFILE, mode,
+			    sizeof(mode), 0);
+	return ret ? ret : count;
+}
+static DEVICE_ATTR_RW(unleashed);
+
 static struct attribute *omen_rgb_attrs[] = {
 	&dev_attr_backlight_active.attr,
 	&dev_attr_gpu_mux_mode.attr,
@@ -901,6 +1084,9 @@ static struct attribute *omen_rgb_attrs[] = {
 	&dev_attr_gpu_mux_pending_reboot.attr,
 	&dev_attr_gpu_ctgp.attr,
 	&dev_attr_gpu_ppab.attr,
+	&dev_attr_cpu_pl1.attr,
+	&dev_attr_gpu_tpp.attr,
+	&dev_attr_unleashed.attr,
 	NULL,
 };
 
@@ -911,6 +1097,10 @@ static umode_t omen_rgb_attr_visible(struct kobject *kobj,
 		return omen_has_lighting ? attr->mode : 0;
 	if (attr == &dev_attr_gpu_ctgp.attr || attr == &dev_attr_gpu_ppab.attr)
 		return omen_has_gpu_power ? attr->mode : 0;
+	if (attr == &dev_attr_cpu_pl1.attr || attr == &dev_attr_unleashed.attr)
+		return omen_has_power_limits ? attr->mode : 0;
+	if (attr == &dev_attr_gpu_tpp.attr)
+		return omen_has_tpp ? attr->mode : 0;
 
 	/* The mux attributes exist only on a machine that has one. */
 	return omen_mux_supported ? attr->mode : 0;
@@ -940,6 +1130,23 @@ static const struct attribute_group *omen_rgb_groups[] = {
  * neither ec_sys nor debugfs.
  */
 #define EC_GPU_TEMP		0xB7
+
+/*
+ * EC register 0x48: the surface - what OMEN Gaming Hub calls the IR sensor.
+ * The Hub reads it as sensor 0 of WMI command 0x23 (GetIRSensorValue), and on
+ * 8D24 the DSDT's GM23 answers that with this register and nothing else, so
+ * reading it here is the same number without the trip through ACPI. The Hub
+ * caps PL1 and shapes its fan tables on it; a palm rest is what it measures.
+ *
+ * 8D24 only, for the same reason as the fans: the address is that board's.
+ */
+#define EC_SURFACE_TEMP		0x48
+
+/* The channels, in the order HWMON_CHANNEL_INFO lists them below. */
+enum omen_temp_channel {
+	OMEN_TEMP_DGPU,
+	OMEN_TEMP_SURFACE,
+};
 
 /*
  * The two fan tachometers: FS1H/FS1L and FS2H/FS2L, big-endian RPM, at
@@ -972,7 +1179,8 @@ static int omen_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 		return 0;
 	}
 
-	ret = ec_read(EC_GPU_TEMP, &raw);
+	ret = ec_read(channel == OMEN_TEMP_SURFACE ? EC_SURFACE_TEMP : EC_GPU_TEMP,
+		      &raw);
 	if (ret)
 		return ret;
 	/*
@@ -990,7 +1198,7 @@ static int omen_hwmon_read_string(struct device *dev,
 				  enum hwmon_sensor_types type, u32 attr,
 				  int channel, const char **str)
 {
-	*str = "dGPU";
+	*str = channel == OMEN_TEMP_SURFACE ? "Surface" : "dGPU";
 	return 0;
 }
 
@@ -1007,6 +1215,8 @@ static umode_t omen_hwmon_is_visible(const void *data,
 
 	if (type == hwmon_fan)
 		return rgb->fans ? 0444 : 0;
+	if (channel == OMEN_TEMP_SURFACE)
+		return omen_has_surface_temp ? 0444 : 0;
 	return omen_has_dgpu_temp ? 0444 : 0;
 }
 
@@ -1017,7 +1227,8 @@ static const struct hwmon_ops omen_hwmon_ops = {
 };
 
 static const struct hwmon_channel_info * const omen_hwmon_info[] = {
-	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT | HWMON_T_LABEL),
+	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT | HWMON_T_LABEL,
+			   HWMON_T_INPUT | HWMON_T_LABEL),
 	HWMON_CHANNEL_INFO(fan, HWMON_F_INPUT, HWMON_F_INPUT),
 	NULL,
 };
@@ -1316,7 +1527,7 @@ static int omen_rgb_probe(struct platform_device *pdev)
 		rgb->fans = devm_ioremap(dev, H2RA_BASE + H2RA_FANS,
 					 H2RA_FANS_LEN);
 
-	if (omen_has_dgpu_temp || rgb->fans) {
+	if (omen_has_dgpu_temp || omen_has_surface_temp || rgb->fans) {
 		struct device *hwmon;
 
 		/* Not fatal: the keyboard and the mux do not need it. */
@@ -1418,6 +1629,24 @@ static bool omen_lighting_detect(void)
 	return true;
 }
 
+/*
+ * Whether EC 0x48 is a temperature. Zero is the EC's "no reading", and a
+ * running laptop's palm rest is neither below 10 °C nor above 100.
+ */
+static bool omen_surface_detect(void)
+{
+	u8 raw;
+
+	if (ec_read(EC_SURFACE_TEMP, &raw))
+		return false;
+	if (raw < 10 || raw > 100) {
+		pr_info("EC 0x48 reads %u, not a surface temperature; not publishing it\n",
+			raw);
+		return false;
+	}
+	return true;
+}
+
 static int __init omen_rgb_init(void)
 {
 	bool family;
@@ -1457,8 +1686,20 @@ static int __init omen_rgb_init(void)
 				modes[GPU_POWER_PPAB] ? "on" : "off");
 	}
 
+	if (family && dmi_check_system(omen_h2ra_boards)) {
+		u8 tdp = 0;
+
+		omen_has_surface_temp = omen_surface_detect();
+		omen_has_power_limits = true;
+		/* The Hub's test too: no shared limit reported, no control. */
+		omen_has_tpp = omen_has_gpu_power && !omen_tdp_get(&tdp) && tdp;
+		pr_info("power: Unleashed, PL1%s%s\n",
+			omen_has_tpp ? ", shared CPU+GPU limit" : "",
+			omen_has_surface_temp ? ", surface temperature" : "");
+	}
+
 	if (!omen_has_lighting && !omen_mux_supported && !omen_has_dgpu_temp &&
-	    !omen_has_gpu_power)
+	    !omen_has_gpu_power && !omen_has_power_limits)
 		return -ENODEV;
 
 	omen_rgb_device = platform_create_bundle(&omen_rgb_driver,
@@ -1480,7 +1721,7 @@ module_exit(omen_rgb_exit);
 #define OMEN_KBD_RGB_VERSION "unknown"
 #endif
 
-MODULE_DESCRIPTION("HP OMEN 4-zone RGB keyboard, graphics mux, dGPU temperature and power");
+MODULE_DESCRIPTION("HP OMEN 4-zone RGB keyboard, graphics mux, temperatures and power limits");
 MODULE_AUTHOR("WinTone");
 MODULE_LICENSE("GPL");
 /*

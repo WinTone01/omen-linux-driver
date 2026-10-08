@@ -134,6 +134,30 @@ else
   no "no gpu_ctgp / gpu_ppab - GM21 did not answer, or no NVIDIA GPU was found"
 fi
 
+say "8c. Surface temperature and power limits (0.3.0)"
+if [ -n "$HW" ] && [ -e "$(dirname "$HW")/temp2_input" ]; then
+  d=$(dirname "$HW")
+  t=$(cat "$d/temp2_input" 2>/dev/null) && ok "$(cat "$d/temp2_label"): $((t / 1000)) C (EC 0x48)" \
+                                        || no "temp2_input has no reading"
+  info "a palm rest reads in the 30s to 40s at idle; well below the CPU"
+else
+  no "no surface temperature - dmesg says what EC 0x48 read"
+fi
+if [ -e $DEV/cpu_pl1 ]; then
+  PL1=$(cat $DEV/cpu_pl1)
+  ok "PL1 $PL1 W, Unleashed $(cat $DEV/unleashed)"
+  # The same value back: proves the write path without changing anything.
+  if echo "$PL1" > $DEV/cpu_pl1 && [ "$(cat $DEV/cpu_pl1)" = "$PL1" ]; then
+    ok "PL1 written back through GM29 and read back the same"
+  else
+    no "writing PL1 back through GM29 failed"
+  fi
+  [ -e $DEV/gpu_tpp ] && ok "shared CPU+GPU limit $(cat $DEV/gpu_tpp) W (GM2A)" \
+                      || info "no gpu_tpp - the firmware reports no shared limit"
+else
+  no "no cpu_pl1 / unleashed - not 8D24, or not an OMEN by DMI"
+fi
+
 say "9. debugfs"
 mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug
 if [ -r /sys/kernel/debug/omen-kbd-rgb/lighting_regs ]; then

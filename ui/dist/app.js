@@ -54,6 +54,18 @@ const mockState = {
            pending_reboot: false },
     gpu_boost: { ctgp: false, ppab: true, follows_profile: true },
     problems: [],
+    power: {
+      config: {
+        unleashed_pl1_w: 71, unleashed_surface_c: 54, unleashed_tpp_offset_w: 20,
+        performance_tpp_offset_w: 0, min_battery_performance: 10,
+        min_battery_unleashed: 40, epp_follows_profile: true,
+      },
+      unleashed_supported: true, pl1_w: 55, tpp_w: 45, tpp_base_w: 45,
+      surface_c: 38, surface_hot: false, epp: "balance_performance", epp_owner: null,
+    },
+    fan_algorithm: "curve",
+    hub_tables: null,
+    cpu_average_c: null,
   },
   daemon_error: null,
   nvidia_powerd: true,
@@ -64,7 +76,7 @@ const mockState = {
   },
   leds_error: null,
   leds_writable: true,
-  profile_choices: ["low-power", "balanced", "performance"],
+  profile_choices: ["low-power", "balanced", "performance", "unleashed"],
   has_tray: true,
   interpolation: "step",
   effect: { effect: "none", speed: 5, color: { r: 232, g: 17, b: 35 } },
@@ -280,6 +292,13 @@ async function mockInvoke(cmd, args) {
     case "set_profile":
       mockState.daemon.profile = args.profile;
       return `profile ${args.profile}`;
+    case "set_power":
+      mockState.daemon.power.config = { ...args.power };
+      return "power settings saved";
+    case "set_fan_algorithm":
+      mockState.daemon.fan_algorithm = args.algorithm;
+      mockState.daemon.hub_tables = args.algorithm === "hub" ? "default" : null;
+      return `fan algorithm ${args.algorithm}`;
     case "set_zone":
       mockState.leds.zones[args.index] = { r: args.r, g: args.g, b: args.b };
       return null;
@@ -852,6 +871,13 @@ const PROFILE_INFO = {
       "Same 5.09 GHz ceiling, reached sooner and held longer; 60 W " +
       "sustained, and the GPU's limit goes to 100 W. Firmware profile 0x31.",
     icon: "M13 2 4 14h6l-1 8 9-12h-6l1-8Z",
+  },
+  unleashed: {
+    blurb:
+      "OMEN Gaming Hub's fourth mode: PL1 up to 71 W and the shared " +
+      "CPU+GPU limit raised, with the palm rest held under its limit. " +
+      "Firmware profile 0x04.",
+    icon: "M12 2c1 4 5 5 5 10a5 5 0 0 1-10 0c0-3 2-4 2-7 2 1 3 3 3 5 1-2 0-5 0-8Z",
   },
 };
 
@@ -2895,6 +2921,9 @@ function renderPerfStrip(s) {
   };
   put("#perf-cpu-temp", cpu, "°C", cpu != null ? heat(cpu) : "");
   put("#perf-gpu-temp", gpu, "°C", gpu != null ? heat(gpu) : "");
+  const surface = d?.power?.surface_c ?? null;
+  $("#perf-surface-box").hidden = surface == null;
+  put("#perf-surface-temp", surface, "°C", "");
 
   const mode = d?.mode?.mode ?? "curve";
   $$("#perf-fan button").forEach((b) =>
@@ -3003,6 +3032,86 @@ function renderBattery(s) {
   }
 }
 
+/* ── power limits and the fan algorithm ──────────────────────────
+ *
+ * Unleashed, the shared CPU+GPU limit, the battery floors and EPP: one card,
+ * saved together, because the daemon takes them as one setting. Only shown
+ * where the module reports Unleashed - a slider for a limit the firmware
+ * does not have would write nowhere.
+ */
+
+const POWER_FIELDS = [
+  ["#pw-pl1", "unleashed_pl1_w", " W"],
+  ["#pw-surface", "unleashed_surface_c", " °C"],
+  ["#pw-tpp-u", "unleashed_tpp_offset_w", " W"],
+  ["#pw-tpp-p", "performance_tpp_offset_w", " W"],
+  ["#pw-floor-p", "min_battery_performance", "%"],
+  ["#pw-floor-u", "min_battery_unleashed", "%"],
+];
+
+function renderPower(s) {
+  const p = s.daemon?.power;
+  const card = $("#power-card");
+  if (!card) return;
+  card.hidden = !p?.unleashed_supported;
+  if (card.hidden) return;
+
+  const parts = [];
+  if (p.pl1_w != null) parts.push(`PL1 ${p.pl1_w} W`);
+  if (p.tpp_w != null) parts.push(`${t("shared")} ${p.tpp_w} W`);
+  if (p.surface_c != null) parts.push(`${t("surface")} ${Math.round(p.surface_c)} °C`);
+  if (p.surface_hot) parts.push(t("held down for the surface"));
+  $("#power-note").textContent = parts.join(" · ");
+
+  // Not while somebody is dragging: the poll would yank the slider back.
+  if (card.contains(document.activeElement) && card.dataset.dirty) return;
+  for (const [id, key, unit] of POWER_FIELDS) {
+    $(id).value = p.config[key];
+    $(`${id}-out`).textContent = `${p.config[key]}${unit}`;
+  }
+  $("#pw-epp").checked = !!p.config.epp_follows_profile;
+  $("#pw-epp-note").textContent = p.epp_owner
+    ? `${t("kept in step by")} ${p.epp_owner}`
+    : p.epp ?? t("not available");
+}
+
+function bindPower() {
+  const card = $("#power-card");
+  if (!card) return;
+  for (const [id, , unit] of POWER_FIELDS) {
+    $(id).addEventListener("input", () => {
+      card.dataset.dirty = "1";
+      $(`${id}-out`).textContent = `${$(id).value}${unit}`;
+    });
+  }
+  $("#pw-epp").addEventListener("change", () => (card.dataset.dirty = "1"));
+  $("#btn-power-save").addEventListener("click", () => {
+    const power = { epp_follows_profile: $("#pw-epp").checked };
+    for (const [id, key] of POWER_FIELDS) power[key] = Number($(id).value);
+    delete card.dataset.dirty;
+    act(() => invoke("set_power", { power }));
+  });
+}
+
+function renderFanAlgorithm(s) {
+  const algorithm = s.daemon?.fan_algorithm ?? "curve";
+  $$("#fan-algorithm button").forEach((b) =>
+    b.classList.toggle("is-active", b.dataset.algorithm === algorithm));
+  const tables = s.daemon?.hub_tables;
+  const avg = s.daemon?.cpu_average_c;
+  $("#fan-algorithm-help").textContent = algorithm === "hub"
+    ? `${t("CPU, GPU and surface each have a table for the profile; the fans follow whichever asks for most.")}` +
+      (tables ? ` ${t("Running")}: ${tables}` : "") +
+      (avg != null ? ` · ${t("CPU average")} ${avg.toFixed(1)} °C` : "")
+    : t("The curve below drives the fans from the hottest CPU or GPU reading.");
+}
+
+function bindFanAlgorithm() {
+  $$("#fan-algorithm button").forEach((b) =>
+    b.addEventListener("click", () =>
+      act(() => invoke("set_fan_algorithm", { algorithm: b.dataset.algorithm }))));
+}
+
 function bindBattery() {
   const sel = $("#set-charge-limit");
   if (!sel) return;
@@ -3068,6 +3177,8 @@ async function refresh() {
   renderApps(state);
   renderTriggers(state);
   renderBattery(state);
+  renderPower(state);
+  renderFanAlgorithm(state);
   renderCaps(state);
   renderGraphics(state);
   renderBoost(state);
@@ -3110,6 +3221,8 @@ bindCurveEditor();
 bindApps();
 bindTriggers();
 bindBattery();
+bindPower();
+bindFanAlgorithm();
 bindGraphics();
 bindSettings();
 bindFirmware();

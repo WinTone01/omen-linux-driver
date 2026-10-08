@@ -63,6 +63,12 @@ package() {
   install -Dm755 packaging/omen-sleep.sh \
     "$pkgdir/usr/lib/systemd/system-sleep/omen"
 
+  # Not enabled: the refresh-rate rules are opt-in (docs/usage.md).
+  install -Dm644 packaging/omen-session.service \
+    "$pkgdir/usr/lib/systemd/user/omen-session.service"
+  install -Dm644 packaging/mangohud-omen.conf \
+    "$pkgdir/usr/share/omen-control/mangohud-omen.conf"
+
   # Named after the app's Wayland app_id so the window is matched to this
   # entry and gets the logo rather than a generic icon.
   install -Dm644 packaging/dev.wintone.omen-control.desktop \

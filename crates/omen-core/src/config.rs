@@ -60,6 +60,11 @@ pub struct Config {
 
     #[serde(default)]
     pub battery: BatteryConfig,
+
+    /// Unleashed, the shared CPU+GPU limit, the battery floors and the EPP
+    /// hint. See limits.rs.
+    #[serde(default)]
+    pub power: crate::limits::PowerConfig,
 }
 
 /// The battery charge limit, on a machine whose kernel offers one.
@@ -112,6 +117,13 @@ pub struct AutomationConfig {
     pub on_ac: PowerRule,
     #[serde(default)]
     pub on_battery: PowerRule,
+
+    /// What to do while Feral GameMode is active - `omenctl gamemode on` and
+    /// `off`, called from gamemode.ini's start and end scripts. Applied and
+    /// put back the way an application profile is, and outranked by one: a
+    /// profile naming the game is the more specific statement.
+    #[serde(default, skip_serializing_if = "PowerRule::is_empty")]
+    pub gamemode: PowerRule,
 
     /// What the OMEN key does.
     ///
@@ -189,6 +201,7 @@ impl Default for AutomationConfig {
             omen_key: OmenKey::default(),
             on_ac: PowerRule::default(),
             on_battery: PowerRule::default(),
+            gamemode: PowerRule::default(),
             app_scan_secs: default_app_scan(),
         }
     }
@@ -204,6 +217,11 @@ pub struct FanConfig {
     /// Disables running the curve entirely; the daemon only observes.
     #[serde(default = "yes")]
     pub enabled: bool,
+
+    /// What decides the setpoint: `curve`, the one below, or `hub`, OMEN
+    /// Gaming Hub's own per-mode tables (hubfan.rs).
+    #[serde(default)]
+    pub algorithm: FanAlgorithm,
 
     /// Sampling interval, in seconds.
     #[serde(default = "default_interval")]
@@ -241,6 +259,42 @@ pub struct FanConfig {
     /// ours. NOT the same as handing control to the EC; see fan::set_idle.
     #[serde(default)]
     pub curve: Vec<Point>,
+}
+
+/// What decides the fan setpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FanAlgorithm {
+    /// The configured curve, through the governor. What this project has
+    /// always run.
+    #[default]
+    Curve,
+    /// OMEN Gaming Hub's CPU, GPU and surface tables for the profile in
+    /// force. The curve is kept but not run.
+    Hub,
+}
+
+impl FanAlgorithm {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Curve => "curve",
+            Self::Hub => "hub",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "curve" => Some(Self::Curve),
+            "hub" | "omen" | "ogh" => Some(Self::Hub),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for FanAlgorithm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -463,6 +517,7 @@ impl Default for FanConfig {
     fn default() -> Self {
         Self {
             enabled: yes(),
+            algorithm: FanAlgorithm::default(),
             interval_secs: default_interval(),
             hysteresis_c: default_down_delta(),
             min_dwell_secs: default_dwell(),
@@ -522,6 +577,8 @@ impl Config {
                     "an application profile has an empty process name".into(),
                 ));
             }
+            crate::display::check_rate(app.refresh_hz)
+                .map_err(|e| Error::Curve(format!("{}: refresh_hz: {e}", app.process)))?;
         }
         for trigger in &self.triggers {
             trigger.check().map_err(Error::Curve)?;
@@ -529,12 +586,15 @@ impl Config {
         for (what, rule) in [
             ("on_ac", &self.automation.on_ac),
             ("on_battery", &self.automation.on_battery),
+            ("gamemode", &self.automation.gamemode),
         ] {
             if let Some(p) = &rule.profile {
                 if p.trim().is_empty() {
                     return Err(Error::Curve(format!("{what}.profile is empty")));
                 }
             }
+            crate::display::check_rate(rule.refresh_hz)
+                .map_err(|e| Error::Curve(format!("{what}.refresh_hz: {e}")))?;
         }
         if let Some(limit) = self.battery.charge_limit {
             if !(crate::battery::MIN_LIMIT..=100).contains(&limit) {
@@ -544,6 +604,9 @@ impl Config {
                 )));
             }
         }
+        self.power
+            .check()
+            .map_err(|e| Error::Curve(format!("[power] {e}")))?;
         if self.automation.app_scan_secs == 0 {
             return Err(Error::Curve("app_scan_secs cannot be 0".into()));
         }
@@ -652,6 +715,29 @@ mod tests {
         assert_eq!(cfg.safety.critical_c, 97.0);
         cfg.validate().unwrap();
         assert_eq!(cfg.curve().unwrap().points().len(), 10);
+    }
+
+    #[test]
+    fn the_shipped_file_parses_and_validates() {
+        // Every new setting gets documented there, commented or not; a typo
+        // in it would stop the daemon on a fresh install.
+        let cfg: Config = toml::from_str(include_str!("../../../packaging/omend.toml")).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.fan.algorithm, FanAlgorithm::Curve);
+        assert_eq!(cfg.power, crate::limits::PowerConfig::default());
+    }
+
+    #[test]
+    fn hps_ranges_are_enforced_in_the_file_too() {
+        let cfg: Config = toml::from_str("[power]\nunleashed_surface_c = 60\n").unwrap();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("unleashed_surface_c"), "{err}");
+    }
+
+    #[test]
+    fn a_refresh_rate_that_is_not_one_is_refused() {
+        let cfg: Config = toml::from_str("[automation.on_battery]\nrefresh_hz = 5\n").unwrap();
+        assert!(cfg.validate().is_err());
     }
 
     #[test]

@@ -204,6 +204,25 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                     ),
                 };
             }
+            // Refused rather than accepted and taken back a tick later by the
+            // battery floor, which would look like a button that does nothing.
+            if omen_core::power::on_ac() == Some(false) {
+                if let (Ok(cfg), Some(percent)) = (
+                    Config::load(config_path),
+                    omen_core::power::battery_percent(),
+                ) {
+                    if omen_core::limits::battery_fallback(&cfg.power, &profile, percent).is_some()
+                    {
+                        return Response::Error {
+                            message: format!(
+                                "the battery is at {percent}%, and {profile} needs {}% on battery \
+                                 (power.min_battery_*)",
+                                cfg.power.battery_floor(&profile)
+                            ),
+                        };
+                    }
+                }
+            }
             match pp.set(&profile) {
                 Ok(()) => {
                     info!("profile -> {profile}");
@@ -630,6 +649,63 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             }
         }
 
+        Request::SetPower(power) => {
+            if let Err(e) = power.check() {
+                return Response::Error { message: e };
+            }
+            info!("request: power settings {power:?}");
+            edit_config(config_path, shared, "power settings saved", |cfg| {
+                cfg.power = power;
+            })
+        }
+
+        Request::SetFanAlgorithm { algorithm } => {
+            let Some(algorithm) = omen_core::config::FanAlgorithm::parse(&algorithm) else {
+                return Response::Error {
+                    message: format!("unknown fan algorithm {algorithm:?}; curve or hub"),
+                };
+            };
+            if let Some(why) = no_fan_here() {
+                return Response::Error { message: why };
+            }
+            info!("request: fan algorithm -> {algorithm}");
+            let message = match algorithm {
+                omen_core::config::FanAlgorithm::Hub => {
+                    "the fans follow OMEN Gaming Hub's tables for the profile in force"
+                }
+                omen_core::config::FanAlgorithm::Curve => "the fans follow the curve",
+            };
+            edit_config(config_path, shared, message, |cfg| {
+                cfg.fan.algorithm = algorithm
+            })
+        }
+
+        Request::GameMode { on } => {
+            shared.request_gamemode(on);
+            Response::Done {
+                message: format!("GameMode {}", if on { "on" } else { "off" }),
+            }
+        }
+
+        Request::SetGameModeRule { rule } => {
+            if let Some(want) = &rule.profile {
+                if let Some(pp) = PlatformProfile::discover() {
+                    if !pp.choices().contains(want) {
+                        return Response::Error {
+                            message: format!(
+                                "invalid profile {want:?}; choices: {}",
+                                pp.choices().join(" ")
+                            ),
+                        };
+                    }
+                }
+            }
+            info!("request: while GameMode is active -> {}", rule.summary());
+            edit_config(config_path, shared, "GameMode rule saved", |cfg| {
+                cfg.automation.gamemode = rule;
+            })
+        }
+
         Request::Reload => Response::Done {
             message: if shared.request_reload_sync(APPLY_TIMEOUT) {
                 "the configuration has been re-read".into()
@@ -639,6 +715,35 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                 "the configuration will be re-read on the next tick".into()
             },
         },
+    }
+}
+
+/// Loads the configuration, changes it, saves it and waits for the loop to
+/// have re-read it. `save` validates, so a change that breaks the file is
+/// refused here rather than at the next start.
+fn edit_config(
+    config_path: &Path,
+    shared: &Shared,
+    message: &str,
+    change: impl FnOnce(&mut Config),
+) -> Response {
+    let mut cfg = match Config::load(config_path) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            return Response::Error {
+                message: format!("the current configuration could not be read: {e}"),
+            }
+        }
+    };
+    change(&mut cfg);
+    if let Err(e) = cfg.save(config_path) {
+        return Response::Error {
+            message: e.to_string(),
+        };
+    }
+    shared.request_reload_sync(APPLY_TIMEOUT);
+    Response::Done {
+        message: message.to_owned(),
     }
 }
 

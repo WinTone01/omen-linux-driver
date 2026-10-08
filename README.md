@@ -45,8 +45,8 @@ force full power; the fans are never left to an EC that will not drive them.</su
 </td>
 <td width="33%" valign="top">
 <b>⚡ Performance</b><br>
-<sub>The firmware's thermal profiles, measured: 32 / 55 / 60 W on the CPU.
-cTGP and Dynamic Boost follow the profile, as they do on Windows.</sub>
+<sub>The firmware's thermal profiles, measured: 32 / 55 / 60 W on the CPU, and
+the Hub's Unleashed mode with its PL1, shared limit and palm-rest cap.</sub>
 </td>
 <td width="33%" valign="top">
 <b>🖥️ Graphics</b><br>
@@ -279,6 +279,11 @@ omenctl effect wave 7          # none / breathing / pulse / wave / chase / spect
 omenctl effect fps 30          # frames a second for effects, 1-60
 omenctl profile measure        # what each profile actually allows, measured
 omenctl gpu boost              # cTGP and Dynamic Boost, and whether they follow the profile
+omenctl profile unleashed      # the Hub's fourth mode: PL1 71 W, surface held under 54 C
+omenctl power limits           # PL1, the shared CPU+GPU limit, the surface, EPP
+omenctl curve hub              # the Hub's own CPU / GPU / surface fan tables
+omenctl gamemode setup         # Feral GameMode runs a rule while a game is on
+omenctl overlay                # one status line for MangoHud
 omenctl keys check             # which keys send the wrong thing; fixes only those
 omenctl gpu                    # what is holding the discrete GPU awake
 omenctl gpu mux discrete       # which GPU drives the screen, from the next boot

@@ -22,6 +22,11 @@ const EC_IO: &str = "/sys/kernel/debug/ec/ec0/io";
 /// temperature - the EC register below, read by the kernel.
 const OMEN_HWMON: &str = "omen";
 
+/// The label omen-kbd-rgb 0.3.0 gives its surface channel (EC 0x48), and the
+/// name the reading goes by here.
+const OMEN_SURFACE_LABEL: &str = "Surface";
+pub const SURFACE: &str = "surface/ir";
+
 /// dGPU temperature, in degrees, one byte (Phase 1 §4: `GTMP`).
 ///
 /// This is the only way to see the discrete GPU on this machine. The NVIDIA
@@ -55,6 +60,10 @@ pub enum Role {
     Primary,
     /// Used only when no primary sensor is available.
     Fallback,
+    /// The palm rest. Never the hottest thing and never meant to be: it
+    /// trails the load by minutes. It has its own table in the Hub's fan
+    /// algorithm and its own limit in Unleashed, and drives nothing else.
+    Surface,
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +156,17 @@ impl Thermal {
                 if !input.exists() {
                     continue;
                 }
+                let hw_label = sysfs::read_string(&hwmon.attr(&format!("temp{idx}_label"))).ok();
+                // The module's second channel is the palm rest, not the GPU.
+                if name == OMEN_HWMON && hw_label.as_deref() == Some(OMEN_SURFACE_LABEL) {
+                    sensors.push(TempSensor {
+                        label: SURFACE.to_string(),
+                        path: input,
+                        role: Role::Surface,
+                        source: Source::Hwmon,
+                    });
+                    continue;
+                }
                 // Use the label when there is one (Tctl, edge, ...), else the
                 // index. The module's GPU reading keeps the name it had when
                 // it came through ec_sys - it is the same register - so the
@@ -154,8 +174,7 @@ impl Thermal {
                 let label = if name == OMEN_HWMON {
                     "ec".to_string()
                 } else {
-                    sysfs::read_string(&hwmon.attr(&format!("temp{idx}_label")))
-                        .unwrap_or_else(|_| format!("temp{idx}"))
+                    hw_label.unwrap_or_else(|| format!("temp{idx}"))
                 };
                 sensors.push(TempSensor {
                     label: format!("{prefix}/{label}"),
@@ -209,6 +228,22 @@ impl Thermal {
     /// that stay quiet while the machine cooks.
     pub fn has_dgpu(&self) -> bool {
         self.sensors.iter().any(|s| s.label.starts_with("dgpu/"))
+    }
+
+    /// The hottest reading whose label starts with `prefix` ("cpu/", "dgpu/"),
+    /// for the algorithms that treat each source separately.
+    pub fn hottest_with(&self, prefix: &str) -> Option<f32> {
+        self.sensors
+            .iter()
+            .filter(|s| s.label.starts_with(prefix))
+            .filter_map(|s| s.celsius().ok())
+            .filter(|c| (10.0..=150.0).contains(c))
+            .reduce(f32::max)
+    }
+
+    /// The palm rest, on a machine whose module publishes it.
+    pub fn surface(&self) -> Option<f32> {
+        self.hottest_with(SURFACE)
     }
 
     pub fn read_all(&self) -> Vec<(String, Result<f32>)> {

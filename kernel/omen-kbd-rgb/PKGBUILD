@@ -7,7 +7,7 @@
 # in-tree hp-wmi - no blacklist, unlike the drivers it was informed by.
 
 pkgname=omen-kbd-rgb-dkms
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc="HP OMEN 4-zone RGB keyboard, graphics mux and dGPU temperature (board 8D24)"
 arch=('x86_64')

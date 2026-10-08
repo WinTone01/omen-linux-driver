@@ -26,6 +26,8 @@ pub struct Inner {
     pub reload: bool,
     /// A dust-clearing run, in seconds, waiting to be started by the loop.
     pub clean_secs: Option<u64>,
+    /// Feral GameMode started (true) or ended (false), not yet seen by the loop.
+    pub gamemode: Option<bool>,
     /// The last tick's view; this is what `status` returns.
     pub snapshot: Snapshot,
     /// The decision log. Kept here rather than read from the loop's own copy
@@ -40,7 +42,10 @@ pub struct Inner {
 
 impl Inner {
     fn pending(&self) -> bool {
-        self.requested.is_some() || self.reload || self.clean_secs.is_some()
+        self.requested.is_some()
+            || self.reload
+            || self.clean_secs.is_some()
+            || self.gamemode.is_some()
     }
 }
 
@@ -143,6 +148,15 @@ impl Shared {
 
     pub fn take_clean(&self) -> Option<u64> {
         self.lock().clean_secs.take()
+    }
+
+    pub fn request_gamemode(&self, on: bool) {
+        self.lock().gamemode = Some(on);
+        self.0 .1.notify_all();
+    }
+
+    pub fn take_gamemode(&self) -> Option<bool> {
+        self.lock().gamemode.take()
     }
 
     pub fn take_reload(&self) -> bool {

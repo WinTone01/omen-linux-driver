@@ -195,6 +195,16 @@ pub enum Request {
     /// limit. Refused on a machine whose kernel exposes no threshold - we do
     /// not pretend to have a control we do not have.
     SetChargeLimit { percent: Option<u8> },
+    /// Unleashed, the shared CPU+GPU limit, the battery floors and the EPP
+    /// hint, all at once. Checked against HP's ranges, saved, re-read.
+    SetPower(crate::limits::PowerConfig),
+    /// curve / hub - see config::FanAlgorithm.
+    SetFanAlgorithm { algorithm: String },
+    /// Feral GameMode started or ended. Sent by `omenctl gamemode on/off`,
+    /// which gamemode.ini runs.
+    GameMode { on: bool },
+    /// What to do while GameMode is active.
+    SetGameModeRule { rule: crate::power::PowerRule },
     /// Re-read the config from disk.
     Reload,
 }
@@ -343,7 +353,49 @@ pub struct Snapshot {
     /// client can tell a new failure from one it has already shown.
     #[serde(default)]
     pub problems: Vec<Problem>,
+    /// Unleashed, PL1, the shared limit and the palm rest, on a machine
+    /// whose module reports them.
+    #[serde(default)]
+    pub power: Option<PowerState>,
+    /// What decides the setpoint: "curve" or "hub".
+    #[serde(default)]
+    pub fan_algorithm: Option<String>,
+    /// With the hub algorithm: which table set is running, and the CPU
+    /// average it is reading.
+    #[serde(default)]
+    pub hub_tables: Option<String>,
+    #[serde(default)]
+    pub cpu_average_c: Option<f32>,
+    /// Whether Feral GameMode has said a game is running, and what that does.
+    #[serde(default)]
+    pub gamemode: bool,
+    #[serde(default)]
+    pub gamemode_rule: crate::power::PowerRule,
+    /// The refresh rate the rules in force ask of the panel. Applied by
+    /// `omenctl session`, which runs inside the desktop session.
+    #[serde(default)]
+    pub refresh_hz: Option<u32>,
     pub uptime_secs: u64,
+}
+
+/// The power side of the status.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PowerState {
+    pub config: crate::limits::PowerConfig,
+    /// Whether this machine has Unleashed at all.
+    pub unleashed_supported: bool,
+    /// PL1 and the shared CPU+GPU limit as the firmware holds them, watts.
+    pub pl1_w: Option<u8>,
+    pub tpp_w: Option<u8>,
+    /// The shared limit the firmware chose itself, read at startup - what
+    /// the offsets are added to.
+    pub tpp_base_w: Option<u8>,
+    /// The palm rest, and whether Unleashed is holding PL1 down for it.
+    pub surface_c: Option<f32>,
+    pub surface_hot: bool,
+    /// The EPP hint in force, and what owns it when it is not us.
+    pub epp: Option<String>,
+    pub epp_owner: Option<String>,
 }
 
 /// Something the daemon was asked or meant to do and the hardware refused.

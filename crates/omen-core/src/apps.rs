@@ -50,6 +50,14 @@ pub struct AppProfile {
     /// rewrote the curve you drew would be a poor trade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub curve: Option<String>,
+
+    /// The internal panel's refresh rate while this is open, in Hz.
+    ///
+    /// Asked for here and applied by the desktop session's side - `omenctl
+    /// session` - because a refresh rate belongs to the compositor, and the
+    /// daemon runs outside any session. See display.rs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_hz: Option<u32>,
 }
 
 impl AppProfile {
@@ -79,6 +87,9 @@ impl AppProfile {
             parts.push(format!("{c} curve"));
         } else if let Some(f) = &self.fan {
             parts.push(format!("fan {f}"));
+        }
+        if let Some(hz) = self.refresh_hz {
+            parts.push(format!("{hz} Hz"));
         }
         if parts.is_empty() {
             "nothing to apply".into()
@@ -210,6 +221,7 @@ mod tests {
             profile: Some("performance".into()),
             fan: None,
             curve: None,
+            refresh_hz: None,
         }
     }
 

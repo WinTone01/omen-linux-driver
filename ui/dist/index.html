@@ -338,8 +338,39 @@
             <div class="perf-strip__numbers">
               <div><b id="perf-cpu-temp">—</b><span>CPU Temperature</span></div>
               <div><b id="perf-gpu-temp">—</b><span>GPU Temperature</span></div>
+              <div id="perf-surface-box" hidden><b id="perf-surface-temp">—</b><span>Surface</span></div>
               <div><b id="perf-cpu-util">—</b><span>CPU Utilization</span></div>
             </div>
+          </div>
+
+          <div class="card" id="power-card" hidden>
+            <div class="panel-head">
+              <h2 class="panel-head__title">Power limits</h2>
+              <span class="panel-head__note" id="power-note"></span>
+            </div>
+            <p class="hint">
+              What OMEN Gaming Hub sets around its modes, with HP's own ranges for
+              this board. Unleashed raises the CPU's sustained limit and holds the
+              palm rest under a temperature by taking it back down; the shared
+              limit is what the CPU and GPU may draw together.
+            </p>
+            <dl class="kv kv--tight">
+              <dt>Unleashed PL1</dt>
+              <dd><input type="range" id="pw-pl1" min="25" max="71" step="1"> <output id="pw-pl1-out"></output></dd>
+              <dt>Surface limit</dt>
+              <dd><input type="range" id="pw-surface" min="44" max="54" step="1"> <output id="pw-surface-out"></output></dd>
+              <dt>Shared limit, Unleashed</dt>
+              <dd><input type="range" id="pw-tpp-u" min="0" max="20" step="1"> <output id="pw-tpp-u-out"></output></dd>
+              <dt>Shared limit, performance</dt>
+              <dd><input type="range" id="pw-tpp-p" min="0" max="20" step="1"> <output id="pw-tpp-p-out"></output></dd>
+              <dt>Battery floor, performance</dt>
+              <dd><input type="range" id="pw-floor-p" min="0" max="50" step="5"> <output id="pw-floor-p-out"></output></dd>
+              <dt>Battery floor, Unleashed</dt>
+              <dd><input type="range" id="pw-floor-u" min="0" max="80" step="5"> <output id="pw-floor-u-out"></output></dd>
+              <dt>CPU energy preference</dt>
+              <dd><label><input type="checkbox" id="pw-epp"> <span>Follows the profile</span></label> <span class="hint" id="pw-epp-note"></span></dd>
+            </dl>
+            <button class="btn" id="btn-power-save">Save</button>
           </div>
 
           <div class="card">
@@ -362,6 +393,13 @@
             <button data-mode="auto" class="is-advanced">EC default</button>
           </div>
           <p class="hint" id="fan-mode-help"></p>
+
+          <div class="panel-head"><h2 class="panel-head__title">What decides the speed</h2></div>
+          <div class="seg-4 seg-4--two" id="fan-algorithm">
+            <button data-algorithm="curve">The curve</button>
+            <button data-algorithm="hub">OMEN Gaming Hub's tables</button>
+          </div>
+          <p class="hint" id="fan-algorithm-help"></p>
 
           <div class="card chart-card">
             <div class="panel-head">

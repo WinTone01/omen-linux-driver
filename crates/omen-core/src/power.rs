@@ -34,11 +34,19 @@ pub struct PowerRule {
     /// configured curve.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub curve: Option<String>,
+
+    /// The internal panel's refresh rate on this power source, in Hz - 60
+    /// on battery is the usual one. See apps::AppProfile::refresh_hz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_hz: Option<u32>,
 }
 
 impl PowerRule {
     pub fn is_empty(&self) -> bool {
-        self.profile.is_none() && self.fan.is_none() && self.curve.is_none()
+        self.profile.is_none()
+            && self.fan.is_none()
+            && self.curve.is_none()
+            && self.refresh_hz.is_none()
     }
 
     pub fn summary(&self) -> String {
@@ -52,6 +60,9 @@ impl PowerRule {
             parts.push(format!("{c} curve"));
         } else if let Some(f) = &self.fan {
             parts.push(format!("fan {f}"));
+        }
+        if let Some(hz) = self.refresh_hz {
+            parts.push(format!("{hz} Hz"));
         }
         if parts.is_empty() {
             "nothing to apply".into()
@@ -134,6 +145,7 @@ mod tests {
             profile: Some("balanced".into()),
             fan: None,
             curve: None,
+            refresh_hz: None,
         }
         .is_empty());
     }
@@ -144,6 +156,7 @@ mod tests {
             profile: Some("performance".into()),
             fan: Some(ControlMode::Max),
             curve: None,
+            refresh_hz: None,
         };
         assert_eq!(rule.summary(), "performance, fan max");
     }

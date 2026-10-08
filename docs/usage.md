@@ -830,3 +830,126 @@ default. Three smaller things were fixed along the way:
   is gamma-corrected (2.2).
 
 `omenctl effect fps` and Smoothness on the Lighting page set the rate, 1-60.
+
+## What OMEN Gaming Hub did that this did not
+
+Surveyed on Windows, from the Hub's logs, the platform configuration it ships
+for this board, and its decompiled assemblies. The protocol and every number
+used below are in [hub-gap.md](research/hub-gap.md). Everything in this
+section needs **omen-kbd-rgb 0.3.0** on board 8D24, and none of it has been
+measured on Linux yet. The list at the end of hub-gap.md says what to check.
+
+### Unleashed
+
+```bash
+omenctl profile unleashed
+```
+
+This is the Hub's fourth mode: firmware profile `0x04`. platform_profile has
+no name for it, so `omen-kbd-rgb` exposes it as `unleashed`, and this project
+offers it as a fourth profile. That means the window, the OMEN key's cycle,
+application rules and power rules all list it. It is selected through
+performance, the mode it sits above. While it holds, omend does what the Hub
+does:
+
+* **PL1 goes to 71 W.** The setting is `power.unleashed_pl1_w`, range
+  25-71 W. The firmware's own profiles hold 55 W (balanced) and 60 W
+  (performance). Those values come back when Unleashed ends.
+* **The shared CPU+GPU limit goes up 20 W**, on mains only
+  (`power.unleashed_tpp_offset_w`).
+* **The palm rest is held under 54 °C** (`power.unleashed_surface_c`, 44-54).
+  Every 30 s: at the limit, PL1 drops 5 W and Dynamic Boost goes off. Below
+  the limit and cooling, PL1 is given back.
+
+On battery, Unleashed needs 40 % charge and performance needs 10 %. Below
+that, the mode steps down by itself (`power.min_battery_*`, 0 turns a floor
+off). A request for a mode the battery would immediately take back is refused
+with the reason.
+
+### The surface temperature
+
+`sensors` now shows a second `omen` channel, **Surface**. It is EC register
+`0x48`, the sensor the Hub calls IR and reads through WMI `0x23`. It shows in
+the window under the performance tiles and in `omenctl status`. It never
+drives the curve: the palm rest trails the load by minutes.
+
+### PL1 and the shared limit, by hand
+
+```bash
+omenctl power limits             # what is in force, and the settings
+omenctl power pl1 60             # Unleashed's PL1
+omenctl power tpp performance 10 # +10 W shared limit in performance
+```
+
+The raw controls are `cpu_pl1` and `gpu_tpp` under
+`/sys/devices/platform/omen-kbd-rgb/`, in watts. They go through WMI `0x29`,
+the same call the Hub makes; the EC is only read.
+
+### The Hub's own fan tables
+
+```bash
+omenctl curve hub                # or: omenctl curve algorithm curve
+```
+
+The curve this project ships is the Hub's *custom curve* table. What the Hub
+actually runs in Auto is different:
+
+* Three tables per mode: CPU, GPU and the palm rest. The fans follow
+  whichever asks for most.
+* Each step has a temperature to go up at and a lower one to come down at.
+* The CPU reading is smoothed first, so a two-second spike does not move the
+  fans.
+
+Balanced keeps the fans stopped until the smoothed CPU reaches 68 °C.
+Performance never stops them. One rule is added on top of HP's tables: at
+`safety.stall_temp_c`, the fans are never left stopped while the average
+catches up. Otherwise the stall detector would fire, and it would be right
+to.
+
+### EPP follows the profile
+
+On Windows the Hub switches the power plan with the mode. The Linux
+equivalent is the `amd_pstate` EPP hint:
+
+* low-power → `power`
+* balanced → `balance_performance`
+* performance and Unleashed → `performance`
+
+omend sets the hint only while nothing else does. If power-profiles-daemon,
+tuned or auto-cpufreq is running, it is left alone, because they already
+set it. Turn it off with `omenctl power epp off`.
+
+### GameMode
+
+```bash
+omenctl gamemode setup           # prints the two lines for gamemode.ini
+omenctl gamemode rule performance curve:performance
+```
+
+Feral GameMode runs `omenctl gamemode on` and `off`. While a game is running,
+the rule applies, and it is put back afterwards, the same way an application
+profile is. An application profile that names the game wins over it.
+
+### Refresh rate per application or power source
+
+```bash
+omenctl app add cs2 performance 165hz
+omenctl power battery low-power 60hz
+systemctl --user enable --now omen-session
+```
+
+A refresh rate belongs to the compositor, so the system service only says
+which rate is wanted. `omenctl session` runs as you and applies it, then puts
+the old rate back when no rule asks any more. It works with KDE
+(`kscreen-doctor`), Hyprland (`hyprctl`), sway and other wlroots compositors
+(`wlr-randr`), and X11 (`xrandr`). GNOME has no command-line way to change
+the rate, so it is not supported.
+
+### In-game overlay
+
+```bash
+MANGOHUD_CONFIGFILE=/usr/share/omen-control/mangohud-omen.conf mangohud %command%
+```
+
+MangoHud shows one OMEN line from `omenctl overlay`: the profile, both fans,
+the CPU, GPU and surface temperatures, and PL1.

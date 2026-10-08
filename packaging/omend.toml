@@ -8,6 +8,12 @@
 # Set to false to have the daemon only observe, writing nothing.
 enabled = true
 
+# What decides the setpoint. "curve" runs the curve below; "hub" runs OMEN
+# Gaming Hub's own tables for the profile in force - CPU, GPU and the palm
+# rest, each with its own steps, the fans following whichever asks for most
+# (docs/research/hub-gap.md). The curve is kept either way.
+algorithm = "curve"
+
 # Sampling interval, in seconds.
 interval_secs = 2
 
@@ -277,3 +283,29 @@ app_scan_secs = 5
 # something.
 #
 # charge_limit = 80
+
+[power]
+# Unleashed, OMEN Gaming Hub's fourth mode - omenctl profile unleashed.
+# Needs omen-kbd-rgb 0.3.0 on board 8D24. The ranges are HP's own for this
+# board, and values outside them are refused.
+unleashed_pl1_w = 71          # PL1 in Unleashed, 25-71 W
+unleashed_surface_c = 54      # the palm rest is held under this, 44-54 C
+unleashed_tpp_offset_w = 20   # added to the shared CPU+GPU limit, 0-20 W
+
+# The same addition in the performance profile. HP's default is none.
+performance_tpp_offset_w = 0
+
+# On battery, below this charge a mode gives way to the one below it.
+# 0 turns a floor off.
+min_battery_performance = 10
+min_battery_unleashed = 40
+
+# The CPU's energy-performance preference follows the profile. Ignored while
+# power-profiles-daemon or tuned runs - they already do it.
+epp_follows_profile = true
+
+# While Feral GameMode is active (omenctl gamemode setup), e.g.:
+# [automation.gamemode]
+# profile = "performance"
+# curve = "performance"
+# refresh_hz = 165

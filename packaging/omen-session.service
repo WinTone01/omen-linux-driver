@@ -1,0 +1,19 @@
+# The desktop session's half of omen-control: applies the refresh rate the
+# daemon's rules ask for (an application, GameMode, the power source). A
+# refresh rate belongs to the compositor, which the system service cannot
+# reach - so this runs as you, inside the session.
+#
+# Not enabled by default. To use it:
+#   systemctl --user enable --now omen-session
+[Unit]
+Description=omen-control session helper (refresh rate rules)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/omenctl session
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=graphical-session.target

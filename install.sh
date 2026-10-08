@@ -306,6 +306,8 @@ uninstall() {
         sudo rm -f /usr/bin/{omend,omenctl,omen-ui} \
                    /usr/lib/systemd/system/omend.service \
                    /usr/lib/systemd/system-sleep/omen \
+                   /usr/lib/systemd/user/omen-session.service \
+                   /usr/share/omen-control/mangohud-omen.conf \
                    /usr/share/applications/dev.wintone.omen-control.desktop
         ok "files removed"
     fi

@@ -34,6 +34,10 @@ USAGE:
     omenctl curve reset            Back to the built-in OMEN Gaming Hub table
     omenctl curve code             The curve as one line, to paste to somebody
     omenctl curve import <CODE>    Load a curve somebody pasted to you
+    omenctl curve hub              Run OMEN Gaming Hub's own tables instead:
+                                   CPU, GPU and surface, per profile
+    omenctl curve algorithm [curve|hub]
+                                   Which one decides; without an argument, says
 
     omenctl set curve              Automatic: the curve drives the fan (default)
     omenctl set manual <RPM>       Fixed target
@@ -52,7 +56,7 @@ USAGE:
                                    right. Persists across reboots.
 
     omenctl app                    List the per-application profiles
-    omenctl app add <PROCESS> [PROFILE] [FAN]
+    omenctl app add <PROCESS> [PROFILE] [FAN] [NNhz]
                                    e.g. omenctl app add cs2 performance 3000
                                    PROFILE is a platform profile, FAN is
                                    curve / max / auto / an RPM number, or
@@ -85,9 +89,26 @@ USAGE:
                                    it awake.
 
     omenctl power                  What happens on mains and on battery
-    omenctl power ac|battery <PROFILE|none> [FAN]
-                                   e.g. omenctl power battery low-power curve:quiet
+    omenctl power ac|battery <PROFILE|none> [FAN] [NNhz]
+                                   e.g. omenctl power battery low-power curve:quiet 60hz
                                    'none' clears that rule
+    omenctl power limits           Unleashed, PL1, the shared CPU+GPU limit, the
+                                   surface temperature, battery floors, EPP
+    omenctl power pl1 <25-71>      PL1 in Unleashed, watts
+    omenctl power surface <44-54>  The palm rest temperature Unleashed holds
+    omenctl power tpp performance|unleashed <0-20>
+                                   Watts added to the shared CPU+GPU limit
+    omenctl power floor performance|unleashed <PERCENT>
+                                   Below this on battery, the mode steps down
+    omenctl power epp on|off       The CPU's EPP hint follows the profile
+
+    omenctl gamemode [on|off]      Feral GameMode started / ended (gamemode.ini)
+    omenctl gamemode rule <PROFILE> [FAN] [NNhz]
+                                   What a game gets while GameMode is on
+    omenctl gamemode setup         The lines to put in gamemode.ini
+    omenctl overlay                One status line, for MangoHud's exec=
+    omenctl session                Apply the rules' refresh rates in this
+                                   desktop session (KDE, Hyprland, wlroots, X11)
 
     omenctl battery [PERCENT|off]  Stop charging at PERCENT, on a machine whose
                                    kernel offers the control. Without an
@@ -99,7 +120,7 @@ USAGE:
     omenctl clean [SECONDS]        Run the fans at full power to clear dust
                                    (default 20s, 5-120), then back to normal
 
-    omenctl profile <NAME>         balanced / performance / low-power
+    omenctl profile <NAME>         low-power / balanced / performance / unleashed
     omenctl profile startup <NAME|none>
                                    Which profile to select when the daemon
                                    starts. 'none' leaves it to the firmware.
@@ -151,6 +172,9 @@ fn main() -> ExitCode {
         "trigger" | "triggers" => triggers(&args),
         "gpu" => gpu_power(&args),
         "power" => power_rules(&args),
+        "gamemode" => gamemode(&args),
+        "overlay" => overlay(),
+        "session" => session(),
         "clean" => clean_fans(&args),
         "calibrate" => calibrate(&args),
         "battery" => battery(&args),
@@ -251,6 +275,43 @@ fn parse_curve_arg(raw: &str) -> Result<Option<String>> {
         );
     }
     Ok(Some(name.to_owned()))
+}
+
+/// A refresh rate argument: `60hz`, `165Hz`. `None` when the argument is
+/// something else.
+fn parse_hz(raw: &str) -> Result<Option<u32>> {
+    let lower = raw.to_ascii_lowercase();
+    let Some(number) = lower.strip_suffix("hz") else {
+        return Ok(None);
+    };
+    let hz: u32 = number
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("{raw:?} is not a refresh rate (e.g. 60hz)"))?;
+    omen_core::display::check_rate(Some(hz)).map_err(anyhow::Error::msg)?;
+    Ok(Some(hz))
+}
+
+/// What a rule asks for, from its words in any order: a platform profile,
+/// a fan mode, `curve:NAME`, a refresh rate. Told apart by shape - a fan mode
+/// is a number or one of three words, a rate ends in hz, everything else is a
+/// profile.
+fn parse_rule(words: &[String]) -> Result<omen_core::power::PowerRule> {
+    let mut rule = omen_core::power::PowerRule::default();
+    for arg in words {
+        if let Some(name) = parse_curve_arg(arg)? {
+            rule.curve = Some(name);
+            rule.fan = Some(ControlMode::Curve);
+        } else if let Some(hz) = parse_hz(arg)? {
+            rule.refresh_hz = Some(hz);
+        } else {
+            match parse_fan(arg) {
+                Ok(mode) => rule.fan = Some(mode),
+                Err(_) => rule.profile = Some(arg.clone()),
+            }
+        }
+    }
+    Ok(rule)
 }
 
 fn set_effect(args: &[String]) -> Result<()> {
@@ -798,23 +859,17 @@ fn app_profiles(args: &[String]) -> Result<()> {
                 profile: None,
                 fan: None,
                 curve: None,
+                refresh_hz: None,
             };
-            // Profile and fan are both optional and either may come first,
-            // so they are told apart by shape - a fan mode is a number or one
-            // of three words, everything else is a platform profile.
-            for arg in &args[3..] {
-                if let Some(name) = parse_curve_arg(arg)? {
-                    entry.curve = Some(name);
-                    entry.fan = Some(ControlMode::Curve);
-                    continue;
-                }
-                match parse_fan(arg) {
-                    Ok(mode) => entry.fan = Some(mode),
-                    Err(_) => entry.profile = Some(arg.clone()),
-                }
-            }
-            if entry.profile.is_none() && entry.fan.is_none() {
-                bail!("give a profile, a fan mode, or both - otherwise there is nothing to apply");
+            // Profile, fan and rate are all optional and may come in any
+            // order; parse_rule tells them apart by shape.
+            let rule = parse_rule(&args[3..])?;
+            entry.profile = rule.profile;
+            entry.fan = rule.fan;
+            entry.curve = rule.curve;
+            entry.refresh_hz = rule.refresh_hz;
+            if entry.profile.is_none() && entry.fan.is_none() && entry.refresh_hz.is_none() {
+                bail!("give a profile, a fan mode or a refresh rate - otherwise there is nothing to apply");
             }
 
             apps.retain(|a| !a.process.eq_ignore_ascii_case(&process));
@@ -1515,6 +1570,10 @@ fn power_rules(args: &[String]) -> Result<()> {
         return Ok(());
     };
 
+    if !matches!(which, "ac" | "mains" | "battery" | "bat") {
+        return power_limits(args, &snap);
+    }
+
     let target = match which {
         "ac" | "mains" => &mut on_ac,
         "battery" | "bat" => &mut on_battery,
@@ -1528,23 +1587,246 @@ fn power_rules(args: &[String]) -> Result<()> {
     if first == "none" {
         *target = PowerRule::default();
     } else {
-        // Same shape-based parsing as the application profiles: a fan mode is
-        // a number or one of three words, everything else is a profile.
-        *target = PowerRule::default();
-        for arg in &args[2..] {
-            if let Some(name) = parse_curve_arg(arg)? {
-                target.curve = Some(name);
-                target.fan = Some(ControlMode::Curve);
-                continue;
-            }
-            match parse_fan(arg) {
-                Ok(mode) => target.fan = Some(mode),
-                Err(_) => target.profile = Some(arg.clone()),
-            }
-        }
+        // Same shape-based parsing as the application profiles.
+        *target = parse_rule(&args[2..])?;
     }
 
     client::report(client::send(&Request::SetPowerRules { on_ac, on_battery })?)
+}
+
+/// Unleashed, the shared CPU+GPU limit, the battery floors and EPP.
+fn power_limits(args: &[String], snap: &omen_core::ipc::Snapshot) -> Result<()> {
+    use omen_core::limits::platform;
+
+    let Some(state) = snap.power.clone() else {
+        bail!("the daemon reports no power state - is it older than this omenctl?");
+    };
+    let mut cfg = state.config;
+    let number = |i: usize| -> Result<u8> {
+        args.get(i)
+            .ok_or_else(|| anyhow::anyhow!("a number is required"))?
+            .parse()
+            .map_err(|_| anyhow::anyhow!("{:?} is not a number", args[i]))
+    };
+
+    match args.get(1).map(String::as_str) {
+        Some("limits") | Some("show") => {
+            let w = |v: Option<u8>| v.map_or("-".to_string(), |v| format!("{v} W"));
+            field(
+                "Unleashed",
+                if state.unleashed_supported {
+                    "available (omenctl profile unleashed)"
+                } else {
+                    "not on this machine (omen-kbd-rgb 0.3.0 on 8D24)"
+                },
+            );
+            field("PL1 now", w(state.pl1_w));
+            field(
+                "shared CPU+GPU",
+                match (state.tpp_w, state.tpp_base_w) {
+                    (Some(now), Some(base)) => format!("{now} W (firmware's own {base} W)"),
+                    (now, _) => w(now),
+                },
+            );
+            if let Some(c) = state.surface_c {
+                field(
+                    "surface",
+                    format!(
+                        "{c:.0} C{}",
+                        if state.surface_hot {
+                            "  - Unleashed is holding PL1 down"
+                        } else {
+                            ""
+                        }
+                    ),
+                );
+            }
+            println!();
+            field("unleashed PL1", format!("{} W", cfg.unleashed_pl1_w));
+            field(
+                "unleashed surface",
+                format!("{} C", cfg.unleashed_surface_c),
+            );
+            field(
+                "unleashed shared +",
+                format!("{} W", cfg.unleashed_tpp_offset_w),
+            );
+            field(
+                "performance shared +",
+                format!("{} W", cfg.performance_tpp_offset_w),
+            );
+            field(
+                "battery floors",
+                format!(
+                    "performance {}%, Unleashed {}%",
+                    cfg.min_battery_performance, cfg.min_battery_unleashed
+                ),
+            );
+            field(
+                "EPP",
+                match (&state.epp, &state.epp_owner, cfg.epp_follows_profile) {
+                    (_, Some(owner), _) => format!("kept in step by {owner}"),
+                    (Some(e), None, true) => format!("{e}, follows the profile"),
+                    (Some(e), None, false) => format!("{e}, left alone"),
+                    (None, _, _) => "not available (the CPU driver is not in active mode)".into(),
+                },
+            );
+            return Ok(());
+        }
+        Some("pl1") => cfg.unleashed_pl1_w = number(2)?,
+        Some("surface") => cfg.unleashed_surface_c = number(2)?,
+        Some("tpp") => match args.get(2).map(String::as_str) {
+            Some("performance") => cfg.performance_tpp_offset_w = number(3)?,
+            Some("unleashed") => cfg.unleashed_tpp_offset_w = number(3)?,
+            _ => bail!(
+                "omenctl power tpp performance|unleashed <0-{}>",
+                platform::TPP_MAX_OFFSET_W
+            ),
+        },
+        Some("floor") => match args.get(2).map(String::as_str) {
+            Some("performance") => cfg.min_battery_performance = number(3)?,
+            Some("unleashed") => cfg.min_battery_unleashed = number(3)?,
+            _ => bail!("omenctl power floor performance|unleashed <PERCENT>"),
+        },
+        Some("epp") => {
+            cfg.epp_follows_profile = match args.get(2).map(String::as_str) {
+                Some("on") => true,
+                Some("off") => false,
+                _ => bail!("omenctl power epp on|off"),
+            }
+        }
+        Some(other) => {
+            bail!("unknown: {other} (ac / battery / limits / pl1 / surface / tpp / floor / epp)")
+        }
+        None => unreachable!("handled by power_rules"),
+    }
+    client::report(client::send(&Request::SetPower(cfg))?)
+}
+
+/// Feral GameMode. `on` and `off` are what gamemode.ini runs; the rule says
+/// what happens in between.
+fn gamemode(args: &[String]) -> Result<()> {
+    match args.get(1).map(String::as_str) {
+        Some("on") => client::report(client::send(&Request::GameMode { on: true })?),
+        Some("off") => client::report(client::send(&Request::GameMode { on: false })?),
+        Some("rule") => {
+            let rule = match args.get(2).map(String::as_str) {
+                Some("none") | None => omen_core::power::PowerRule::default(),
+                Some(_) => parse_rule(&args[2..])?,
+            };
+            client::report(client::send(&Request::SetGameModeRule { rule })?)
+        }
+        Some("setup") => {
+            println!(
+                "Add this to ~/.config/gamemode.ini (or /etc/gamemode.ini):\n\n\
+                 [custom]\n\
+                 start=omenctl gamemode on\n\
+                 end=omenctl gamemode off\n\n\
+                 Then say what a game gets, e.g.\n  \
+                 omenctl gamemode rule performance curve:performance"
+            );
+            Ok(())
+        }
+        Some(other) => bail!("unknown: {other} (on / off / rule / setup)"),
+        None => {
+            let snap = app_snapshot()?;
+            field(
+                "GameMode",
+                if snap.gamemode {
+                    "a game is running"
+                } else {
+                    "off"
+                },
+            );
+            field("while on", snap.gamemode_rule.summary());
+            Ok(())
+        }
+    }
+}
+
+/// One short line of what the machine is doing, for MangoHud's `exec=` or a
+/// status bar. Never fails loudly: an overlay that prints an error over a
+/// game is worse than one that prints nothing.
+fn overlay() -> Result<()> {
+    let Ok(Response::Ok(snap)) = client::send(&Request::Status) else {
+        println!("omend -");
+        return Ok(());
+    };
+    let temp = |prefix: &str| {
+        snap.temps
+            .iter()
+            .filter(|(l, _)| l.starts_with(prefix))
+            .map(|(_, c)| *c)
+            .reduce(f32::max)
+    };
+    let mut parts = Vec::new();
+    if let Some(p) = &snap.profile {
+        parts.push(p.to_ascii_uppercase());
+    }
+    match (snap.fan1_rpm, snap.fan2_rpm) {
+        (Some(a), Some(b)) => parts.push(format!("FAN {a}/{b}")),
+        (Some(a), None) | (None, Some(a)) => parts.push(format!("FAN {a}")),
+        _ => {}
+    }
+    for (name, prefix) in [("CPU", "cpu/"), ("GPU", "dgpu/"), ("SURF", "surface/")] {
+        if let Some(c) = temp(prefix) {
+            parts.push(format!("{name} {c:.0}°"));
+        }
+    }
+    if let Some(pl1) = snap.power.as_ref().and_then(|p| p.pl1_w) {
+        parts.push(format!("PL1 {pl1}W"));
+    }
+    if snap.safety_fallback {
+        parts.push("SAFETY".into());
+    }
+    println!("{}", parts.join("  "));
+    Ok(())
+}
+
+/// The desktop session's half: applies what only a session can - the panel's
+/// refresh rate - when the daemon's rules ask for it, and puts the rate back
+/// when they stop asking. Runs until stopped; meant for an autostart entry or
+/// a systemd user unit.
+fn session() -> Result<()> {
+    let backend = match omen_core::display::detect() {
+        Ok(b) => b,
+        Err(e) => bail!("refresh rates cannot be changed here: {e}"),
+    };
+    println!(
+        "following the daemon's refresh rate requests ({})",
+        backend.tool()
+    );
+    let mut asked: Option<u32> = None;
+    // The rate before the first change, to go back to.
+    let mut original: Option<u32> = None;
+    loop {
+        let want = match client::send(&Request::Status) {
+            Ok(Response::Ok(snap)) => snap.refresh_hz,
+            _ => asked,
+        };
+        if want != asked {
+            let target = match want {
+                Some(hz) => {
+                    if original.is_none() {
+                        original = omen_core::display::panel(backend)
+                            .ok()
+                            .map(|p| p.rate.round() as u32);
+                    }
+                    Some(hz)
+                }
+                None => original.take(),
+            };
+            if let Some(hz) = target {
+                match omen_core::display::set_rate(backend, hz) {
+                    Ok(Some(what)) => println!("{what}"),
+                    Ok(None) => {}
+                    Err(e) => eprintln!("could not set {hz} Hz: {e}"),
+                }
+            }
+            asked = want;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 }
 
 fn gpu_power(args: &[String]) -> Result<()> {
@@ -1904,6 +2186,30 @@ fn curve(args: &[String]) -> Result<()> {
     match args.get(1).map(String::as_str) {
         Some("set") => return set_curve(args),
         Some("reset") => return client::report(client::send(&Request::ResetCurve)?),
+        Some("hub") => {
+            return client::report(client::send(&Request::SetFanAlgorithm {
+                algorithm: "hub".into(),
+            })?)
+        }
+        Some("algorithm") => {
+            let Some(algorithm) = args.get(2) else {
+                let snap = app_snapshot()?;
+                field(
+                    "algorithm",
+                    snap.fan_algorithm.unwrap_or_else(|| "?".into()),
+                );
+                if let Some(tables) = snap.hub_tables {
+                    field("tables", tables);
+                }
+                if let Some(avg) = snap.cpu_average_c {
+                    field("cpu average", format!("{avg:.1} C"));
+                }
+                return Ok(());
+            };
+            return client::report(client::send(&Request::SetFanAlgorithm {
+                algorithm: algorithm.clone(),
+            })?);
+        }
         Some("code") => {
             // From the daemon when it is running, so what you share is what
             // is actually in force - including a preset a game profile swapped

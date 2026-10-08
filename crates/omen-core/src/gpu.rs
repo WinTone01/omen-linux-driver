@@ -473,7 +473,7 @@ pub mod boost {
     /// everything but low-power.
     pub fn for_profile(profile: &str) -> Option<(bool, bool)> {
         match profile {
-            "performance" => Some((true, true)),
+            "performance" | "unleashed" => Some((true, true)),
             "balanced" | "balanced-performance" => Some((false, true)),
             "low-power" | "quiet" | "cool" => Some((false, false)),
             _ => None,

@@ -13,6 +13,7 @@ mod appwatch;
 mod guard;
 mod hotkey;
 mod lighting;
+mod powerctl;
 mod server;
 mod shared;
 mod takeover;
@@ -26,7 +27,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use log::{debug, error, info, warn};
 
-use omen_core::config::Config;
+use omen_core::config::{Config, FanAlgorithm};
 use omen_core::curve::Governor;
 use omen_core::fan::Fan;
 use omen_core::gpu;
@@ -477,6 +478,15 @@ struct Runtime {
     /// Hardware commands that failed, for the UI. See ipc::Problem.
     problems: std::collections::VecDeque<omen_core::ipc::Problem>,
     problem_seq: u64,
+    /// Unleashed, PL1, the shared limit, the battery floor and EPP.
+    power: powerctl::PowerControl,
+    /// OMEN Gaming Hub's fan tables, when the configuration asks for them.
+    /// Rebuilt when the profile picks a different set.
+    hub: Option<omen_core::hubfan::HubFan>,
+    /// Whether Feral GameMode says a game is running, and the takeover that
+    /// applies its rule - the same mechanics as an application profile.
+    gamemode: bool,
+    game: takeover::Takeover,
     started: Instant,
 }
 
@@ -533,6 +543,10 @@ impl Runtime {
             boost_for: None,
             problems: std::collections::VecDeque::new(),
             problem_seq: 0,
+            power: powerctl::PowerControl::new(),
+            hub: None,
+            gamemode: false,
+            game: takeover::Takeover::new(takeover::Voice::App),
             started: Instant::now(),
         })
     }
@@ -590,6 +604,7 @@ impl Runtime {
         self.apply_gpu_power();
         self.apply_gpu_boost();
         self.apply_charge_limit();
+        self.apply_power();
         self.watch_profile(temp.as_ref().map(|(_, c)| *c));
 
         self.last_reading = temp.clone();
@@ -914,7 +929,7 @@ impl Runtime {
         if first && self.cfg.automation.startup_profile.is_some() {
             return;
         }
-        if let Some(what) = self.apps.active().or_else(|| self.triggers.active()) {
+        if let Some(what) = self.active_rule() {
             debug!("power source changed, but {what} is in force");
             return;
         }
@@ -946,7 +961,7 @@ impl Runtime {
         // A power rule with no curve of its own puts the configured one back,
         // unless an application profile is holding one - that one is more
         // specific and stays.
-        if self.apps.active().is_none() && self.triggers.active().is_none() {
+        if self.active_rule().is_none() {
             match (&rule.curve, &self.curve_preset) {
                 (Some(name), current) if Some(name) != current.as_ref() => {
                     self.use_curve(Some(name))
@@ -1059,6 +1074,29 @@ impl Runtime {
         // Recorded either way: a write the firmware refuses will be refused
         // again, and a problem a minute is not more informative than one.
         self.boost_for = Some(profile);
+    }
+
+    /// Unleashed, PL1, the shared CPU+GPU limit, the battery floor and the
+    /// EPP hint - see powerctl. After the GPU boost on purpose: Unleashed's
+    /// surface limit may switch Dynamic Boost off, and that must not be
+    /// undone in the same tick by the profile putting it back on.
+    fn apply_power(&mut self) {
+        let profile = PlatformProfile::discover().and_then(|p| p.get().ok());
+        let outcome = self.power.tick(powerctl::Ctx {
+            cfg: &self.cfg.power,
+            profile: profile.as_deref(),
+            on_ac: self.on_ac,
+            battery: omen_core::power::battery_percent(),
+            surface: self.thermal.surface(),
+            read_only: self.read_only,
+        });
+        for what in outcome.problems {
+            self.problem(what);
+        }
+        if outcome.changed_profile {
+            // Ours, not the firmware's: watch_profile must not put it back.
+            self.last_profile = None;
+        }
     }
 
     /// Logs a hardware command that failed, and keeps it for the UI.
@@ -1185,13 +1223,68 @@ impl Runtime {
     }
 
     fn scan_apps(&mut self) {
-        if self.cfg.apps.is_empty() || self.apps_scanned.elapsed() < self.cfg.app_scan_interval() {
-            return;
+        if !self.cfg.apps.is_empty() && self.apps_scanned.elapsed() >= self.cfg.app_scan_interval()
+        {
+            self.apps_scanned = Instant::now();
+            let actions = self.apps.poll(&self.cfg.apps, self.mode);
+            self.take_actions(actions);
         }
-        self.apps_scanned = Instant::now();
+        self.scan_gamemode();
+    }
 
-        let actions = self.apps.poll(&self.cfg.apps, self.mode);
+    /// Feral GameMode's rule, while GameMode says a game is running.
+    ///
+    /// Between the application profiles and the triggers: GameMode knows a
+    /// game is running but not which, so a profile that names the game is
+    /// the more specific statement and wins - and while one holds, this is
+    /// released rather than left applied underneath.
+    fn scan_gamemode(&mut self) {
+        let rule = &self.cfg.automation.gamemode;
+        let holding =
+            (self.gamemode && !rule.is_empty() && self.apps.active().is_none()).then(|| {
+                (
+                    "GameMode".to_owned(),
+                    takeover::Want {
+                        profile: rule.profile.clone(),
+                        fan: rule.fan,
+                        curve: rule.curve.clone(),
+                    },
+                )
+            });
+        let actions = self.game.poll(holding, self.mode);
         self.take_actions(actions);
+    }
+
+    /// The rule in force, most specific first: an application, GameMode, a
+    /// trigger.
+    fn active_rule(&self) -> Option<&str> {
+        self.apps
+            .active()
+            .or_else(|| self.game.active())
+            .or_else(|| self.triggers.active())
+    }
+
+    /// The refresh rate the rules in force ask for, the same precedence as
+    /// everything else - and the power source's rule when none does.
+    fn wanted_refresh(&self) -> Option<u32> {
+        if let Some(name) = self.apps.active() {
+            return self
+                .cfg
+                .apps
+                .iter()
+                .find(|a| a.process == name)
+                .and_then(|a| a.refresh_hz);
+        }
+        if self.game.active().is_some() {
+            if let Some(hz) = self.cfg.automation.gamemode.refresh_hz {
+                return Some(hz);
+            }
+        }
+        match self.on_ac {
+            Some(true) => self.cfg.automation.on_ac.refresh_hz,
+            Some(false) => self.cfg.automation.on_battery.refresh_hz,
+            None => None,
+        }
     }
 
     /// Evaluates the state triggers.
@@ -1205,7 +1298,7 @@ impl Runtime {
     /// one applied underneath would mean its settings quietly outlive it.
     fn scan_triggers(&mut self, temp_c: Option<f32>) {
         let reading = self.triggers.sample(temp_c, &self.cfg.triggers);
-        let actions = if self.apps.active().is_some() {
+        let actions = if self.apps.active().is_some() || self.game.active().is_some() {
             self.triggers.release(self.mode)
         } else {
             self.triggers.poll(&self.cfg.triggers, &reading, self.mode)
@@ -1285,6 +1378,8 @@ impl Runtime {
                         self.cfg = cfg;
                         self.applied = Applied::Unknown;
                         self.boost_for = None;
+                        self.power.invalidate();
+                        self.hub = None;
                         info!("configuration re-read");
                         self.log_curve();
                     }
@@ -1292,6 +1387,13 @@ impl Runtime {
                 },
                 Err(e) => error!("could not read the configuration, keeping the old one: {e}"),
             }
+        }
+
+        if let Some(on) = shared.take_gamemode() {
+            if on != self.gamemode {
+                info!("GameMode {}", if on { "started" } else { "ended" });
+            }
+            self.gamemode = on;
         }
 
         if let Some(seconds) = shared.take_clean() {
@@ -1431,6 +1533,9 @@ impl Runtime {
         }
 
         match self.mode {
+            ControlMode::Curve if self.cfg.fan.algorithm == FanAlgorithm::Hub => {
+                self.drive_hub();
+            }
             ControlMode::Curve => {
                 let Some(target) = self.governor.decide(temp, Instant::now()) else {
                     debug!("{label} {temp:.1}C - no change");
@@ -1444,6 +1549,33 @@ impl Runtime {
             ControlMode::Manual { rpm } => self.apply(Applied::Rpm(rpm), "manual"),
             ControlMode::Auto => self.apply(Applied::Auto, "manual"),
             ControlMode::Max => self.apply(Applied::Max, "manual"),
+        }
+    }
+
+    /// OMEN Gaming Hub's tables for the profile in force (hubfan.rs). Each
+    /// source is read on its own - the Hub follows whichever asks for most,
+    /// rather than the single hottest reading the curve uses.
+    fn drive_hub(&mut self) {
+        let profile = PlatformProfile::discover().and_then(|p| p.get().ok());
+        let set = omen_core::hubfan::for_profile(profile.as_deref());
+        if self.hub.as_ref().is_none_or(|h| h.set().name != set.name) {
+            info!("fan: OMEN Gaming Hub's {} tables", set.name);
+            self.hub = Some(omen_core::hubfan::HubFan::new(set));
+        }
+        let readings = omen_core::hubfan::Readings {
+            cpu: self.thermal.hottest_with("cpu/"),
+            gpu: self
+                .thermal
+                .hottest_with("dgpu/")
+                .or_else(|| self.thermal.hottest_with("gpu/")),
+            surface: self.thermal.surface(),
+        };
+        let floor = self.cfg.safety.stall_temp_c;
+        let Some(hub) = self.hub.as_mut() else { return };
+        let decision = hub.decide(readings, Instant::now(), floor);
+        match decision.target {
+            None => self.apply(Applied::Idle, &decision.why),
+            Some(rpm) => self.apply(Applied::Rpm(rpm), &decision.why),
         }
     }
 
@@ -1656,6 +1788,25 @@ impl Runtime {
                 }
             }),
             problems: self.problems.iter().cloned().collect(),
+            power: Some(omen_core::ipc::PowerState {
+                config: self.cfg.power,
+                unleashed_supported: omen_core::limits::has_unleashed(),
+                pl1_w: omen_core::limits::pl1(),
+                tpp_w: self.power.tpp_now(),
+                tpp_base_w: self.power.tpp_base(),
+                surface_c: self.thermal.surface(),
+                surface_hot: self.power.surface_hot(),
+                epp: omen_core::epp::current(),
+                epp_owner: self.power.epp_owner().map(str::to_owned),
+            }),
+            fan_algorithm: Some(self.cfg.fan.algorithm.to_string()),
+            hub_tables: (self.cfg.fan.algorithm == FanAlgorithm::Hub)
+                .then(|| self.hub.as_ref().map(|h| h.set().name.to_owned()))
+                .flatten(),
+            cpu_average_c: self.hub.as_ref().and_then(|h| h.cpu_average()),
+            gamemode: self.gamemode,
+            gamemode_rule: self.cfg.automation.gamemode.clone(),
+            refresh_hz: self.wanted_refresh(),
             uptime_secs: self.started.elapsed().as_secs(),
         }
     }

@@ -319,6 +319,36 @@ const I18N = {
       "Dört bölge boyunca ilerleyen bir renk tonu.",
     "All four zones on the same hue, cycling through the spectrum.":
       "Dört bölge de aynı tonda, tayf boyunca dönüyor.",
+
+    /* ── power limits, Unleashed, fan algorithm ─────────────── */
+    "OMEN Gaming Hub's fourth mode: PL1 up to 71 W and the shared CPU+GPU limit raised, with the palm rest held under its limit. Firmware profile 0x04.":
+      "OMEN Gaming Hub'ın dördüncü modu: PL1 71 W'a kadar, CPU+GPU ortak sınırı yükseltilmiş, avuç içi yüzeyi sınırının altında tutuluyor. Firmware profili 0x04.",
+    "Surface": "Yüzey",
+    "Power limits": "Güç sınırları",
+    "What OMEN Gaming Hub sets around its modes, with HP's own ranges for this board. Unleashed raises the CPU's sustained limit and holds the palm rest under a temperature by taking it back down; the shared limit is what the CPU and GPU may draw together.":
+      "OMEN Gaming Hub'ın modlarıyla birlikte ayarladıkları, HP'nin bu kart için verdiği aralıklarla. Unleashed CPU'nun sürekli güç sınırını yükseltir ve avuç içi yüzeyi bir sıcaklığın altında tutmak için gerektiğinde geri düşürür; ortak sınır CPU ile GPU'nun birlikte çekebileceği güçtür.",
+    "Unleashed PL1": "Unleashed PL1",
+    "Surface limit": "Yüzey sınırı",
+    "Shared limit, Unleashed": "Ortak sınır, Unleashed",
+    "Shared limit, performance": "Ortak sınır, performans",
+    "Battery floor, performance": "Pil tabanı, performans",
+    "Battery floor, Unleashed": "Pil tabanı, Unleashed",
+    "CPU energy preference": "CPU enerji tercihi",
+    "Follows the profile": "Profili izler",
+    "shared": "ortak",
+    "surface": "yüzey",
+    "held down for the surface": "yüzey için düşürüldü",
+    "kept in step by": "eşitleyen:",
+    "not available": "yok",
+    "What decides the speed": "Hızı ne belirliyor",
+    "The curve": "Eğri",
+    "OMEN Gaming Hub's tables": "OMEN Gaming Hub tabloları",
+    "CPU, GPU and surface each have a table for the profile; the fans follow whichever asks for most.":
+      "CPU, GPU ve yüzeyin her birinin profile göre bir tablosu var; fanlar en çok isteyeni izler.",
+    "Running": "Çalışan",
+    "CPU average": "CPU ortalaması",
+    "The curve below drives the fans from the hottest CPU or GPU reading.":
+      "Aşağıdaki eğri fanları en sıcak CPU ya da GPU okumasına göre sürer.",
   },
 };
 
