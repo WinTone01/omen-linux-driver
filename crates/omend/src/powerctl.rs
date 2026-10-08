@@ -52,15 +52,26 @@ struct Run {
 pub struct PowerControl {
     /// The profile and power source the settings were last written for.
     applied_for: Option<(String, Option<bool>)>,
-    /// The shared limit the firmware picked itself - what offsets add to.
+    /// The shared limit the firmware held before anything here wrote it, put
+    /// back when the profile no longer asks for a raised one.
     tpp_base: Option<u8>,
     /// The shared limit as last written or read, so the status does not cost
     /// an SMI every tick.
     tpp_now: Option<u8>,
+    /// Whether the shared limit is ours rather than the firmware's.
+    tpp_raised: bool,
     run: Option<Run>,
+    /// When Unleashed was entered, and whether it has been put back once
+    /// already - see on_profile.
+    unleashed_at: Option<Instant>,
+    unleashed_reasserted: bool,
     /// Who owns EPP when it is not us, as last checked.
     epp_owner: Option<&'static str>,
 }
+
+/// How soon after Unleashed is entered a drop back to performance is taken
+/// for power-profiles-daemon echoing the profile write, rather than a person.
+const ECHO_WINDOW: Duration = Duration::from_secs(15);
 
 impl PowerControl {
     pub fn new() -> Self {
@@ -154,13 +165,44 @@ impl PowerControl {
     }
 
     fn on_profile(&mut self, ctx: &Ctx<'_>, from: Option<&str>, to: &str, out: &mut Outcome) {
-        let left_unleashed = from == Some(UNLEASHED) && to != UNLEASHED;
-        let entered_unleashed = to == UNLEASHED && from != Some(UNLEASHED);
+        // power-profiles-daemon watches platform_profile. Selecting Unleashed
+        // writes "performance" there first, and when that is a change, PPD
+        // can write "performance" back a moment later - which makes hp-wmi
+        // rewrite HPCM and ends Unleashed (seen 2026-10-09: the first
+        // `omenctl profile unleashed` from another profile did not stick, the
+        // second did). A drop to performance this soon after entering is
+        // taken for that echo, and Unleashed is put back once.
+        if from == Some(UNLEASHED)
+            && to == "performance"
+            && !self.unleashed_reasserted
+            && self
+                .unleashed_at
+                .is_some_and(|at| at.elapsed() < ECHO_WINDOW)
+        {
+            self.unleashed_reasserted = true;
+            match limits::set_unleashed(true) {
+                Ok(()) => {
+                    info!(
+                        "the profile went back to performance within {}s of Unleashed - \
+                         taken for power-profiles-daemon echoing the change; Unleashed put back",
+                        ECHO_WINDOW.as_secs()
+                    );
+                    // Still Unleashed: nothing else changes.
+                    self.applied_for = Some((UNLEASHED.to_owned(), ctx.on_ac));
+                    return;
+                }
+                Err(e) => out
+                    .problems
+                    .push(format!("could not put Unleashed back: {e}")),
+            }
+        }
 
-        if left_unleashed || (from.is_none() && to != UNLEASHED) {
+        if to != UNLEASHED {
             self.end_run(out);
-            // Unleashed raised PL1; the firmware's own profile values go back
-            // with it, rather than trusting that a profile write resets them.
+            self.unleashed_at = None;
+            // The firmware does not reset PL1 with the profile, so after
+            // Unleashed - or anything else that wrote it - every firmware
+            // profile gets its own value back.
             if let Some(watts) = platform::profile_pl1(to) {
                 if limits::pl1().is_some_and(|now| now != watts) {
                     match limits::set_pl1(watts) {
@@ -172,12 +214,16 @@ impl PowerControl {
                 }
             }
         }
-        if left_unleashed && self.tpp_base.is_none() {
+        if from == Some(UNLEASHED) && self.tpp_base.is_none() {
             // Started inside Unleashed: the base can be read now.
             self.tpp_base = limits::tpp();
         }
 
-        if to == UNLEASHED && (entered_unleashed || self.run.is_none()) {
+        if to == UNLEASHED && (from != Some(UNLEASHED) || self.run.is_none()) {
+            if from != Some(UNLEASHED) {
+                self.unleashed_at = Some(Instant::now());
+                self.unleashed_reasserted = false;
+            }
             let watts = ctx.cfg.unleashed_pl1_w;
             match limits::set_pl1(watts) {
                 Ok(()) => info!(
@@ -199,23 +245,38 @@ impl PowerControl {
         self.apply_epp(ctx, to, out);
     }
 
-    /// The shared CPU+GPU limit: the firmware's own plus the offset the
-    /// configuration gives this profile, on mains only - as the Hub does.
+    /// The shared CPU+GPU limit. In performance and Unleashed, on mains, it is
+    /// HP's base plus the configured offset - what the Hub's SetConcurrentTdp
+    /// writes. Anywhere else the firmware's own value goes back, if it was
+    /// ever changed here.
     fn apply_tpp(&mut self, ctx: &Ctx<'_>, profile: &str, out: &mut Outcome) {
-        let Some(base) = self.tpp_base else { return };
-        let offset = match (profile, ctx.on_ac) {
-            (UNLEASHED, Some(true)) => ctx.cfg.unleashed_tpp_offset_w,
-            ("performance", Some(true)) => ctx.cfg.performance_tpp_offset_w,
-            _ => 0,
+        if limits::tpp().is_none() && self.tpp_now.is_none() {
+            return; // no shared limit on this machine
+        }
+        let raised = match (profile, ctx.on_ac) {
+            (UNLEASHED, Some(true)) => Some(ctx.cfg.unleashed_tpp_offset_w),
+            ("performance", Some(true)) => Some(ctx.cfg.performance_tpp_offset_w),
+            _ => None,
+        }
+        .map(|offset| {
+            platform::TPP_MIN_W
+                .saturating_add(offset.min(platform::TPP_MAX_OFFSET_W))
+                .min(platform::TPP_MAX_W)
+        });
+
+        let want = match (raised, self.tpp_raised, self.tpp_base) {
+            (Some(w), _, _) => w,
+            (None, true, Some(base)) => base,
+            _ => return, // never touched: the firmware's value stands
         };
-        let want = base.saturating_add(offset.min(platform::TPP_MAX_OFFSET_W));
-        if self.tpp_now == Some(want) {
+        if self.tpp_now == Some(want) && self.tpp_raised == raised.is_some() {
             return;
         }
         match limits::set_tpp(want) {
             Ok(()) => {
                 info!("{profile}: shared CPU+GPU limit {want} W");
                 self.tpp_now = Some(want);
+                self.tpp_raised = raised.is_some();
             }
             Err(e) => out.problems.push(format!(
                 "could not set the shared CPU+GPU limit to {want} W: {e}"

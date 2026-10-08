@@ -139,13 +139,35 @@ Not taken, and why:
 * **Accessories** (mice, headsets, monitors): OpenRGB and libratbag already
   do this on Linux.
 
-## Still to be measured on Linux
+## Measured on Linux (2026-10-09, kernel 7.2.9, BIOS F.11)
 
-* That EC `0x48` reads a plausible skin temperature, and rises under load
-  more slowly than the CPU. Read: `sensors omen-*`.
-* That GM29 byte 1 moves the sustained package power - `omenctl power pl1
-  45` under `omenctl profile measure`'s load should read 45 W.
-* What `platform_profile` reads while HPCM is `0x04`. hp-wmi maps the EC
-  byte to a profile and `0x04` is none of its values; the daemon does not
-  depend on the answer (it asks `omen-kbd-rgb`), but power-profiles-daemon
-  might.
+* **The surface sensor.** EC `0x48` read 34 °C at idle and 37 °C a few
+  minutes later, well below the CPU. That is plausible for a palm rest, and
+  matches the 45 °C the Hub logged under use.
+* **PL1 is EC `0x37`.** It read 60 W in performance, HP's own value for that
+  profile, and the same as `omenctl profile measure` found before anything
+  here wrote PL1.
+* **Writing PL1 through GM29 works.** In Unleashed, PL1 read 71 W and the
+  package drew a flat **71.0 W** at 3879 MHz under load, up from performance's
+  60 W.
+* **The firmware does not reset PL1 with the profile.** In the same run,
+  balanced and performance also drew 71.0 W. omend restored PL1 only on the
+  direct exit from Unleashed, and the run left Unleashed to low-power, which
+  had no value to restore. Every firmware profile now gets its PL1 back on
+  every change: low-power and balanced 55 W, performance 60 W. Low-power
+  shares HPCM `0x30` with balanced; its cap comes from amd-pmf.
+* **`platform_profile` reads `performance` while HPCM is `0x04`.** It does
+  not fail, so power-profiles-daemon and the desktop see performance, the
+  mode Unleashed sits above.
+* **The first switch to Unleashed did not stick; the second did.** That
+  fits power-profiles-daemon writing back the "performance" that selecting
+  Unleashed writes first. That rewrite resets HPCM. omend now puts Unleashed
+  back once if the profile drops to performance within 15 s of entering
+  it, and logs it. This is a hypothesis until the journal shows the line.
+* **The shared limit read 30 W, where the Hub works from 45.** The value
+  follows the profile, so performance and Unleashed now use HP's fixed
+  numbers (45 W plus the offset, at most 65 W), and the firmware's value is
+  put back elsewhere.
+* Low-power drew 17.3 W, against 31.7 W in September. power-profiles-daemon
+  now keeps EPP in step and sets `power` there, which may explain it. Not
+  investigated.

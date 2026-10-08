@@ -43,16 +43,32 @@ pub mod platform {
     pub const PERFORMANCE_MIN_BATTERY: u8 = 10;
     pub const UNLEASHED_MIN_BATTERY: u8 = 40;
 
-    /// The PL1 the firmware's own profiles use. Put back when Unleashed ends,
-    /// so a raised limit does not outlive the mode that raised it. The same
-    /// numbers `omenctl profile measure` found on Linux (profile-power.md).
+    /// The PL1 the firmware's own profiles use. Put back on every change to
+    /// one of them, so a raised limit does not outlive the mode that raised
+    /// it: the firmware does not reset PL1 with the profile (measured
+    /// 2026-10-09 - after Unleashed, balanced and performance both drew 71 W).
+    ///
+    /// Low-power is 55 like balanced because it is the same firmware profile:
+    /// hp-wmi writes HPCM 0x30 for both, and the low-power cap comes from
+    /// amd-pmf, not from PL1. The numbers are HP's (`PL1DefaultValue`,
+    /// `NbPL1UpperBoundPerformance`) and the ones `omenctl profile measure`
+    /// found before anything here wrote PL1 (profile-power.md).
     pub fn profile_pl1(profile: &str) -> Option<u8> {
         match profile {
-            "balanced" => Some(55),
+            "low-power" | "balanced" | "quiet" | "cool" => Some(55),
             "performance" => Some(60),
             _ => None,
         }
     }
+
+    /// The shared CPU+GPU limit the Hub works from on this platform (its
+    /// `DefaultConcurrentTdp`, logged as `SetConcurrentTdp - value=45`) and
+    /// the most it allows (`TppMaxValue`). Fixed rather than read: what the
+    /// firmware reports follows the profile - 30 W was read on Linux while
+    /// the Hub saw 45 - and an offset added to a moving base is not the
+    /// setting someone chose.
+    pub const TPP_MIN_W: u8 = 45;
+    pub const TPP_MAX_W: u8 = 65;
 }
 
 fn path(file: &str) -> PathBuf {
@@ -319,6 +335,23 @@ mod tests {
         assert_eq!(cfg.unleashed_pl1_w, 71);
         assert_eq!(cfg.unleashed_surface_c, 54);
         cfg.check().unwrap();
+    }
+
+    #[test]
+    fn every_firmware_profile_gets_its_pl1_back() {
+        // Measured: after Unleashed, low-power then balanced then performance
+        // all held its 71 W, because only the direct exit restored anything
+        // and low-power had no value to restore.
+        for p in ["low-power", "balanced", "performance"] {
+            let w = platform::profile_pl1(p).unwrap_or_else(|| panic!("{p} has no PL1"));
+            assert!(w < platform::UNLEASHED_PL1_MAX_W, "{p}");
+        }
+        assert_eq!(platform::profile_pl1(UNLEASHED), None);
+        assert_eq!(
+            platform::TPP_MIN_W + platform::TPP_MAX_OFFSET_W,
+            platform::TPP_MAX_W,
+            "HP's base plus the largest offset is HP's maximum"
+        );
     }
 
     #[test]
