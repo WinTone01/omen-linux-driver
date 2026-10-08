@@ -52,11 +52,14 @@ project fix it" is that it does not. Its EC-handover path writes `0x62`
 take up to two minutes, which is exactly what ours does, minus the stall
 detector that forces full power when the fans stop while hot.
 
-If the handover is ever worth making work here, the route is the firmware's
-own WMI method (`0x10` in group `0x20008`, which owns EC `0x62` bit 0) rather
-than poking the register directly — the vendor software does it that way, and
-a firmware-mediated write is not the same risk as a raw one. It has not been
-tried.
+Why the handover takes two minutes is now understood. hp-wmi's
+"automatic" first renews the firmware's "software is in charge" state (WMI
+`0x10`), then writes a setpoint of zero. The EC obeys that zero until the
+state times out 120 s later. The firmware also has a direct handover, a byte
+the vendor software calls `fanControlByBios`. Both routes go through
+firmware methods rather than raw EC writes, and neither has been measured
+yet. [ec-handover.md](research/ec-handover.md) covers the mechanism, and
+`kernel/omen-kbd-rgb/probe-handover.sh` is the measurement.
 
 ## Living with power-profiles-daemon
 

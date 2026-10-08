@@ -36,14 +36,24 @@ How to reproduce, on a board with the omen_v1_legacy parameters:
   3. echo 2 > pwm1_enable
   4. watch fan1_input / fan2_input and the CPU temperature for 30 s
 
-What I do not know, and would like to hear from anyone with a sibling
-board (8D26, 8E35):
+Why, as far as I can tell: the PWM_MODE_AUTO path first calls
+hp_wmi_get_fan_count_userdefine_trigger() (0x10) - which, as the comment
+above it says, keeps the machine in the user-defined fan state for another
+120 seconds - and then writes 0,0 as the setpoint. The EC obeys the 0 until
+that state times out. The Windows vendor software never returns to
+automatic on this board: it keeps calling 0x10 every 30 s and drives the
+fans itself. Its only handover is the third byte of 0x1A (it calls it
+fanControlByBios), and its platform data turns that off for this board.
 
-  - whether the same happens there, i.e. whether this is 8D24's EC or every
-    omen_v1_legacy board;
-  - whether the Windows vendor software does something besides writing 0
-    when it returns to automatic - a thermal-profile write, or the EC 0x63
-    timer above - that makes the EC resume at once.
+So two possible fixes, which I am measuring before proposing either:
+
+  - in PWM_MODE_AUTO, skip the 0x10 call and the 0,0 write: the last
+    setpoint holds until the EC's own curve takes over;
+  - or send 0x1A with byte 2 = 1, if the EC honours it.
+
+What I do not know, and would like to hear from anyone with a sibling
+board (8D26, 8E35): whether the same happens there, i.e. whether this is
+8D24's EC or every omen_v1_legacy board.
 
 Until then, the userspace daemon I maintain works around it: for a quiet
 machine it stays in manual mode at pwm 0 rather than selecting automatic, so

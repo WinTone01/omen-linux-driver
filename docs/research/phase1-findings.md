@@ -133,6 +133,12 @@ EC[0x51] bit0 (FAMC) = in[2]   // fan manual control
 
 `FAMC` = **Fan Manual Control**.
 
+> **Corrected 2026-10-08.** The name was a guess, and it was backwards. The
+> vendor software's own code calls this byte `fanControlByBios`: 1 hands the
+> fans to the firmware's curve, and 0 keeps software in charge. So "OGH never
+> sets it to 1" means OGH never gives control to the BIOS on this board. That
+> fits §6.4. → [ec-handover.md](ec-handover.md)
+
 `HPCM`'s valid values do not appear as constants in the DSDT — they were found
 by live capture: **48 / 49 / 4**, see §6.1.
 

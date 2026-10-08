@@ -166,6 +166,10 @@ else
   info "no lighting_regs (expected everywhere but 8D24)"
 fi
 [ -e $DEV/lighting_regs ] && no "lighting_regs is still in sysfs"
+if [ -r /sys/kernel/debug/omen-kbd-rgb/fan_state ]; then
+  ok "fan_state (read only; probe-handover.sh is what uses it):"
+  sed 's/^/       /' /sys/kernel/debug/omen-kbd-rgb/fan_state
+fi
 
 say "10. Suspend (optional)"
 info "To check resume: systemctl suspend, wake it, and the colours should be"

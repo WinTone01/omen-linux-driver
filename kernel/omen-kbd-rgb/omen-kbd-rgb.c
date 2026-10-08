@@ -1361,6 +1361,89 @@ static const struct file_operations zone_stats_fops = {
 	.release	= single_release,
 };
 
+/*
+ * The fan handover, for docs/research/ec-handover.md. Research tools, like
+ * the rest of debugfs: nothing depends on them, and they exist on 8D24 only.
+ *
+ * fan_state reads the registers the handover is about. Every one is a read:
+ *
+ *   FAMC  EC 0x51 bit 0  what GM1A's third byte sets. OMEN Gaming Hub calls
+ *                        that byte fanControlByBios - 1 hands the fans to
+ *                        the firmware's own curve.
+ *   OMCC  EC 0x62 bit 0  set by GM10, which the Hub calls every 30 s and
+ *                        hp-wmi every 90 s: "software is driving".
+ *   0x63                 not declared in the DSDT; omen-space treats it as a
+ *                        120 s timer, after which the EC falls back to its
+ *                        own curve. Shown raw.
+ *   SRP1/2 EC 0x34/0x35  the setpoints, hundreds of RPM.
+ *   HPCM  EC 0x95        the thermal profile.
+ *   FFFS  EC 0xEC bit 2  max fan.
+ *
+ * fan_bios_control writes FAMC the way the Hub would: GM1A with the profile
+ * in force and the third byte set, so the firmware method makes the write
+ * and the profile is left as it was.
+ */
+#define EC_FAMC		0x51
+#define EC_OMCC		0x62
+#define EC_OMCC_TIMER	0x63
+#define EC_SRP1		0x34
+#define EC_SRP2		0x35
+#define EC_FAN_FLAGS	0xEC
+
+static int fan_state_show(struct seq_file *s, void *unused)
+{
+	static const struct { const char *name; u8 reg; } regs[] = {
+		{ "FAMC (0x51)", EC_FAMC },
+		{ "OMCC (0x62)", EC_OMCC },
+		{ "0x63", EC_OMCC_TIMER },
+		{ "SRP1 (0x34)", EC_SRP1 },
+		{ "SRP2 (0x35)", EC_SRP2 },
+		{ "HPCM (0x95)", EC_THERMAL_PROFILE },
+		{ "flags (0xEC)", EC_FAN_FLAGS },
+	};
+	u8 v;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(regs); i++) {
+		if (ec_read(regs[i].reg, &v))
+			seq_printf(s, "%-13s ?\n", regs[i].name);
+		else
+			seq_printf(s, "%-13s 0x%02x\n", regs[i].name, v);
+	}
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(fan_state);
+
+static int fan_bios_get(void *data, u64 *val)
+{
+	u8 v;
+	int ret;
+
+	ret = ec_read(EC_FAMC, &v);
+	if (ret)
+		return ret;
+	*val = v & BIT(0);
+	return 0;
+}
+
+static int fan_bios_set(void *data, u64 val)
+{
+	u8 mode[POWER_LIMITS_LEN] = { POWER_KEEP, 0, 0, 0 };
+	int ret;
+
+	if (val > 1)
+		return -EINVAL;
+	ret = ec_read(EC_THERMAL_PROFILE, &mode[1]);
+	if (ret)
+		return ret;
+	mode[2] = val;
+
+	guard(mutex)(&omen_power_lock);
+	return omen_wmi_call(HPWMI_GAMING, OMEN_THERMAL_PROFILE, mode,
+			     sizeof(mode), 0);
+}
+DEFINE_DEBUGFS_ATTRIBUTE(fan_bios_fops, fan_bios_get, fan_bios_set, "%llu\n");
+
 static void omen_debugfs_init(struct omen_rgb *rgb)
 {
 	if (!omen_has_lighting && !dmi_check_system(omen_h2ra_boards))
@@ -1379,6 +1462,9 @@ static void omen_debugfs_init(struct omen_rgb *rgb)
 
 	if (!dmi_check_system(omen_h2ra_boards))
 		return;
+	debugfs_create_file("fan_state", 0400, rgb->debugfs, rgb, &fan_state_fops);
+	debugfs_create_file_unsafe("fan_bios_control", 0600, rgb->debugfs, rgb,
+				   &fan_bios_fops);
 	rgb->h2ra = devm_ioremap(rgb->dev, H2RA_BASE + H2RA_LIGHTING,
 				 H2RA_DUMP_LEN);
 	if (rgb->h2ra)
