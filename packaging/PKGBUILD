@@ -27,22 +27,29 @@ source=()
 
 _root="$startdir/.."
 
+# Cargo reads .cargo/config.toml from the directory it is run in and every
+# parent, not from the manifest's. A checkout under a directory whose config
+# carries another project's [patch] entries would then have cargo rewrite
+# Cargo.lock, which --locked refuses (seen 2026-10-21 under ~/Projects). Run
+# from a neutral directory and point at the manifest instead.
+_cargo() {
+  ( cd / && cargo "$@" --manifest-path "$_root/Cargo.toml" )
+}
+
 prepare() {
-  cd "$_root"
-  cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+  _cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
 }
 
 build() {
-  cd "$_root"
   export RUSTUP_TOOLCHAIN=stable
-  export CARGO_TARGET_DIR=target
-  cargo build --release --frozen
+  export CARGO_TARGET_DIR="$_root/target"
+  _cargo build --release --frozen
 }
 
 check() {
-  cd "$_root"
   export RUSTUP_TOOLCHAIN=stable
-  cargo test --frozen --workspace
+  export CARGO_TARGET_DIR="$_root/target"
+  _cargo test --frozen --workspace
 }
 
 package() {

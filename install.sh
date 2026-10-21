@@ -284,7 +284,10 @@ install_userspace() {
         info "building (this takes a few minutes the first time)"
         local args=(--release)
         (( BUILD_GUI )) || args+=(--workspace --exclude omen-ui)
-        ( cd "$REPO" && cargo build "${args[@]}" ) || die "the build failed"
+        # From / so that a .cargo/config.toml above the checkout (another
+        # project's [patch], say) is not read - see packaging/PKGBUILD.
+        ( cd / && cargo build "${args[@]}" --manifest-path "$REPO/Cargo.toml" ) ||
+            die "the build failed"
         if ( cd "$REPO" && sudo bash packaging/install.sh ); then
             ok "installed"
         else
