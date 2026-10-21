@@ -228,7 +228,7 @@ impl Trigger {
             parts.push(p.clone());
         }
         if let Some(c) = &self.curve {
-            parts.push(format!("{c} curve"));
+            parts.push(crate::curve::rule_curve_label(c));
         } else if let Some(f) = &self.fan {
             parts.push(format!("fan {f}"));
         }

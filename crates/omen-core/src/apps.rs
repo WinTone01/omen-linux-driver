@@ -18,6 +18,8 @@
 //! its first 15 characters; the executable's own basename is checked too, for
 //! the cases where that differs.
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ipc::ControlMode;
@@ -84,7 +86,7 @@ impl AppProfile {
         // The curve says more than "fan curve" does, so it replaces that half
         // rather than being listed next to it.
         if let Some(c) = &self.curve {
-            parts.push(format!("{c} curve"));
+            parts.push(crate::curve::rule_curve_label(c));
         } else if let Some(f) = &self.fan {
             parts.push(format!("fan {f}"));
         }
@@ -129,10 +131,82 @@ pub fn running_processes() -> Vec<String> {
                     names.push(base);
                 }
             }
+            // A Windows game's own name, in full - comm has only the first
+            // fifteen characters of it.
+            if let Some(name) = windows_name(&exe, &dir) {
+                let name = name.to_ascii_lowercase();
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
         }
         let _ = pid;
     }
     names
+}
+
+/// The Windows program a Wine or Proton process is running, if it is one.
+///
+/// Under Wine every Windows program's executable is Wine's own loader -
+/// wine64-preloader, wine-preloader or plain wine, depending on the version -
+/// so /proc/<pid>/exe says "wine64-preloader" for Cyberpunk2077.exe and for
+/// every other game alike. The loader puts the Windows path in argv[0]
+/// (`C:\...\bin\x64\Cyberpunk2077.exe`), and that is the name a person is
+/// looking for.
+fn windows_name(exe: &Path, dir: &Path) -> Option<String> {
+    let loader = exe.file_name()?.to_str()?;
+    if !is_wine_loader(loader) {
+        return None;
+    }
+    let cmdline = std::fs::read(dir.join("cmdline")).ok()?;
+    let argv0 = cmdline.split(|&b| b == 0).next()?;
+    let argv0 = String::from_utf8_lossy(argv0);
+    windows_basename(&argv0)
+}
+
+fn is_wine_loader(name: &str) -> bool {
+    let name = name.trim_end_matches(" (deleted)");
+    matches!(
+        name,
+        "wine" | "wine64" | "wine-preloader" | "wine64-preloader"
+    )
+}
+
+/// `C:\Games\Foo\foo.exe` or `/home/x/foo.exe` -> `foo.exe`; anything that is
+/// not a Windows program -> None.
+fn windows_basename(path: &str) -> Option<String> {
+    let base = path.rsplit(['\\', '/']).next()?.trim();
+    let lower = base.to_ascii_lowercase();
+    (lower.len() > 4 && (lower.ends_with(".exe") || lower.ends_with(".com")))
+        .then(|| base.to_owned())
+}
+
+/// Wine's own processes, and Proton's: running alongside every Windows game,
+/// so they are listed after the things a person is looking for, like the
+/// desktop's plumbing is.
+fn is_wine_plumbing(name: &str) -> bool {
+    const PLUMBING: &[&str] = &[
+        "wineserver",
+        "services.exe",
+        "winedevice.exe",
+        "plugplay.exe",
+        "svchost.exe",
+        "explorer.exe",
+        "rpcss.exe",
+        "tabtip.exe",
+        "conhost.exe",
+        "rundll32.exe",
+        "start.exe",
+        "steam.exe",
+        "wineboot.exe",
+        "winemenubuilder.exe",
+        "mscorsvw.exe",
+        "pv-adverb",
+        "reaper",
+        "srt-bwrap",
+    ];
+    let lower = name.to_ascii_lowercase();
+    PLUMBING.contains(&lower.as_str()) || is_wine_loader(&lower)
 }
 
 /// The programs this user is running, as names you could put in a profile.
@@ -188,12 +262,15 @@ pub fn user_programs() -> Vec<String> {
         };
         // Deleted binaries come back as "thing (deleted)".
         let name = name.trim_end_matches(" (deleted)").to_owned();
+        // A Windows game is named after itself, not after Wine's loader.
+        let name = windows_name(&exe, &dir).unwrap_or(name);
         if name.is_empty() || names.iter().any(|(_, n)| *n == name) {
             continue;
         }
-        let system = ["/usr/", "/bin/", "/sbin/"]
-            .iter()
-            .any(|prefix| exe.to_string_lossy().starts_with(prefix));
+        let system = is_wine_plumbing(&name)
+            || ["/usr/", "/bin/", "/sbin/"]
+                .iter()
+                .any(|prefix| exe.to_string_lossy().starts_with(prefix));
         names.push((system, name));
     }
     names.sort_by_key(|(system, name)| (*system, name.to_ascii_lowercase()));
@@ -268,6 +345,45 @@ mod tests {
             assert!(!name.contains('/'), "{name} is a path, not a name");
             assert!(!name.ends_with("(deleted)"), "{name}");
         }
+    }
+
+    #[test]
+    fn a_windows_game_is_named_after_itself_not_after_wine() {
+        assert_eq!(
+            windows_basename(r"C:\Program Files\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe")
+                .as_deref(),
+            Some("Cyberpunk2077.exe")
+        );
+        assert_eq!(
+            windows_basename("Z:\\home\\me\\game.EXE").as_deref(),
+            Some("game.EXE")
+        );
+        assert_eq!(
+            windows_basename("/home/me/.steam/x/Game.exe").as_deref(),
+            Some("Game.exe")
+        );
+        // Wine's loader started on something that is not a program.
+        assert_eq!(windows_basename("/usr/bin/wine64-preloader"), None);
+        assert_eq!(windows_basename(".exe"), None);
+        assert!(is_wine_loader("wine64-preloader"));
+        assert!(!is_wine_loader("wineserver"));
+    }
+
+    #[test]
+    fn the_full_windows_name_matches_where_comm_has_fifteen_characters() {
+        // comm for Cyberpunk2077.exe is "Cyberpunk2077.e"; the profile
+        // matches either that or the full name taken from argv[0].
+        let p = profile("Cyberpunk2077.exe");
+        assert!(p.matches("cyberpunk2077.e"));
+        assert!(p.matches("cyberpunk2077.exe"));
+    }
+
+    #[test]
+    fn wine_plumbing_is_not_mistaken_for_the_game() {
+        for name in ["wineserver", "services.exe", "explorer.exe", "steam.exe"] {
+            assert!(is_wine_plumbing(name), "{name}");
+        }
+        assert!(!is_wine_plumbing("Cyberpunk2077.exe"));
     }
 
     #[test]

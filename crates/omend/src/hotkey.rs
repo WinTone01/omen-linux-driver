@@ -165,6 +165,7 @@ fn cycle_profile() {
         .map(|i| (i + 1) % choices.len())
         .unwrap_or(0);
 
+    crate::shared::note_profile_asked();
     match pp.set(&choices[next]) {
         Ok(()) => info!("OMEN key: profile {current} -> {}", choices[next]),
         Err(e) => warn!("OMEN key: could not change the profile: {e}"),

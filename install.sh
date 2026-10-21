@@ -305,6 +305,17 @@ enable_service() {
         info "systemctl status omend    # and: journalctl -u omend -b"
     fi
 
+    # The refresh rate the power and application rules ask for belongs to the
+    # compositor, so it is applied from inside the session. Without this the
+    # rules' Hz silently did nothing.
+    if systemctl --user daemon-reload >/dev/null 2>&1 &&
+       systemctl --user enable --now omen-session >/dev/null 2>&1; then
+        ok "omen-session is running in your session (refresh rate rules)"
+    else
+        warn "omen-session could not be enabled - refresh rate rules will not apply"
+        info "systemctl --user enable --now omen-session"
+    fi
+
     if id -nG "$USER" | tr ' ' '\n' | grep -qx omen; then
         ok "you are in the 'omen' group"
     else
@@ -322,6 +333,7 @@ uninstall() {
     else
         info "was not running"
     fi
+    systemctl --user disable --now omen-session >/dev/null 2>&1 || true
 
     step "Removing packages"
     if have pacman; then

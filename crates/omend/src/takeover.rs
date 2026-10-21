@@ -231,7 +231,7 @@ fn summary(want: &Want) -> String {
         parts.push(p.clone());
     }
     if let Some(c) = &want.curve {
-        parts.push(format!("{c} curve"));
+        parts.push(omen_core::curve::rule_curve_label(c));
     } else if let Some(f) = &want.fan {
         parts.push(format!("fan {f}"));
     }

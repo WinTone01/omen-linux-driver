@@ -436,6 +436,25 @@ pub const PRESETS: &[(&str, &str)] = &[
     ("performance", "Ramps earlier and ends at full speed"),
 ];
 
+/// Not a curve but a name a rule can give in place of one: OMEN Gaming Hub's
+/// own per-mode tables (hubfan.rs) drive the fans while the rule is in
+/// force, whatever `fan.algorithm` says.
+pub const HUB: &str = "hub";
+
+/// Whether a rule may name this as its curve: a preset, or the Hub's tables.
+pub fn is_rule_curve(name: &str) -> bool {
+    name.trim().eq_ignore_ascii_case(HUB) || preset(name).is_some()
+}
+
+/// How a rule's curve reads in a one-line summary.
+pub fn rule_curve_label(name: &str) -> String {
+    if name.trim().eq_ignore_ascii_case(HUB) {
+        "OMEN Gaming Hub fan".into()
+    } else {
+        format!("{name} curve")
+    }
+}
+
 pub fn preset(name: &str) -> Option<Curve> {
     let p = |temp_c: f32, rpm: u32| Point { temp_c, rpm };
 
@@ -507,6 +526,12 @@ mod tests {
     #[test]
     fn an_unknown_preset_is_none() {
         assert!(preset("loud").is_none());
+        // The Hub's tables are a rule's choice, not a curve to draw.
+        assert!(preset(HUB).is_none());
+        assert!(is_rule_curve("hub") && is_rule_curve("Hub") && is_rule_curve("quiet"));
+        assert!(!is_rule_curve("loud"));
+        assert_eq!(rule_curve_label("hub"), "OMEN Gaming Hub fan");
+        assert_eq!(rule_curve_label("quiet"), "quiet curve");
     }
 
     #[test]

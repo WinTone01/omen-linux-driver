@@ -264,14 +264,15 @@ fn parse_curve_arg(raw: &str) -> Result<Option<String>> {
     let Some(name) = raw.strip_prefix("curve:") else {
         return Ok(None);
     };
-    if omen_core::curve::preset(name).is_none() {
+    if !omen_core::curve::is_rule_curve(name) {
         bail!(
-            "unknown curve {name:?}; presets are {}",
+            "unknown curve {name:?}; presets are {}, or {} for OMEN Gaming Hub's tables",
             omen_core::curve::PRESETS
                 .iter()
                 .map(|(n, _)| *n)
                 .collect::<Vec<_>>()
-                .join(" / ")
+                .join(" / "),
+            omen_core::curve::HUB
         );
     }
     Ok(Some(name.to_owned()))

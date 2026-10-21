@@ -1140,7 +1140,7 @@ function renderNow(s) {
   } else if (d) {
     fan = t("no fan control");
   }
-  if (d?.curve_preset) fan += ` (${t(d.curve_preset)})`;
+  if (d?.curve_preset) fan += ` (${d.curve_preset === "hub" ? "OMEN Gaming Hub" : t(d.curve_preset)})`;
   $("#now-fan").textContent = fan;
 
   const cpu = namedTemp(d, "cpu") ?? d?.driver_temp_c;
@@ -1588,7 +1588,7 @@ function appSummary(app) {
   if (app.profile) parts.push(app.profile);
   // The curve says more than "fan curve" does, so it replaces that half
   // rather than being listed next to it.
-  if (app.curve) parts.push(`${t(app.curve)} ${t("curve")}`);
+  if (app.curve) parts.push(curveLabel(app.curve));
   else if (app.fan) parts.push(fanLabel(app.fan));
   if (app.refresh_hz) parts.push(`${app.refresh_hz} Hz`);
   return parts.join(" · ") || t("nothing to apply");
@@ -2583,6 +2583,7 @@ const FAN_CHOICES = [
   ["curve:quiet", "fan: quiet curve"],
   ["curve:default", "fan: default curve"],
   ["curve:performance", "fan: performance curve"],
+  ["curve:hub", "fan: OMEN Gaming Hub"],
   ["max", "fan: max"],
   ["2400", "fan: 2400 RPM"],
   ["3000", "fan: 3000 RPM"],
@@ -2606,6 +2607,11 @@ function refreshFromValue(v) {
 }
 
 /* A rule's fan + curve as one select value, and back. */
+/* A rule's curve in a sentence: "performance curve", or the Hub's tables. */
+function curveLabel(name) {
+  return name === "hub" ? t("OMEN Gaming Hub fan") : `${t(name)} ${t("curve")}`;
+}
+
 function fanRuleValue(rule) {
   if (rule?.curve) return `curve:${rule.curve}`;
   return fanValue(rule?.fan);
@@ -3313,10 +3319,12 @@ async function refresh() {
     drawCurve(state.curve, state.interpolation, d?.driver_temp_c, d?.target_rpm);
   }
   const forced = state.daemon?.curve_preset;
+  const hubRule = forced === "hub";
   $("#curve-forced").hidden = !forced;
   if (forced) {
-    $("#curve-forced").textContent =
-      `${t("A rule is running the")} ${t(forced)} ${t("curve; this is the configured one.")}`;
+    $("#curve-forced").textContent = hubRule
+      ? t("A rule is running OMEN Gaming Hub's tables; this is the configured curve.")
+      : `${t("A rule is running the")} ${t(forced)} ${t("curve; this is the configured one.")}`;
   }
   $("#curve-note").textContent = t(
     state.interpolation === "linear"

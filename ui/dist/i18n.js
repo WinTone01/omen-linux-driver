@@ -516,6 +516,10 @@ Object.assign(I18N.tr, {
   "fan: quiet curve": "fan: sessiz eğri",
   "fan: default curve": "fan: varsayılan eğri",
   "fan: performance curve": "fan: performans eğrisi",
+  "fan: OMEN Gaming Hub": "fan: OMEN Gaming Hub",
+  "OMEN Gaming Hub fan": "OMEN Gaming Hub fanı",
+  "A rule is running OMEN Gaming Hub's tables; this is the configured curve.":
+    "Bir kural OMEN Gaming Hub tablolarını çalıştırıyor; bu yapılandırılmış eğri.",
   "quiet": "sessiz",
   "default": "varsayılan",
   "performance": "performans",

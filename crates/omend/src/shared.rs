@@ -13,10 +13,24 @@
 //! the loop to finish a tick and returns the mode that was actually applied.
 //! That also makes the reply text honest: "mode: manual", not "requested".
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use omen_core::ipc::{ControlMode, Snapshot};
+
+/// Someone chose a profile - through the socket or the OMEN key - as opposed
+/// to another program writing platform_profile. Set before the write, so a
+/// loop that sees the new profile also sees this. See Daemon::watch_profile.
+static PROFILE_ASKED: AtomicBool = AtomicBool::new(false);
+
+pub fn note_profile_asked() {
+    PROFILE_ASKED.store(true, Ordering::SeqCst);
+}
+
+pub fn take_profile_asked() -> bool {
+    PROFILE_ASKED.swap(false, Ordering::SeqCst)
+}
 
 #[derive(Debug, Default)]
 pub struct Inner {

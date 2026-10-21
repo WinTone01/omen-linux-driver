@@ -462,6 +462,10 @@ struct Runtime {
     /// last hot enough for the firmware to reset it. See watch_profile.
     last_profile: Option<String>,
     hot_since: Option<Instant>,
+    /// The profile a power rule just selected, and when. Another program
+    /// writing over it soon afterwards gets it put back once - see
+    /// watch_profile.
+    power_hold: Option<(String, Instant)>,
     /// How many times the firmware has been caught resetting the profile.
     /// Reported rather than only logged: it is the kind of thing you want a
     /// number for before believing it happens.
@@ -536,6 +540,7 @@ impl Runtime {
             caps: None,
             last_profile: None,
             hot_since: None,
+            power_hold: None,
             profile_resets: 0,
             battery: omen_core::battery::Battery::discover(),
             // Checked on the first tick rather than one interval in.
@@ -943,11 +948,10 @@ impl Runtime {
 
         if let Some(want) = &rule.profile {
             match PlatformProfile::discover() {
-                Some(pp) if pp.choices().contains(want) => {
-                    if let Err(e) = pp.set(want) {
-                        self.problem(format!("could not set the {want} profile: {e}"));
-                    }
-                }
+                Some(pp) if pp.choices().contains(want) => match pp.set(want) {
+                    Ok(()) => self.power_hold = Some((want.clone(), Instant::now())),
+                    Err(e) => self.problem(format!("could not set the {want} profile: {e}")),
+                },
                 Some(pp) => warn!("{want:?} is not one of {}", pp.choices().join(" ")),
                 None => warn!("no platform_profile to set"),
             }
@@ -1152,6 +1156,10 @@ impl Runtime {
             }
         }
 
+        // How long after a power rule selects a profile a change nobody asked
+        // for is taken for another program restoring its own.
+        const HOLD_WINDOW: Duration = Duration::from_secs(90);
+
         let Some(pp) = PlatformProfile::discover() else {
             return;
         };
@@ -1163,6 +1171,34 @@ impl Runtime {
         };
         if now == before {
             return;
+        }
+        // Taken only once the change is seen: the flag is set before the
+        // write, so a change asked for through us always finds it here.
+        let asked = shared::take_profile_asked();
+
+        // power-profiles-daemon starts after this one and writes the profile
+        // it saved at shutdown - often the battery's, the last time the
+        // machine was unplugged (seen 2026-10-21: performance on mains at
+        // 21:32:24, low-power from PPD at 21:32:33). That is not a choice
+        // anyone made now, so the power rule's profile goes back, once. A
+        // person changing it through us, or an application or trigger rule,
+        // releases the hold.
+        if asked || self.active_rule().is_some() || self.game.active().is_some() {
+            self.power_hold = None;
+        }
+        if let Some((want, at)) = self.power_hold.take() {
+            if at.elapsed() < HOLD_WINDOW && before == want && now != want && !self.read_only {
+                info!(
+                    "the profile went {want} -> {now} {}s after the power rule chose it, \
+                     without being asked for here - taken for another program restoring \
+                     its own; {want} put back",
+                    at.elapsed().as_secs()
+                );
+                match pp.set(&want) {
+                    Ok(()) => return,
+                    Err(e) => self.problem(format!("could not put the {want} profile back: {e}")),
+                }
+            }
         }
 
         let recently_hot = self
@@ -1330,6 +1366,17 @@ impl Runtime {
     /// the editor shows.
     fn use_curve(&mut self, preset: Option<&str>) {
         let curve = match preset {
+            // The Hub's tables in place of a curve. The governor is left as
+            // it is; it drives again when the rule ends.
+            Some(name) if name.eq_ignore_ascii_case(omen_core::curve::HUB) => {
+                info!("fan -> OMEN Gaming Hub's tables, while the rule holds");
+                self.applied = Applied::Unknown;
+                // Fresh tables: averages left over from an earlier run would
+                // describe a machine that is no longer there.
+                self.hub = None;
+                self.curve_preset = Some(omen_core::curve::HUB.to_owned());
+                return;
+            }
             Some(name) => match omen_core::curve::preset(name) {
                 Some(curve) => {
                     info!("fan curve -> {name}");
@@ -1534,7 +1581,7 @@ impl Runtime {
         }
 
         match self.mode {
-            ControlMode::Curve if self.cfg.fan.algorithm == FanAlgorithm::Hub => {
+            ControlMode::Curve if self.algorithm() == FanAlgorithm::Hub => {
                 self.drive_hub();
             }
             ControlMode::Curve => {
@@ -1550,6 +1597,20 @@ impl Runtime {
             ControlMode::Manual { rpm } => self.apply(Applied::Rpm(rpm), "manual"),
             ControlMode::Auto => self.apply(Applied::Auto, "manual"),
             ControlMode::Max => self.apply(Applied::Max, "manual"),
+        }
+    }
+
+    /// What decides the setpoint now: the configured algorithm, unless a rule
+    /// in force asked for the Hub's tables in place of a curve.
+    fn algorithm(&self) -> FanAlgorithm {
+        if self
+            .curve_preset
+            .as_deref()
+            .is_some_and(|c| c.eq_ignore_ascii_case(omen_core::curve::HUB))
+        {
+            FanAlgorithm::Hub
+        } else {
+            self.cfg.fan.algorithm
         }
     }
 
@@ -1800,8 +1861,8 @@ impl Runtime {
                 epp: omen_core::epp::current(),
                 epp_owner: self.power.epp_owner().map(str::to_owned),
             }),
-            fan_algorithm: Some(self.cfg.fan.algorithm.to_string()),
-            hub_tables: (self.cfg.fan.algorithm == FanAlgorithm::Hub)
+            fan_algorithm: Some(self.algorithm().to_string()),
+            hub_tables: (self.algorithm() == FanAlgorithm::Hub)
                 .then(|| self.hub.as_ref().map(|h| h.set().name.to_owned()))
                 .flatten(),
             cpu_average_c: self.hub.as_ref().and_then(|h| h.cpu_average()),

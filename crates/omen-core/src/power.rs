@@ -57,7 +57,7 @@ impl PowerRule {
         // The curve says more than "fan curve" does, so it replaces that half
         // rather than being listed next to it.
         if let Some(c) = &self.curve {
-            parts.push(format!("{c} curve"));
+            parts.push(crate::curve::rule_curve_label(c));
         } else if let Some(f) = &self.fan {
             parts.push(format!("fan {f}"));
         }

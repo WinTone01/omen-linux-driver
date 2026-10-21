@@ -223,6 +223,7 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
                     }
                 }
             }
+            crate::shared::note_profile_asked();
             match pp.set(&profile) {
                 Ok(()) => {
                     info!("profile -> {profile}");

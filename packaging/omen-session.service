@@ -3,7 +3,7 @@
 # refresh rate belongs to the compositor, which the system service cannot
 # reach - so this runs as you, inside the session.
 #
-# Not enabled by default. To use it:
+# install.sh enables it for the user who runs it. By hand:
 #   systemctl --user enable --now omen-session
 [Unit]
 Description=omen-control session helper (refresh rate rules)
