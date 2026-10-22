@@ -1092,11 +1092,18 @@ impl Runtime {
             profile: profile.as_deref(),
             on_ac: self.on_ac,
             battery: omen_core::power::battery_percent(),
+            discharging: omen_core::power::battery_discharging(),
             surface: self.thermal.surface(),
             read_only: self.read_only,
         });
         for what in outcome.problems {
             self.problem(what);
+        }
+        if outcome.reapply_boost {
+            // The palm-rest limit put back what the GPU had before it, which
+            // after a profile change is the old profile's: set this one's
+            // again on the next tick.
+            self.boost_for = None;
         }
         if outcome.changed_profile {
             // Ours, not the firmware's: watch_profile must not put it back.
@@ -1858,6 +1865,7 @@ impl Runtime {
                 tpp_base_w: self.power.tpp_base(),
                 surface_c: self.thermal.surface(),
                 surface_hot: self.power.surface_hot(),
+                battery_drain: self.power.battery_drain(),
                 epp: omen_core::epp::current(),
                 epp_owner: self.power.epp_owner().map(str::to_owned),
             }),

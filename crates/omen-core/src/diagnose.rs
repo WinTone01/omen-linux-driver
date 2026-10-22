@@ -945,6 +945,29 @@ fn power(snapshot: &DaemonView) -> Section {
         ),
     });
 
+    // The adapter, as the firmware judges it. Only worth a line when it is
+    // not the one the machine needs: on one that is not, the loops below
+    // take PL1 down as soon as the battery starts to drain.
+    if let Some(state) = crate::power::adapter() {
+        checks.push(match state.as_str() {
+            "below" | "faulty" => Check::new(
+                "adapter",
+                "Power adapter",
+                Verdict::Warn,
+                if state == "below" {
+                    "the firmware reports it as below the machine's requirement"
+                } else {
+                    "the firmware reports it as not functioning"
+                },
+            )
+            .with_fix(
+                "Use the adapter the machine came with. On a weaker one the battery drains \
+                 under load even plugged in, and omend lowers PL1 to slow that down.",
+            ),
+            other => Check::new("adapter", "Power adapter", Verdict::Ok, other.to_string()),
+        });
+    }
+
     // The surface sensor, where the module would publish it.
     if limits_here {
         let surface = Thermal::discover().ok().and_then(|t| t.surface());
@@ -1086,12 +1109,25 @@ fn power(snapshot: &DaemonView) -> Section {
     // (ec-handover.md). Only 8D24 was measured, so only 8D24 is judged.
     if board == "8D24" && crate::fan::Fan::discover(1800, 4800).is_ok() {
         let title = "Handing the fans to the EC";
-        checks.push(if crate::fan::auto_hands_over() {
+        checks.push(if crate::fan::hp_wmi_fixes() >= crate::fan::HP_WMI_FIXES {
             Check::new(
                 "ec_handover",
                 title,
                 Verdict::Ok,
-                "automatic mode gives the fans to the EC's curve within seconds",
+                "automatic mode gives the fans to the EC's curve within seconds, and a \
+                 setpoint of 0 stops them",
+            )
+        } else if crate::fan::auto_hands_over() {
+            Check::new(
+                "ec_handover",
+                title,
+                Verdict::Warn,
+                "an older build of hp-wmi: automatic mode works, but a setpoint of 0 holds \
+                 the fans at 1800 RPM and a power change in performance writes a 0 W PL1",
+            )
+            .with_fix(
+                "./install.sh rebuilds hp-wmi with the current changes; then \
+                 sudo modprobe -r hp_wmi && sudo modprobe hp_wmi",
             )
         } else {
             Check::new(

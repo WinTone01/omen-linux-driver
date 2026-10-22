@@ -468,6 +468,24 @@ pub mod boost {
         Ok(())
     }
 
+    /// The GPU's slowdown temperature as the firmware was last given it, °C.
+    /// `None` without omen-kbd-rgb 0.4.0 or an NVIDIA GPU.
+    pub fn slowdown() -> Option<u8> {
+        std::fs::read_to_string(path("gpu_slowdown_c"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    }
+
+    /// Sets it. The Hub lowers it to throttle the GPU while the palm rest is
+    /// too hot in balanced, and puts it back with every profile.
+    pub fn set_slowdown(celsius: u8) -> crate::error::Result<()> {
+        let p = path("gpu_slowdown_c");
+        std::fs::write(&p, celsius.to_string())
+            .map_err(|source| crate::Error::Write { path: p, source })
+    }
+
     /// What the vendor software sets for each profile, as hp-wmi encodes it
     /// for the Victus S boards: cTGP only in performance, Dynamic Boost in
     /// everything but low-power.

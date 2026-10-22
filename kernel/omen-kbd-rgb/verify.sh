@@ -173,6 +173,21 @@ if [ -e $DEV/fan_table ]; then
 else
   no "no fan_table - not an OMEN or Victus by DMI, or a module older than 0.4.0"
 fi
+if [ -e $DEV/adapter ]; then
+  A=$(cat $DEV/adapter 2>/dev/null) && ok "adapter: $A (BIOS read 0x0F)" || no "adapter did not read"
+  case "$A" in ok|battery|usb-c) ;; *) info "the firmware does not count this adapter as enough" ;; esac
+else
+  no "no adapter attribute - a module older than 0.4.0"
+fi
+if [ -e $DEV/gpu_slowdown_c ]; then
+  S=$(cat $DEV/gpu_slowdown_c)
+  ok "GPU slowdown temperature $S C (87 unless the palm rest is too hot in balanced)"
+  if echo "$S" > $DEV/gpu_slowdown_c && [ "$(cat $DEV/gpu_slowdown_c)" = "$S" ]; then
+    ok "slowdown temperature written back through GM22"
+  else
+    no "writing the slowdown temperature back failed"
+  fi
+fi
 if [ -e $DEV/gpu_ppab ]; then
   # Same value back: GM22 now goes out as {cTGP, PPAB, 1, 87}, as the Hub sends it.
   P=$(cat $DEV/gpu_ppab)

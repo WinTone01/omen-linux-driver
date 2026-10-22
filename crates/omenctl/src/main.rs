@@ -1635,11 +1635,17 @@ fn power_limits(args: &[String], snap: &omen_core::ipc::Snapshot) -> Result<()> 
                     format!(
                         "{c:.0} C{}",
                         if state.surface_hot {
-                            "  - Unleashed is holding PL1 down"
+                            "  - too hot: PL1 and the GPU held back"
                         } else {
                             ""
                         }
                     ),
+                );
+            }
+            if state.battery_drain {
+                field(
+                    "battery",
+                    "draining on mains - PL1 held down until the adapter keeps up",
                 );
             }
             println!();

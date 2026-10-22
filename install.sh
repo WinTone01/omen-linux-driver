@@ -206,21 +206,27 @@ hp_wmi_is_ours() {
     modinfo -n hp_wmi 2>/dev/null | grep -q '/updates/'
 }
 
-# Whether the loaded hp_wmi has the automatic-mode fix (fix-auto.sh), which
-# only matters on 8D24: without it "automatic" stops the fans for two minutes.
+# Whether the loaded hp_wmi has the current 8D24 changes (fix-auto.sh), which
+# only matter on 8D24: without them "automatic" stops the fans for two
+# minutes, a pwm of 0 cannot stop them, and a power change in performance
+# writes a 0 W PL1. Revision 2 is the one that does all of it; a build with
+# only firmware_auto is revision 1.
+OMEN_FIXES=2
 hp_wmi_needs_auto_fix() {
-    [ "$(cat /sys/class/dmi/id/board_name 2>/dev/null)" = 8D24 ] &&
-        [ ! -e /sys/module/hp_wmi/parameters/firmware_auto ]
+    [ "$(cat /sys/class/dmi/id/board_name 2>/dev/null)" = 8D24 ] || return 1
+    local rev
+    rev=$(cat /sys/module/hp_wmi/parameters/omen_fixes 2>/dev/null || echo 0)
+    [ "$rev" -lt "$OMEN_FIXES" ]
 }
 
 install_hp_wmi() {
     if have_pwm1 && hp_wmi_needs_auto_fix; then
-        info "the loaded hp-wmi stops the fans in automatic mode; rebuilding it with the fix"
+        info "the loaded hp-wmi lacks the current 8D24 changes; rebuilding it"
         local rc=0
         bash "$REPO/kernel/hp-wmi-8d24/build-module.sh" --install --board auto || rc=$?
         case $rc in
             0) ok "hp-wmi rebuilt; it takes effect after: sudo modprobe -r hp_wmi && sudo modprobe hp_wmi" ;;
-            *) warn "could not rebuild hp-wmi with the automatic-mode fix; fan control still works" ;;
+            *) warn "could not rebuild hp-wmi with the 8D24 changes; fan control still works" ;;
         esac
         return 0
     fi

@@ -3175,6 +3175,7 @@ function renderPower(s) {
   if (p.tpp_w != null) parts.push(`${t("shared")} ${p.tpp_w} W`);
   if (p.surface_c != null) parts.push(`${t("surface")} ${Math.round(p.surface_c)} °C`);
   if (p.surface_hot) parts.push(t("held down for the surface"));
+  if (p.battery_drain) parts.push(t("held down for the battery"));
   $("#power-limits-note").textContent = parts.join(" · ");
 
   // Not while somebody is dragging: the poll would yank the slider back.

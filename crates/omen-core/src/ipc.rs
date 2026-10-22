@@ -398,9 +398,14 @@ pub struct PowerState {
     /// The shared limit the firmware chose itself, read at startup - what
     /// the offsets are added to.
     pub tpp_base_w: Option<u8>,
-    /// The palm rest, and whether Unleashed is holding PL1 down for it.
+    /// The palm rest, and whether the GPU is being held back for it (in any
+    /// profile, on mains - see omend's powerctl).
     pub surface_c: Option<f32>,
     pub surface_hot: bool,
+    /// PL1 is being held under the profile's because the battery drains
+    /// with the charger in.
+    #[serde(default)]
+    pub battery_drain: bool,
     /// The EPP hint in force, and what owns it when it is not us.
     pub epp: Option<String>,
     pub epp_owner: Option<String>,

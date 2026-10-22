@@ -338,6 +338,7 @@ const I18N = {
     "shared": "ortak",
     "surface": "yüzey",
     "held down for the surface": "yüzey için düşürüldü",
+    "held down for the battery": "batarya için düşürüldü",
     "kept in step by": "eşitleyen:",
     "not available": "yok",
     "What decides the speed": "Hızı ne belirliyor",

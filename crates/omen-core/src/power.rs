@@ -134,6 +134,29 @@ pub fn battery_percent() -> Option<u8> {
     None
 }
 
+/// What the firmware says of the adapter in use, through omen-kbd-rgb 0.4.0:
+/// "ok", "below" (under the machine's requirement), "battery", "faulty",
+/// "usb-c" or "unsupported". `None` without the module.
+pub fn adapter() -> Option<String> {
+    read(Path::new("/sys/devices/platform/omen-kbd-rgb/adapter"))
+}
+
+/// Whether the battery is discharging - on mains, the sign that the adapter
+/// is not keeping up with the load. `None` when there is no battery.
+pub fn battery_discharging() -> Option<bool> {
+    let entries = std::fs::read_dir(SUPPLY_DIR).ok()?;
+    for entry in entries.flatten() {
+        let dir: PathBuf = entry.path();
+        if read(&dir.join("type")).as_deref() != Some("Battery") {
+            continue;
+        }
+        if let Some(status) = read(&dir.join("status")) {
+            return Some(status == "Discharging");
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

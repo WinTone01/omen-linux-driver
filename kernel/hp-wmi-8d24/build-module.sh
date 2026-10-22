@@ -121,16 +121,18 @@ case $ADD_RC in
   *) die "the board entry could not be added" ;;
 esac
 
-say "3b. Automatic fan mode"
+say "3b. 8D24's own semantics"
 # On 8D24 hp-wmi's "automatic" stops the fans for two minutes; this makes it
-# hand them to the EC instead (docs/research/ec-handover.md). The change is
-# guarded by the board at run time, so building it for another board leaves
-# that board's behaviour as upstream has it.
+# hand them to the EC instead (docs/research/ec-handover.md). It also lets a
+# pwm of 0 stop the fans, skips a 0 W PL1 write on a power change, and reads
+# Unleashed as performance - see fix-auto.sh. Every change is guarded by the
+# board at run time, so building it for another board leaves that board's
+# behaviour as upstream has it.
 FIX_RC=0
 bash "$HERE/fix-auto.sh" "$WORK/hp-wmi.c" || FIX_RC=$?
 case $FIX_RC in
   0|3) ;;
-  *) echo "  WARNING: the automatic-mode fix did not apply to this hp-wmi.c; building without it" ;;
+  *) echo "  WARNING: the 8D24 changes did not apply to this hp-wmi.c; building without them" ;;
 esac
 
 say "4. Building"

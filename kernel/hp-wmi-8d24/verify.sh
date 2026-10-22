@@ -37,6 +37,17 @@ if [ -d /sys/devices/platform/hp-wmi ]; then
 else
   no "/sys/devices/platform/hp-wmi is missing"
 fi
+REV=$(cat /sys/module/hp_wmi/parameters/omen_fixes 2>/dev/null || echo 0)
+if [ "$REV" -ge 2 ]; then
+  ok "8D24 changes, revision $REV: automatic hands over, pwm 0 stops the fans, no 0 W PL1, Unleashed reads as performance"
+elif [ -e /sys/module/hp_wmi/parameters/firmware_auto ]; then
+  no "an older build (automatic-mode fix only) - ./install.sh rebuilds it"
+else
+  info "stock hp-wmi, without this project's 8D24 changes"
+fi
+[ -e /sys/class/hwmon ] && for h in /sys/class/hwmon/hwmon*; do
+  [ "$(cat $h/name 2>/dev/null)" = hp ] && [ -e $h/pwm2 ] && info "pwm2 present: the second fan is set on its own (7.3+)"
+done
 info "--- dmesg ---"
 dmesg 2>/dev/null | grep -i 'hp.wmi' | tail -10 | sed 's/^/       /' || info "(could not read dmesg, may need root)"
 

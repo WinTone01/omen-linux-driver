@@ -876,12 +876,32 @@ does:
   (`power.unleashed_tpp_offset_w`).
 * **The palm rest is held under 54 °C** (`power.unleashed_surface_c`, 44-54).
   Every 30 s: at the limit, PL1 drops 5 W and Dynamic Boost goes off. Below
-  the limit and cooling, PL1 is given back.
+  the limit and cooling, PL1 is given back; five degrees under it, all of it
+  at once. PL1 does not go below 30 W for it.
 
 On battery, Unleashed needs 40 % charge and performance needs 10 %. Below
 that, the mode steps down by itself (`power.min_battery_*`, 0 turns a floor
 off). A request for a mode the battery would immediately take back is refused
 with the reason.
+
+### The palm rest and the battery, in every profile
+
+On mains the Hub runs two more loops whatever the mode, and omend does too:
+
+* **The palm rest.** Not only Unleashed: balanced and low-power hold it
+  under 52 °C, performance under 54 °C. Rising past 49 °C (50 °C in
+  performance) costs PL1 5 W a degree; at the limit it costs 5 W every 30 s
+  and the GPU is held back - Dynamic Boost off in performance, and in
+  balanced cTGP and Dynamic Boost off and the GPU's slowdown temperature down
+  from 87 to 75 °C. At 43 °C (44 °C) it all comes back. These are HP's
+  numbers for this chassis; the Hub's logs never saw the palm rest above
+  45 °C, so this is protection rather than something you will see often.
+* **The battery.** A battery that discharges with the charger in means the
+  adapter is not keeping up. Below 90 % (60 % in Unleashed - 100 minus the
+  battery floors above), PL1 comes down a watt a second, to 35 W at the
+  least, and climbs back when the battery stops draining. `omenctl power
+  limits` says when this is happening, and `omenctl doctor` says when the
+  firmware does not count the adapter as enough.
 
 ### The surface temperature
 
@@ -917,7 +937,10 @@ actually runs in Auto is different:
 * The CPU reading is smoothed first, so a two-second spike does not move the
   fans.
 
-Balanced keeps the fans stopped until the smoothed CPU reaches 68 °C.
+Balanced keeps the fans stopped until the smoothed CPU reaches 68 °C, and
+has the Hub's idle state on top: once the CPU average is under 62 °C, the
+GPU under 49 and the palm rest under 36, the fans stay off until one of them
+reaches 74, 58 or 37 - so a palm rest sitting at 36 °C does not toggle them.
 Performance never stops them. One rule is added on top of HP's tables: at
 `safety.stall_temp_c`, the fans are never left stopped while the average
 catches up. Otherwise the stall detector would fire, and it would be right
@@ -928,9 +951,16 @@ the firmware's fan table: on 8D24 it is two or three steps below the first
 at low speeds and two or three above from 2900 RPM up. hp-wmi up to 7.2 can
 only offset it by the table's first row, 200 RPM below, everywhere. From 7.3
 hp-wmi has `pwm2`, and omend sets it the Hub's way from omen-kbd-rgb's
-`fan_table` (0.4.0). `omenctl doctor` says which of the two is in use. One
-thing 7.3 takes away: it clamps every setpoint to the table's lowest speed,
-so "fans off" holds them at 1800 RPM there.
+`fan_table` (0.4.0). `omenctl doctor` says which of the two is in use.
+
+"Fans off" needs the hp-wmi this project builds. Stock hp-wmi, 7.2 and 7.3
+alike, clamps every setpoint to the fan table's lowest speed, so a setpoint
+of 0 holds the fans at 1800 RPM; the build here passes 0 through on 8D24 and
+they stop, as they do under the Hub. The same build reads Unleashed as
+performance (stock hp-wmi takes it for an error, and loaded while Unleashed
+is on it registers no platform_profile at all) and leaves out the 0 W PL1
+that stock hp-wmi writes on a power change in performance. `install.sh`
+rebuilds an older build by itself; `omenctl doctor` says which one is loaded.
 
 ### EPP follows the profile
 

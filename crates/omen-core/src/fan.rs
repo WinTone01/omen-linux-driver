@@ -24,6 +24,8 @@
 //! wherever it was until that is written. Where `pwm2` exists it is written
 //! here, the way OMEN Gaming Hub chooses it: see [`second_fan_rpm`].
 
+use std::cell::Cell;
+
 use crate::error::{Error, Result};
 use crate::sysfs::Hwmon;
 
@@ -83,6 +85,20 @@ pub fn auto_hands_over() -> bool {
     std::fs::read_to_string("/sys/module/hp_wmi/parameters/firmware_auto")
         .is_ok_and(|v| v.trim() == "Y")
 }
+
+/// Which revision of this project's 8D24 changes the loaded hp-wmi carries
+/// (kernel/hp-wmi-8d24/fix-auto.sh): 0 for stock, 1 for a build with only
+/// the automatic-mode fix, 2 when a pwm of 0 also stops the fans, a power
+/// change no longer writes a 0 W PL1 and Unleashed reads as performance.
+pub fn hp_wmi_fixes() -> u8 {
+    match std::fs::read_to_string("/sys/module/hp_wmi/parameters/omen_fixes") {
+        Ok(v) => v.trim().parse().unwrap_or(0),
+        Err(_) => u8::from(auto_hands_over()),
+    }
+}
+
+/// The revision install.sh builds.
+pub const HP_WMI_FIXES: u8 = 2;
 
 /// Phase 1 §6.3: OGH's own `profiles.json` bounds are 18-48, i.e. 1800-4800 RPM.
 pub const DEFAULT_MIN_RPM: u32 = 1800;
@@ -147,6 +163,16 @@ pub struct Fan {
     second: bool,
     /// The firmware's fan table, for the second fan's setpoint.
     table: Vec<(u32, u32)>,
+    /// What `pwm2` was last set to, while hp-wmi still holds it.
+    ///
+    /// On 7.3 every pwm write re-sends both fans' setpoints to the firmware
+    /// (GM 0x10, 0x27 and 0x2E), and omend rewrites its setpoint every ten
+    /// seconds. Writing `pwm1` alone re-sends the second fan's value too, so
+    /// `pwm2` is written only when it changes - otherwise every keep-alive
+    /// costs six firmware calls instead of three, and they hold the ACPI
+    /// interpreter while the keyboard's effects wait. Forgotten on any mode
+    /// change: entering manual, hp-wmi re-seeds both from the tachometers.
+    last_second: Cell<Option<u8>>,
     min_rpm: u32,
     max_rpm: u32,
 }
@@ -175,6 +201,7 @@ impl Fan {
             hwmon,
             tach,
             second,
+            last_second: Cell::new(None),
             min_rpm,
             max_rpm,
         })
@@ -227,6 +254,7 @@ impl Fan {
         if current == mode {
             return Ok(());
         }
+        self.last_second.set(None);
 
         // Going straight from MAX to MANUAL does not take reliably: the
         // firmware has to be let out of max-fan first. omen-space does the
@@ -260,7 +288,7 @@ impl Fan {
         self.hwmon.write("pwm1", self.rpm_to_pwm(clamped) as i64)?;
         if self.second {
             let second = second_fan_rpm(&self.table, clamped).clamp(self.min_rpm, self.max_rpm);
-            self.hwmon.write("pwm2", self.rpm_to_pwm(second) as i64)?;
+            self.write_second(self.rpm_to_pwm(second))?;
         }
         Ok(clamped)
     }
@@ -280,15 +308,27 @@ impl Fan {
     /// same conclusion on the same hardware family and never leaves manual
     /// mode either.
     ///
-    /// From 7.3 hp-wmi clamps every `pwm1`/`pwm2` write to the table's
-    /// lowest speed, so 0 holds the fans at 1800 RPM there rather than
-    /// stopping them; the Hub stops them (both setpoints 0 in its idle mode).
+    /// Stock hp-wmi (7.2 and 7.3) clamps every pwm write to the fan table's
+    /// lowest speed, so there 0 holds the fans at 1800 RPM. The hp-wmi this
+    /// project builds passes 0 through on 8D24 (fix-auto.sh), and the fans
+    /// stop - which is what OMEN Gaming Hub's idle sends.
     pub fn set_idle(&self) -> Result<()> {
         self.set_mode(PwmMode::Manual)?;
         self.hwmon.write("pwm1", 0)?;
         if self.second {
-            self.hwmon.write("pwm2", 0)?;
+            self.write_second(0)?;
         }
+        Ok(())
+    }
+
+    /// `pwm2`, when it differs from what hp-wmi already holds.
+    fn write_second(&self, pwm: u8) -> Result<()> {
+        if self.last_second.get() == Some(pwm) {
+            return Ok(());
+        }
+        self.last_second.set(None);
+        self.hwmon.write("pwm2", pwm as i64)?;
+        self.last_second.set(Some(pwm));
         Ok(())
     }
 
@@ -323,6 +363,7 @@ mod tests {
             tach: None,
             second: false,
             table: Vec::new(),
+            last_second: Cell::new(None),
             min_rpm: min,
             max_rpm: max,
         }

@@ -1,22 +1,33 @@
 //! What follows the profile beyond the fans: Unleashed's limits, the shared
-//! CPU+GPU limit, the battery floor and the CPU's EPP hint.
+//! CPU+GPU limit, the battery floor, the CPU's EPP hint, and the two loops
+//! OMEN Gaming Hub runs on mains.
 //!
-//! Everything here is edge-driven, like the GPU boost next to it in the main
-//! loop: settings are written when the profile (or the power source) changes,
-//! not every tick. Two reasons. Most of these are firmware calls, and reading
-//! the shared limit back costs an SMI. And a setting that was re-asserted
-//! every two seconds could not be overridden by hand, which is a lock rather
-//! than automation.
+//! Everything but the loops is edge-driven, like the GPU boost next to it in
+//! the main loop: settings are written when the profile (or the power source)
+//! changes, not every tick. Two reasons. Most of these are firmware calls,
+//! and reading the shared limit back costs an SMI. And a setting that was
+//! re-asserted every two seconds could not be overridden by hand, which is a
+//! lock rather than automation.
 //!
-//! The one loop is Unleashed's surface limit, which runs on the Hub's own
-//! thirty-second cycle while the mode holds.
+//! The loops (`AdaptivePowerControlV1` in the Hub, docs/research/
+//! hub-rea-review.md) run while a profile holds on mains, in every profile
+//! the Hub runs them in:
+//!
+//! * the palm-rest limit, on the Hub's thirty-second cycle - PL1 down while
+//!   the surface is too hot, and the GPU held back;
+//! * the battery drain - PL1 down a watt a second while the battery
+//!   discharges with the charger in, below a threshold.
+//!
+//! The PL1 written is the lower of the two.
 
 use std::time::{Duration, Instant};
 
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use omen_core::gpu::boost;
-use omen_core::limits::{self, platform, PowerConfig, SurfaceGuard, UNLEASHED};
+use omen_core::limits::{
+    self, platform, DrainGuard, PowerConfig, SurfaceGpu, SurfaceGuard, SurfaceLimits, UNLEASHED,
+};
 use omen_core::profile::PlatformProfile;
 
 /// What the loop knows this tick.
@@ -25,6 +36,8 @@ pub struct Ctx<'a> {
     pub profile: Option<&'a str>,
     pub on_ac: Option<bool>,
     pub battery: Option<u8>,
+    /// The battery is discharging. On mains: the adapter is not keeping up.
+    pub discharging: Option<bool>,
     pub surface: Option<f32>,
     pub read_only: bool,
 }
@@ -37,15 +50,27 @@ pub struct Outcome {
     /// The profile was changed here (the battery floor), so whatever watches
     /// for the firmware changing it should take the new one as given.
     pub changed_profile: bool,
+    /// cTGP and Dynamic Boost were put back to what they were before the
+    /// palm-rest limit held the GPU back - which, when the profile has just
+    /// changed, is the old profile's. The caller sets the profile's again.
+    pub reapply_boost: bool,
 }
 
-/// Unleashed while it holds.
+/// The loops, while a profile holds on mains.
 #[derive(Debug)]
 struct Run {
-    guard: SurfaceGuard,
-    next: Instant,
-    /// What Dynamic Boost was before the surface limit switched it off.
-    boost_before: Option<(bool, bool)>,
+    profile: String,
+    surface: SurfaceGuard,
+    drain: DrainGuard,
+    drain_threshold: u8,
+    next_surface: Instant,
+    last_tick: Instant,
+    /// The PL1 as last written, by the profile change or by the loops.
+    pl1: u8,
+    /// cTGP and Dynamic Boost before the palm-rest limit held the GPU back.
+    gpu_before: Option<(bool, bool)>,
+    /// The slowdown temperature was lowered and has to go back.
+    slowed: bool,
 }
 
 #[derive(Debug, Default)]
@@ -103,7 +128,11 @@ impl PowerControl {
     }
 
     pub fn surface_hot(&self) -> bool {
-        self.run.as_ref().is_some_and(|r| r.guard.is_hot())
+        self.run.as_ref().is_some_and(|r| r.surface.is_hot())
+    }
+
+    pub fn battery_drain(&self) -> bool {
+        self.run.as_ref().is_some_and(|r| r.drain.limiting())
     }
 
     pub fn epp_owner(&self) -> Option<&'static str> {
@@ -132,7 +161,7 @@ impl PowerControl {
             self.applied_for = Some(key);
         }
 
-        self.surface_cycle(&ctx, &mut out);
+        self.run_cycle(&ctx, &mut out);
         out
     }
 
@@ -197,14 +226,21 @@ impl PowerControl {
             }
         }
 
+        self.end_run(out);
+
         if to != UNLEASHED {
-            self.end_run(out);
             self.unleashed_at = None;
             // The firmware does not reset PL1 with the profile, so after
             // Unleashed - or anything else that wrote it - every firmware
             // profile gets its own value back.
+            //
+            // On a change of power source it is written even when the EC
+            // already holds it, as the Hub does (NeedResetPL1): the firmware
+            // applies a limit when it is written, and the power change may
+            // have left the old one in force.
+            let power_changed = from == Some(to);
             if let Some(watts) = platform::profile_pl1(to) {
-                if limits::pl1().is_some_and(|now| now != watts) {
+                if limits::pl1().is_some_and(|now| now != watts || power_changed) {
                     match limits::set_pl1(watts) {
                         Ok(()) => info!("{to}: PL1 back to {watts} W"),
                         Err(e) => out
@@ -219,7 +255,7 @@ impl PowerControl {
             self.tpp_base = limits::tpp();
         }
 
-        if to == UNLEASHED && (from != Some(UNLEASHED) || self.run.is_none()) {
+        if to == UNLEASHED {
             if from != Some(UNLEASHED) {
                 self.unleashed_at = Some(Instant::now());
                 self.unleashed_reasserted = false;
@@ -234,11 +270,25 @@ impl PowerControl {
                     .problems
                     .push(format!("could not set PL1 to {watts} W: {e}")),
             }
-            self.run = Some(Run {
-                guard: SurfaceGuard::new(ctx.cfg.unleashed_surface_c, watts),
-                next: Instant::now() + Duration::from_secs(platform::SURFACE_CYCLE_SECS),
-                boost_before: None,
-            });
+        }
+
+        // The loops: on mains only, as in the Hub, and only where PL1 is
+        // ours to move.
+        if ctx.on_ac == Some(true) && limits::pl1().is_some() {
+            if let Some(l) = SurfaceLimits::for_profile(to, ctx.cfg) {
+                let now = Instant::now();
+                self.run = Some(Run {
+                    profile: to.to_owned(),
+                    surface: SurfaceGuard::new(l),
+                    drain: DrainGuard::new(l.max_w),
+                    drain_threshold: SurfaceLimits::drain_threshold(to, ctx.cfg),
+                    next_surface: now + Duration::from_secs(platform::SURFACE_CYCLE_SECS),
+                    last_tick: now,
+                    pl1: l.max_w,
+                    gpu_before: None,
+                    slowed: false,
+                });
+            }
         }
 
         self.apply_tpp(ctx, to, out);
@@ -308,63 +358,134 @@ impl PowerControl {
         }
     }
 
-    /// One cycle of Unleashed's surface limit, when one is due.
-    fn surface_cycle(&mut self, ctx: &Ctx<'_>, out: &mut Outcome) {
+    /// One tick of the loops: the battery every tick, the palm rest when its
+    /// cycle is due, and PL1 written when the lower of the two moves.
+    fn run_cycle(&mut self, ctx: &Ctx<'_>, out: &mut Outcome) {
         let Some(run) = self.run.as_mut() else { return };
-        let Some(surface) = ctx.surface else { return };
-        if Instant::now() < run.next {
-            return;
-        }
-        run.next = Instant::now() + Duration::from_secs(platform::SURFACE_CYCLE_SECS);
+        let now = Instant::now();
+        let secs = now.duration_since(run.last_tick).as_secs_f32();
+        run.last_tick = now;
 
-        let before = run.guard.pl1();
-        let step = run.guard.cycle(surface.round().clamp(0.0, 255.0) as u8);
-        if step.pl1 != before {
-            info!(
-                "surface {surface:.0} C (limit {} C): PL1 {before} -> {} W",
-                ctx.cfg.unleashed_surface_c, step.pl1
-            );
-            if let Err(e) = limits::set_pl1(step.pl1) {
-                out.problems
-                    .push(format!("could not set PL1 to {} W: {e}", step.pl1));
+        let mut surface_moved = None;
+        if let Some(surface) = ctx.surface {
+            if now >= run.next_surface {
+                run.next_surface = now + Duration::from_secs(platform::SURFACE_CYCLE_SECS);
+                let before = run.surface.pl1();
+                let step = run.surface.cycle(surface.round().clamp(0.0, 255.0) as u8);
+                if step.pl1 != before {
+                    surface_moved = Some(surface);
+                }
             }
         }
 
-        match (step.hot, run.boost_before) {
-            (true, None) => {
-                if let Some(state) = boost::read_state() {
-                    if state.1 {
-                        info!("surface at its limit - Dynamic Boost off until it cools");
-                        if let Err(e) = boost::set(state.0, false) {
-                            out.problems
-                                .push(format!("could not switch Dynamic Boost off: {e}"));
-                        }
-                    }
-                    run.boost_before = Some(state);
-                }
+        let was_limiting = run.drain.limiting();
+        if let (Some(percent), Some(discharging)) = (ctx.battery, ctx.discharging) {
+            run.drain
+                .step(discharging, percent, run.drain_threshold, secs);
+        }
+        match (was_limiting, run.drain.limiting()) {
+            (false, true) => info!(
+                "the battery is draining on mains at {}% - PL1 coming down until the \
+                 adapter keeps up",
+                ctx.battery.unwrap_or_default()
+            ),
+            (true, false) => info!(
+                "the adapter keeps up again - PL1 back to {} W",
+                run.drain.cap()
+            ),
+            _ => {}
+        }
+
+        let want = run.surface.pl1().min(run.drain.cap());
+        if want != run.pl1 {
+            let l = run.surface.limits();
+            if let Some(surface) = surface_moved {
+                info!(
+                    "{}: surface {surface:.0} C (limit {} C): PL1 {} -> {want} W",
+                    run.profile, l.overheat_c, run.pl1
+                );
+            } else {
+                debug!("{}: PL1 {} -> {want} W", run.profile, run.pl1);
             }
-            (false, Some(state)) => {
-                run.boost_before = None;
-                if state.1 {
-                    info!("surface cool again - Dynamic Boost back on");
-                    if let Err(e) = boost::set(state.0, state.1) {
-                        out.problems
-                            .push(format!("could not switch Dynamic Boost back on: {e}"));
-                    }
-                }
+            match limits::set_pl1(want) {
+                Ok(()) => run.pl1 = want,
+                Err(e) => out
+                    .problems
+                    .push(format!("could not set PL1 to {want} W: {e}")),
+            }
+        }
+
+        let hot = run.surface.is_hot();
+        let gpu = run.surface.limits().gpu;
+        let profile = run.profile.clone();
+        match (hot, run.gpu_before.is_some()) {
+            (true, false) => Self::hold_gpu(run, gpu, &profile, out),
+            (false, true) => {
+                info!("{profile}: surface cool again - the GPU's allowance back");
+                Self::release_gpu(run, out);
             }
             _ => {}
         }
     }
 
-    fn end_run(&mut self, out: &mut Outcome) {
-        let Some(run) = self.run.take() else { return };
-        if let Some(state) = run.boost_before {
-            if let Err(e) = boost::set(state.0, state.1) {
-                warn!("could not put Dynamic Boost back: {e}");
+    /// The Hub's GPU side of an overheating palm rest: Dynamic Boost off in
+    /// performance and Unleashed; in balanced cTGP and Dynamic Boost off and
+    /// the slowdown temperature lowered.
+    fn hold_gpu(run: &mut Run, gpu: SurfaceGpu, profile: &str, out: &mut Outcome) {
+        let Some(state) = boost::read_state() else {
+            return;
+        };
+        run.gpu_before = Some(state);
+        let (ctgp, ppab) = match gpu {
+            SurfaceGpu::BoostOff => (state.0, false),
+            SurfaceGpu::Throttle => (false, false),
+        };
+        info!("{profile}: surface at its limit - holding the GPU back until it cools");
+        if (ctgp, ppab) != state {
+            if let Err(e) = boost::set(ctgp, ppab) {
                 out.problems
-                    .push(format!("could not put Dynamic Boost back: {e}"));
+                    .push(format!("could not hold the GPU's allowance back: {e}"));
             }
+        }
+        if gpu == SurfaceGpu::Throttle && boost::slowdown().is_some() {
+            match boost::set_slowdown(platform::GPU_SLOWDOWN_HOT_C) {
+                Ok(()) => run.slowed = true,
+                Err(e) => out.problems.push(format!(
+                    "could not lower the GPU's slowdown temperature: {e}"
+                )),
+            }
+        }
+    }
+
+    /// Puts back what hold_gpu changed. Returns whether anything was.
+    fn release_gpu(run: &mut Run, out: &mut Outcome) -> bool {
+        let mut changed = false;
+        if let Some(state) = run.gpu_before.take() {
+            if boost::read_state() != Some(state) {
+                changed = true;
+                if let Err(e) = boost::set(state.0, state.1) {
+                    warn!("could not put the GPU's allowance back: {e}");
+                    out.problems
+                        .push(format!("could not put the GPU's allowance back: {e}"));
+                }
+            }
+        }
+        if std::mem::take(&mut run.slowed) {
+            if let Err(e) = boost::set_slowdown(platform::GPU_SLOWDOWN_C) {
+                out.problems.push(format!(
+                    "could not put the GPU's slowdown temperature back: {e}"
+                ));
+            }
+        }
+        changed
+    }
+
+    fn end_run(&mut self, out: &mut Outcome) {
+        let Some(mut run) = self.run.take() else {
+            return;
+        };
+        if Self::release_gpu(&mut run, out) {
+            out.reapply_boost = true;
         }
     }
 }

@@ -814,8 +814,16 @@ static DEVICE_ATTR_RO(gpu_mux_pending_reboot);
 #define GPU_POWER_GPS		3
 #define GPU_DSTATE_FULL		1	/* the Hub's GpuDState.D1 */
 #define GPU_GPS_DEFAULT_C	87	/* the Hub's GpsMaxTemperature */
+#define GPU_GPS_MIN_C		75	/* the Hub's GpsMinTemperature */
 
 static DEFINE_MUTEX(omen_gpu_power_lock);
+/*
+ * The slowdown temperature sent with every GM22. The Hub lowers it, down to
+ * 75 C, to throttle the GPU while the palm rest is over its limit in
+ * balanced, and puts 87 back with the next profile; omend does the same
+ * through gpu_slowdown_c. Kept here because GM21 does not round-trip it.
+ */
+static u8 omen_gpu_gps = GPU_GPS_DEFAULT_C;
 
 static int omen_gpu_power_get(u8 modes[GPU_POWER_LEN])
 {
@@ -836,9 +844,28 @@ static int omen_gpu_power_set_one(int byte, bool on)
 		return ret;
 	modes[byte] = on;
 	modes[GPU_POWER_DSTATE] = GPU_DSTATE_FULL;
-	modes[GPU_POWER_GPS] = GPU_GPS_DEFAULT_C;
+	modes[GPU_POWER_GPS] = omen_gpu_gps;
 	return omen_wmi_call(HPWMI_GAMING, OMEN_GPU_POWER_SET, modes,
 			     GPU_POWER_LEN, 0);
+}
+
+static int omen_gpu_slowdown_set(u8 celsius)
+{
+	u8 modes[GPU_POWER_LEN];
+	int ret;
+
+	guard(mutex)(&omen_gpu_power_lock);
+
+	ret = omen_gpu_power_get(modes);
+	if (ret)
+		return ret;
+	modes[GPU_POWER_DSTATE] = GPU_DSTATE_FULL;
+	modes[GPU_POWER_GPS] = celsius;
+	ret = omen_wmi_call(HPWMI_GAMING, OMEN_GPU_POWER_SET, modes,
+			    GPU_POWER_LEN, 0);
+	if (!ret)
+		omen_gpu_gps = celsius;
+	return ret;
 }
 
 static ssize_t omen_gpu_power_show(int byte, char *buf)
@@ -896,6 +923,70 @@ static ssize_t gpu_ppab_store(struct device *dev,
 	return omen_gpu_power_store(GPU_POWER_PPAB, buf, count);
 }
 static DEVICE_ATTR_RW(gpu_ppab);
+
+/* The GPU's slowdown temperature, as last sent, in C: 75-87, the Hub's range. */
+static ssize_t gpu_slowdown_c_show(struct device *dev,
+				   struct device_attribute *attr, char *buf)
+{
+	guard(mutex)(&omen_gpu_power_lock);
+	return sysfs_emit(buf, "%u\n", omen_gpu_gps);
+}
+
+static ssize_t gpu_slowdown_c_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	u8 celsius;
+	int ret;
+
+	ret = kstrtou8(buf, 0, &celsius);
+	if (ret)
+		return ret;
+	if (celsius < GPU_GPS_MIN_C || celsius > GPU_GPS_DEFAULT_C)
+		return -ERANGE;
+	ret = omen_gpu_slowdown_set(celsius);
+	return ret ? ret : count;
+}
+static DEVICE_ATTR_RW(gpu_slowdown_c);
+
+/* --- the power adapter --- */
+
+/*
+ * BIOS read 0x0F is GSAS in the DSDT, "smart adapter status": byte 0 says
+ * whether the adapter in use meets the machine's requirement. It reads the
+ * EC and nothing else - no SMI. OMEN Gaming Hub asks it on every power
+ * event (PerformanceControlHelper.GetAdapterStatus) and treats anything but
+ * "meets" as a low-wattage adapter: it will not switch to performance for a
+ * game on one, and can switch to Eco. Byte 3 is a rating that only means
+ * something for USB-C (45 W is the default it reports for the barrel), so it
+ * is not offered.
+ */
+#define OMEN_ADAPTER_STATUS	0x0F
+
+static const char * const omen_adapter_names[] = {
+	[0] = "unsupported",
+	[1] = "ok",		/* meets the requirement */
+	[2] = "below",		/* below it */
+	[3] = "battery",	/* no adapter */
+	[4] = "faulty",		/* not functioning */
+	[5] = "usb-c",		/* a USB-C source; the Hub compares its rating */
+};
+
+static ssize_t adapter_show(struct device *dev,
+			    struct device_attribute *attr, char *buf)
+{
+	u8 data[4] = {};
+	int ret;
+
+	ret = omen_wmi_call(HPWMI_BIOS_READ, OMEN_ADAPTER_STATUS, data, 0,
+			    sizeof(data));
+	if (ret)
+		return ret;
+	if (data[0] < ARRAY_SIZE(omen_adapter_names))
+		return sysfs_emit(buf, "%s\n", omen_adapter_names[data[0]]);
+	return sysfs_emit(buf, "%u\n", data[0]);
+}
+static DEVICE_ATTR_RO(adapter);
 
 /* --- the firmware's fan table --- */
 
@@ -1178,10 +1269,12 @@ static struct attribute *omen_rgb_attrs[] = {
 	&dev_attr_gpu_mux_pending_reboot.attr,
 	&dev_attr_gpu_ctgp.attr,
 	&dev_attr_gpu_ppab.attr,
+	&dev_attr_gpu_slowdown_c.attr,
 	&dev_attr_cpu_pl1.attr,
 	&dev_attr_gpu_tpp.attr,
 	&dev_attr_unleashed.attr,
 	&dev_attr_fan_table.attr,
+	&dev_attr_adapter.attr,
 	NULL,
 };
 
@@ -1190,13 +1283,14 @@ static umode_t omen_rgb_attr_visible(struct kobject *kobj,
 {
 	if (attr == &dev_attr_backlight_active.attr)
 		return omen_has_lighting ? attr->mode : 0;
-	if (attr == &dev_attr_gpu_ctgp.attr || attr == &dev_attr_gpu_ppab.attr)
+	if (attr == &dev_attr_gpu_ctgp.attr || attr == &dev_attr_gpu_ppab.attr ||
+	    attr == &dev_attr_gpu_slowdown_c.attr)
 		return omen_has_gpu_power ? attr->mode : 0;
 	if (attr == &dev_attr_cpu_pl1.attr || attr == &dev_attr_unleashed.attr)
 		return omen_has_power_limits ? attr->mode : 0;
 	if (attr == &dev_attr_gpu_tpp.attr)
 		return omen_has_tpp ? attr->mode : 0;
-	if (attr == &dev_attr_fan_table.attr)
+	if (attr == &dev_attr_fan_table.attr || attr == &dev_attr_adapter.attr)
 		return omen_is_family ? attr->mode : 0;
 
 	/* The mux attributes exist only on a machine that has one. */

@@ -296,9 +296,15 @@ unleashed_tpp_offset_w = 20   # added to the shared CPU+GPU limit, 0-20 W
 performance_tpp_offset_w = 0
 
 # On battery, below this charge a mode gives way to the one below it.
-# 0 turns a floor off.
+# 0 turns a floor off. On mains they also set where a draining battery
+# starts taking PL1 down, as the Hub does: below 100 minus these (90 % in
+# performance, 60 % in Unleashed; 90 % in the other profiles).
 min_battery_performance = 10
 min_battery_unleashed = 40
+#
+# Not settings: on mains omend also holds the palm rest under HP's limit in
+# every profile (52 C balanced, 54 C performance), as the Hub does -
+# docs/usage.md, "The palm rest and the battery".
 
 # The CPU's energy-performance preference follows the profile. Ignored while
 # power-profiles-daemon or tuned runs - they already do it.

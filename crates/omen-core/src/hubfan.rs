@@ -47,6 +47,10 @@ pub struct TableSet {
     /// warmer than the average and when it is cooler.
     pub rise: f32,
     pub fall: f32,
+    /// Whether the Hub's idle state applies: in every mode but performance
+    /// and Unleashed (`AdaptivePowerControlV1.IsIdleMode`). See
+    /// [`HubFan::decide`].
+    pub idles: bool,
 }
 
 /// `SwFanControlCustomDefault`: eco, balanced and low-power.
@@ -69,6 +73,7 @@ pub const DEFAULT: TableSet = TableSet {
     },
     rise: 0.05,
     fall: 0.7,
+    idles: true,
 };
 
 /// `SwFanControlCustomPerformance`.
@@ -91,6 +96,7 @@ pub const PERFORMANCE: TableSet = TableSet {
     },
     rise: 0.07,
     fall: 0.5,
+    idles: false,
 };
 
 /// `SwFanControlCustomUnleashed`: the performance tables, run to full speed.
@@ -113,6 +119,7 @@ pub const UNLEASHED: TableSet = TableSet {
     },
     rise: 0.07,
     fall: 0.5,
+    idles: false,
 };
 
 /// The set the Hub uses for a profile.
@@ -201,7 +208,15 @@ pub struct HubFan {
     last_step: Option<Instant>,
     /// What each source last asked for, held between steps.
     held: (u8, u8, u8),
+    /// In the Hub's idle state - see [`HubFan::decide`].
+    idle: bool,
 }
+
+/// The weight the Hub gives a new CPU reading while idle, per pass of its
+/// idle loop (`CalculateEWMAIdleMode`: 0.1, both ways), and that loop's
+/// period.
+const IDLE_WEIGHT: f32 = 0.1;
+const IDLE_PERIOD_SECS: f32 = 5.0;
 
 impl HubFan {
     pub fn new(set: &'static TableSet) -> Self {
@@ -212,7 +227,34 @@ impl HubFan {
             gpu: Stepper::default(),
             last_step: None,
             held: (0, 0, 0),
+            idle: false,
         }
+    }
+
+    /// Whether the fans are in the Hub's idle state.
+    pub fn is_idle(&self) -> bool {
+        self.idle
+    }
+
+    /// The Hub's idle test (`SwFanControl.IsIdleMode`), against its default
+    /// tables. To enter, every source must be under the *down* edge of the
+    /// first step - CPU average 62, GPU 49 - or the palm rest under the
+    /// second up edge, 36, its table having no down edges. To stay, under
+    /// the third up edges: 74, 58 and 37. A source that is not reported
+    /// does not hold it back.
+    fn idle_test(&self, r: &Readings, cpu_avg: Option<f32>) -> bool {
+        let i = if self.idle { 2 } else { 1 };
+        let edge = |t: &Table| -> f32 {
+            if !self.idle && !t.down.is_empty() {
+                t.down[i] as f32
+            } else {
+                t.up[i] as f32
+            }
+        };
+        let under = |reading: Option<f32>, t: &Table| reading.is_none_or(|v| v < edge(t));
+        under(cpu_avg, &DEFAULT.cpu)
+            && under(r.gpu, &DEFAULT.gpu)
+            && under(r.surface, &DEFAULT.surface)
     }
 
     pub fn set(&self) -> &'static TableSet {
@@ -231,16 +273,28 @@ impl HubFan {
     /// choice and a good one for noise, but this project's stall detector
     /// treats stopped fans on a hot machine as a failure - correctly - and
     /// the two must not be able to disagree.
+    ///
+    /// The idle state. Outside performance and Unleashed, when every source
+    /// is comfortably cool, the Hub stops stepping and sends the first step
+    /// of the CPU table - 0, fans off - and averages the CPU more slowly. It
+    /// leaves only when a source passes a higher edge than the one it came
+    /// in under, so a palm rest sitting at 36 °C keeps the fans off rather
+    /// than toggling them at the table's 36 °C step.
     pub fn decide(&mut self, r: Readings, now: Instant, floor_above_c: f32) -> Decision {
         if let Some(t) = r.cpu {
             let next = match self.average {
                 None => t,
                 Some((v, at)) => {
-                    let per_second = if t >= v { self.set.rise } else { self.set.fall };
-                    // The Hub updates once a second; this is called at the
-                    // daemon's interval, so the weight is compounded to match.
+                    // The Hub updates once a second, or once a pass of its
+                    // five-second idle loop; this is called at the daemon's
+                    // interval, so the weight is compounded to match.
                     let secs = now.duration_since(at).as_secs_f32().clamp(0.0, 30.0);
-                    let w = 1.0 - (1.0 - per_second).powf(secs);
+                    let w = if self.idle {
+                        1.0 - (1.0 - IDLE_WEIGHT).powf(secs / IDLE_PERIOD_SECS)
+                    } else {
+                        let per_second = if t >= v { self.set.rise } else { self.set.fall };
+                        1.0 - (1.0 - per_second).powf(secs)
+                    };
                     v + w * (t - v)
                 }
             };
@@ -253,18 +307,23 @@ impl HubFan {
         if due {
             self.last_step = Some(now);
             let set = self.set;
-            let cpu = match self.average {
-                Some((v, _)) => self.cpu.advance(&set.cpu, v),
-                None => 0,
-            };
-            let gpu = r.gpu.map_or(0, |t| self.gpu.advance(&set.gpu, t));
-            let surface = r.surface.map_or(0, |t| lookup(&set.surface, t));
-            self.held = (cpu, gpu, surface);
+            let avg = self.average.map(|(v, _)| v);
+            self.idle = set.idles && self.idle_test(&r, avg);
+            if self.idle {
+                self.held = (set.cpu.speed[0], 0, 0);
+            } else {
+                let cpu = avg.map_or(0, |v| self.cpu.advance(&set.cpu, v));
+                let gpu = r.gpu.map_or(0, |t| self.gpu.advance(&set.gpu, t));
+                let surface = r.surface.map_or(0, |t| lookup(&set.surface, t));
+                self.held = (cpu, gpu, surface);
+            }
         }
 
         let (cpu, gpu, surface) = self.held;
         let mut speed = cpu.max(gpu).max(surface);
-        let mut why = if speed == 0 {
+        let mut why = if self.idle {
+            "idle - every source under its idle edge".to_string()
+        } else if speed == 0 {
             "all sources below their first step".to_string()
         } else if speed == cpu {
             format!("cpu avg {:.1}C", self.cpu_average().unwrap_or_default())
@@ -453,6 +512,39 @@ mod tests {
             FLOOR,
         );
         assert_eq!(d.target, None);
+    }
+
+    #[test]
+    fn idle_holds_a_warm_palm_rest_off_until_its_third_edge() {
+        let t0 = Instant::now();
+        let mut f = HubFan::new(&DEFAULT);
+        // Everything under the entry edges (62, 49, 36): idle, fans off.
+        let d = f.decide(readings(55.0, 45.0, 35.5), t0, FLOOR);
+        assert!(f.is_idle(), "{}", d.why);
+        assert_eq!(d.target, None);
+        // 36.5 C on the palm rest would be the table's first step, 1800 RPM;
+        // idle holds until 37.
+        let d = f.decide(readings(55.0, 45.0, 36.5), t0 + STEP_EVERY, FLOOR);
+        assert!(f.is_idle());
+        assert_eq!(d.target, None);
+        let d = f.decide(readings(55.0, 45.0, 37.0), t0 + STEP_EVERY * 2, FLOOR);
+        assert!(!f.is_idle());
+        assert_eq!(d.target, Some(2100), "{}", d.why);
+    }
+
+    #[test]
+    fn idle_needs_the_lower_edges_to_come_in() {
+        let mut f = HubFan::new(&DEFAULT);
+        // GPU at 50: under its first up edge (54) but not its down edge (49).
+        f.decide(readings(55.0, 50.0, 30.0), Instant::now(), FLOOR);
+        assert!(!f.is_idle());
+    }
+
+    #[test]
+    fn performance_has_no_idle_state() {
+        let mut f = HubFan::new(&PERFORMANCE);
+        f.decide(readings(40.0, 40.0, 30.0), Instant::now(), FLOOR);
+        assert!(!f.is_idle());
     }
 
     #[test]

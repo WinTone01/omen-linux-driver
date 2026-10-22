@@ -203,34 +203,76 @@ branch around it) that `SurfaceGuard` had differently:
 **Fixed** in omen-core: `SURFACE_PL1_FLOOR_W = 30`, and the configured PL1
 comes back at once.
 
+## The second pass: the loops, and kernel 7.3
+
+Done after the first commit, with the machine on 7.3:
+
+* **The palm-rest loop in every profile.** The Hub runs it in every mode on
+  mains, with per-mode thresholds from the platform configuration
+  (`IrOverheatThreshold` / `IrPl1Threshold` / `IrReleaseThreshold` and
+  `NbPL1LowerBound`, indexed by mode: balanced and Eco 52/49/43 °C and
+  30 W, performance 54/50/44 °C and 35 W). Between the PL1 threshold and the
+  overheat one, while the surface is still rising, it takes 5 W per degree
+  of rise (at most 15) off PL1. At the overheat threshold it holds the GPU
+  back: Dynamic Boost off in performance and Unleashed
+  (`PpabOffWhenIrOverheat`), and in balanced `{cTGP 0, PPAB 0, D1, 75}` -
+  the slowdown temperature at `GpsMinTemperature`. omen-core's
+  `SurfaceLimits`/`SurfaceGuard` and omend's powerctl now do the same;
+  omen-kbd-rgb's `gpu_slowdown_c` carries the slowdown temperature. Only on
+  mains, as in the Hub (its DC branch skips the IR check).
+* **The battery drain** (`ProcessBatteryDrain`): on mains, a battery that
+  discharges below `BatteryDrainThreshold` - 100 minus the minimum-battery
+  setting in performance (90 %) and Unleashed (60 %), the platform's 0.9
+  elsewhere - takes PL1 down a watt a second to `BatteryLowerBound` (35 W),
+  holds it in the 3 % above, and gives it back once the battery stops
+  draining. The Hub also requires a GPU load over 30 %; the discharge on
+  mains is taken as enough here. omen-core's `DrainGuard`.
+* **The idle state** (`SwFanControl.IsIdleMode`): outside performance and
+  Unleashed, the Hub stops stepping when every source is under its entry
+  edge (the down edge of the first step - CPU average 62, GPU 49 - or the
+  palm rest's second up edge, 36) and sends 0; it leaves at the third up
+  edges, 74, 58 and 37, averaging the CPU at 0.1 per five-second pass
+  meanwhile. `hubfan.rs` now has it.
+* **Adapter status** (BIOS read 0x0F, `GSAS`): omen-kbd-rgb's `adapter`
+  ("ok", "below", "battery", "faulty", "usb-c"), and a doctor warning when
+  the firmware does not count the adapter as enough.
+* **PL1 on a power change** is written again even when the EC already holds
+  it, as the Hub's `NeedResetPL1` does.
+* **pwm2 only when it changes**: on 7.3 a write to `pwm1` re-sends both
+  fans, and each write is three firmware calls.
+
+And in the hp-wmi this project builds (fix-auto.sh, revision 2, reported as
+`hp_wmi.omen_fixes`), on 8D24 only:
+
+* **A pwm of 0 stops the fans.** Stock hp-wmi, 7.2 and 7.3, clamps every
+  pwm write to the fan table's lowest speed: the "fans off" at the bottom of
+  omend's curve, and the Hub's idle state, were 1800 RPM on Linux. The Hub
+  sends 0/0.
+* **No 0 W PL1 on a power change.** In performance, hp-wmi's power-source
+  notifier writes `{0, 0, FF, FF}` to GM 0x29 (for board 8C9C). On 8D24 that
+  command stores both bytes straight into EC 0x38/0x37. The Hub writes the
+  profile's own value instead; omend does that now.
+* **Unleashed reads as performance.** 7.3 reads the thermal profile from the
+  EC when it loads, and HPCM 0x04 is an error there - loaded with Unleashed
+  on, hp-wmi silently registers no platform_profile.
+
 ## Gaps left open
 
-In rough order of what they would be worth:
-
-1. **The palm-rest loop outside Unleashed.** The Hub runs it in every mode on
-   mains, with per-mode thresholds from the platform configuration
-   (`IrOverheatThreshold` / `IrPl1Threshold` / `IrReleaseThreshold`, indexed
-   by mode: Balanced 52/49/43 °C, Performance 54/50/44 °C). Between the PL1
-   threshold and the overheat one, while the surface is still rising, it
-   takes 5 W per degree of rise (at most 15) off PL1. omend runs the loop in
-   Unleashed only. Three days of Hub logs never saw the surface above 45 °C,
-   so this has not mattered yet.
-2. **Fan stop at idle on 7.3.** hp-wmi 7.3 clamps every `pwm1`/`pwm2` write
-   to the table's lowest speed. omend's "fans off" (and the Hub's own idle
-   state, which sends 0/0) becomes 1800 RPM there. Only a kernel change can
-   restore it - an upstream question for after the 8D24 series.
-3. **Adapter status** (BIOS read 0x0F, `GSAS`): byte 0 is 1 meets the
-   requirement / 2 below it / 4 on battery / 5 USB-C, byte 3 the rating in
-   5 W steps. The Hub uses it to switch to Eco on a weak USB-C charger. A
-   read-only attribute would be cheap; nothing here uses it yet.
-4. **GM 0x10's BIOS protection byte** (over-current, over-temperature): a
-   diagnostic the Hub logs whenever it changes.
-5. **The TPP base from design data byte 8**, for boards other than 8D24
+1. **GM 0x10's BIOS protection byte** (over-current, over-temperature): a
+   diagnostic the Hub logs whenever it changes. On 8D24 GM10 only ever
+   returns 2 in byte 0, so there is nothing to read.
+2. **The TPP base from design data byte 8**, for boards other than 8D24
    (TPP is 8D24-only here today).
-6. **Two mux interfaces.** Upstream hp-wmi gained `gpu_mux_mode` on its
+3. **Two mux interfaces.** Upstream hp-wmi gained `gpu_mux_mode` on its
    platform device in 2026-07; omen-kbd-rgb has its own. Both send the same
    command. Once a kernel with it is common, omen-core should prefer
    hp-wmi's and omen-kbd-rgb could stop offering one.
+4. **Switching to performance for a game, and to Eco on a weak adapter.**
+   The Hub does both by default-on settings. Here they are a GameMode rule
+   (`[automation.gamemode] profile = "performance"`) and a power rule, which
+   are off until configured. The adapter state is there to build on.
+5. **GPU slowdown tuning in the Hub's L0/L1 modes** (`IrGpsThreshold`):
+   those modes are not offered on this board.
 
 ## Not on this machine
 
