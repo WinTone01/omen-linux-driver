@@ -363,7 +363,17 @@ fn fan() -> Section {
                 "pwm",
                 "Fan control",
                 Verdict::Ok,
-                format!("pwm1 at {}", f.hwmon_path().display()),
+                format!(
+                    "pwm1 at {}{}",
+                    f.hwmon_path().display(),
+                    match f.second_fan() {
+                        (false, _) => "",
+                        (true, true) => "; pwm2 follows the firmware's fan table",
+                        (true, false) => {
+                            "; pwm2 at 200 RPM under pwm1 - no fan table (omen-kbd-rgb 0.4.0)"
+                        }
+                    }
+                ),
             ));
 
             let rpms: Vec<String> = (1..=2u8)

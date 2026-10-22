@@ -740,6 +740,10 @@ Dynamic Boost has a second half, **nvidia-powerd**, which does the shifting
 at run time. Without it the switch is accepted and does nothing, and
 `omenctl doctor` says so.
 
+The same command carries two more bytes, the GPU's D-state and its slowdown
+temperature. Since 0.4.0 omen-kbd-rgb sends them as the Hub does on every
+profile change, full power and 87 °C, instead of echoing what `0x21` read.
+
 ## What each profile allows
 
 ```bash
@@ -918,6 +922,15 @@ Performance never stops them. One rule is added on top of HP's tables: at
 `safety.stall_temp_c`, the fans are never left stopped while the average
 catches up. Otherwise the stall detector would fire, and it would be right
 to.
+
+The second fan does not get the first fan's setpoint. The Hub looks it up in
+the firmware's fan table: on 8D24 it is two or three steps below the first
+at low speeds and two or three above from 2900 RPM up. hp-wmi up to 7.2 can
+only offset it by the table's first row, 200 RPM below, everywhere. From 7.3
+hp-wmi has `pwm2`, and omend sets it the Hub's way from omen-kbd-rgb's
+`fan_table` (0.4.0). `omenctl doctor` says which of the two is in use. One
+thing 7.3 takes away: it clamps every setpoint to the table's lowest speed,
+so "fans off" holds them at 1800 RPM there.
 
 ### EPP follows the profile
 

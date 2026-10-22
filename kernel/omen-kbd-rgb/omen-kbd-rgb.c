@@ -2,9 +2,9 @@
 /*
  * HP OMEN extras that in-tree hp-wmi does not cover: the 4-zone RGB keyboard,
  * the graphics mux, the discrete GPU's temperature, the surface temperature,
- * and the power controls the vendor software uses beyond the three thermal
- * profiles - Unleashed, PL1 and the CPU+GPU shared limit. Measured on the
- * OMEN 16-ap0xxx (board 8D24).
+ * the power controls the vendor software uses beyond the three thermal
+ * profiles - Unleashed, PL1 and the CPU+GPU shared limit - and the
+ * firmware's fan table. Measured on the OMEN 16-ap0xxx (board 8D24).
  *
  * Protocol: docs/research/rgb-protocol.md - all of it extracted from the DSDT.
  *
@@ -789,9 +789,15 @@ static DEVICE_ATTR_RO(gpu_mux_pending_reboot);
  *                      0xD0 | byte2 (1 = full power, 2 = 50 %, ...)
  *   byte 3  slowdown   GPST, the GPU's slowdown temperature
  *
- * Only the first two are offered. The other two are read back and written
- * unchanged, as hp-wmi does: a D-state or slowdown temperature nobody asked
- * for would be a way to throttle the GPU by accident.
+ * Only the first two are offered. The other two are written as OMEN Gaming
+ * Hub writes them on every profile change - D-state 1 (full power) and a
+ * slowdown temperature of 87 C (SetTgpPpabAsync: {cTGP, PPAB, D1, 87}) -
+ * rather than read back from GM21. Reading back does not round-trip: GM21
+ * takes the D-state from EC 0x91 (ECDO), GM22 stores it in EC 0x90 (NVDO),
+ * and whatever the low nibble of 0x91 holds goes out as a notify of 0xD0 |
+ * nibble - 0xD0 itself, if it holds 0, which the vendor never sends. The
+ * Hub only moves these two while its palm-rest loop is throttling the GPU,
+ * which this driver does not do.
  *
  * What cTGP does on 8D24 is not visible from here. GM22 stores it in a name
  * that nothing else in the DSDT reads; if the NVIDIA platform controller
@@ -804,6 +810,10 @@ static DEVICE_ATTR_RO(gpu_mux_pending_reboot);
 #define GPU_POWER_LEN		4
 #define GPU_POWER_CTGP		0
 #define GPU_POWER_PPAB		1
+#define GPU_POWER_DSTATE	2
+#define GPU_POWER_GPS		3
+#define GPU_DSTATE_FULL		1	/* the Hub's GpuDState.D1 */
+#define GPU_GPS_DEFAULT_C	87	/* the Hub's GpsMaxTemperature */
 
 static DEFINE_MUTEX(omen_gpu_power_lock);
 
@@ -820,11 +830,13 @@ static int omen_gpu_power_set_one(int byte, bool on)
 
 	guard(mutex)(&omen_gpu_power_lock);
 
-	/* Read-modify-write: only the byte asked about changes. */
+	/* The other switch keeps its state; the last two are the Hub's. */
 	ret = omen_gpu_power_get(modes);
 	if (ret)
 		return ret;
 	modes[byte] = on;
+	modes[GPU_POWER_DSTATE] = GPU_DSTATE_FULL;
+	modes[GPU_POWER_GPS] = GPU_GPS_DEFAULT_C;
 	return omen_wmi_call(HPWMI_GAMING, OMEN_GPU_POWER_SET, modes,
 			     GPU_POWER_LEN, 0);
 }
@@ -884,6 +896,88 @@ static ssize_t gpu_ppab_store(struct device *dev,
 	return omen_gpu_power_store(GPU_POWER_PPAB, buf, count);
 }
 static DEVICE_ATTR_RW(gpu_ppab);
+
+/* --- the firmware's fan table --- */
+
+/*
+ * GM2F: two bytes of header (fan count, then a byte nobody has explained),
+ * then rows of {fan 1, fan 2, noise in dB}, speeds in hundreds of RPM. On
+ * 8D24 it is P1F1/P1F2/P1DB from the DSDT, 11 rows from 1800/1600 RPM at
+ * 22 dB to 4800/5100 at 50; the method copies them into a 17-row reply,
+ * so the end is the first all-zero row - where hp-wmi stops too.
+ *
+ * What it is for: OMEN Gaming Hub never sends the same setpoint to both
+ * fans. It sends fan 1's, and fan 2's is fan 1's plus the difference in the
+ * last row whose fan 1 speed is not above it (SwFanControlTable
+ * .GetSameLevelFans) - two or three steps below fan 1 at the bottom of the
+ * table and above it from 2900 RPM up on this board. The Hub's own log
+ * shows it: 3800 went out as 38,41 and 2100 as 21,19. hp-wmi applies the
+ * first row's difference everywhere until 7.3 and none after, so the
+ * daemon does the lookup itself when the kernel lets it set the second fan,
+ * and needs the table for that.
+ *
+ * Read on first use rather than at load: the method starts with an SMI.
+ */
+#define OMEN_FAN_TABLE		0x2F
+#define FAN_TABLE_LEN		128
+#define FAN_TABLE_HEADER	2
+#define FAN_TABLE_ROW		3
+#define FAN_TABLE_MAX_ROWS	((FAN_TABLE_LEN - FAN_TABLE_HEADER) / FAN_TABLE_ROW)
+
+static DEFINE_MUTEX(omen_fan_table_lock);
+static u8 omen_fan_table[FAN_TABLE_LEN];
+/* Rows in omen_fan_table; 0 until it has been read successfully. */
+static int omen_fan_table_rows;
+/* An OMEN or Victus, by DMI: where GM2F is worth asking. */
+static bool omen_is_family;
+
+/* Returns the number of rows, or a negative errno. */
+static int omen_fan_table_get(void)
+{
+	u8 data[FAN_TABLE_LEN] = {};
+	const u8 *row;
+	int ret, n;
+
+	guard(mutex)(&omen_fan_table_lock);
+	if (omen_fan_table_rows)
+		return omen_fan_table_rows;
+
+	ret = omen_wmi_call(HPWMI_GAMING, OMEN_FAN_TABLE, data, 0, sizeof(data));
+	if (ret)
+		return ret;
+
+	for (n = 0; n < FAN_TABLE_MAX_ROWS; n++) {
+		row = data + FAN_TABLE_HEADER + n * FAN_TABLE_ROW;
+		if (!row[0] && !row[1] && !row[2])
+			break;
+	}
+	/* No fans declared, or no rows: a stub, not a table. */
+	if (!data[0] || !n)
+		return -ENODATA;
+
+	memcpy(omen_fan_table, data, sizeof(data));
+	omen_fan_table_rows = n;
+	return n;
+}
+
+/* One row per line: fan 1 RPM, fan 2 RPM, noise in dB. */
+static ssize_t fan_table_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	const u8 *row;
+	int rows, i, n = 0;
+
+	rows = omen_fan_table_get();
+	if (rows < 0)
+		return rows;
+	for (i = 0; i < rows; i++) {
+		row = omen_fan_table + FAN_TABLE_HEADER + i * FAN_TABLE_ROW;
+		n += sysfs_emit_at(buf, n, "%d %d %d\n",
+				   row[0] * 100, row[1] * 100, row[2]);
+	}
+	return n;
+}
+static DEVICE_ATTR_RO(fan_table);
 
 /*
  * GM21's reply cannot tell "cTGP off" from "no NVIDIA GPU" - both are zeros -
@@ -1087,6 +1181,7 @@ static struct attribute *omen_rgb_attrs[] = {
 	&dev_attr_cpu_pl1.attr,
 	&dev_attr_gpu_tpp.attr,
 	&dev_attr_unleashed.attr,
+	&dev_attr_fan_table.attr,
 	NULL,
 };
 
@@ -1101,6 +1196,8 @@ static umode_t omen_rgb_attr_visible(struct kobject *kobj,
 		return omen_has_power_limits ? attr->mode : 0;
 	if (attr == &dev_attr_gpu_tpp.attr)
 		return omen_has_tpp ? attr->mode : 0;
+	if (attr == &dev_attr_fan_table.attr)
+		return omen_is_family ? attr->mode : 0;
 
 	/* The mux attributes exist only on a machine that has one. */
 	return omen_mux_supported ? attr->mode : 0;
@@ -1767,6 +1864,7 @@ static int __init omen_rgb_init(void)
 		return -ENODEV;
 
 	family = dmi_check_system(omen_family);
+	omen_is_family = family;
 	omen_has_lighting = omen_lighting_detect();
 	omen_has_dgpu_temp = family;
 

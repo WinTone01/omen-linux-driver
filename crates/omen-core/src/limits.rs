@@ -36,6 +36,11 @@ pub mod platform {
     /// PL1 taken away per cycle at the limit, and how often the loop runs.
     pub const SURFACE_PL1_STEP_W: u8 = 5;
     pub const SURFACE_CYCLE_SECS: u64 = 30;
+    /// The lowest PL1 the surface limit takes Unleashed to. Not the slider's
+    /// 25: the Hub's floor in Unleashed is the balanced entry of
+    /// `NbPL1LowerBound` (30 on this platform), or the configured PL1 when
+    /// that is lower (`AdaptivePowerControlV1.SetNbPL1LowerBound`).
+    pub const SURFACE_PL1_FLOOR_W: u8 = 30;
     /// The shared CPU+GPU limit can be raised this far above the firmware's
     /// own value (45 W here, read at startup): `TppMaxValue` is 65 W.
     pub const TPP_MAX_OFFSET_W: u8 = 20;
@@ -253,10 +258,10 @@ pub fn battery_fallback(cfg: &PowerConfig, profile: &str, percent: u8) -> Option
 /// Every [`platform::SURFACE_CYCLE_SECS`] the palm rest is read against the
 /// limit. At or above it PL1 loses [`platform::SURFACE_PL1_STEP_W`] and
 /// Dynamic Boost is switched off; between the release point and the limit,
-/// with the surface no longer rising, PL1 creeps back. Below the release
-/// point the Hub leaves PL1 where it is and lets its general algorithm raise
-/// it; there is no general algorithm here, so it is raised a step at a time
-/// back to the configured value instead.
+/// with the surface no longer rising, PL1 creeps back. At the release point
+/// the Hub stops handling the surface, and its Unleashed branch puts the
+/// configured PL1 back on its next one-second pass - all of it at once, not
+/// a step at a time (`AdaptivePowerControlV1.AlgoPowerControlDynamic`).
 #[derive(Debug, Clone)]
 pub struct SurfaceGuard {
     limit_c: u8,
@@ -299,7 +304,7 @@ impl SurfaceGuard {
         let gap = self.last_c.map_or(0, |last| surface_c as i16 - last as i16);
         self.last_c = Some(surface_c);
         let release = self.limit_c.saturating_sub(SURFACE_RELEASE_C);
-        let floor = UNLEASHED_PL1_MIN_W;
+        let floor = SURFACE_PL1_FLOOR_W.min(self.max_pl1);
 
         let pl1 = self.pl1 as i16;
         let next = if surface_c >= self.limit_c {
@@ -315,7 +320,7 @@ impl SurfaceGuard {
             }
         } else {
             self.hot = false;
-            pl1 + SURFACE_PL1_STEP_W as i16
+            self.max_pl1 as i16
         };
         self.pl1 = next.clamp(floor as i16, self.max_pl1 as i16) as u8;
         SurfaceStep {
@@ -399,11 +404,22 @@ mod tests {
         for _ in 0..30 {
             g.cycle(60);
         }
-        assert_eq!(g.pl1(), platform::UNLEASHED_PL1_MIN_W);
-        for _ in 0..30 {
-            g.cycle(30);
+        assert_eq!(g.pl1(), platform::SURFACE_PL1_FLOOR_W);
+        g.cycle(30);
+        assert_eq!(
+            g.pl1(),
+            71,
+            "given back at once, but not past the configured value"
+        );
+    }
+
+    #[test]
+    fn a_configured_pl1_under_the_floor_is_the_floor() {
+        let mut g = SurfaceGuard::new(44, 25);
+        for _ in 0..5 {
+            g.cycle(60);
         }
-        assert_eq!(g.pl1(), 71, "given back, but not past the configured value");
+        assert_eq!(g.pl1(), 25);
     }
 
     #[test]

@@ -17,9 +17,57 @@
 //! (90/255 x 4800 = 1694); mid-ramp, 2300 RPM and 122 (2296). So anything
 //! that compares `pwm1` against what was written disagrees on every ramp -
 //! see omend's check_drift, which used to.
+//!
+//! The second fan. Up to 7.2, hp-wmi sets both fans from `pwm1`, the second
+//! at a fixed offset from the first - the first row's of the firmware's fan
+//! table, -200 RPM on 8D24. From 7.3 it has `pwm2` and leaves the second fan
+//! wherever it was until that is written. Where `pwm2` exists it is written
+//! here, the way OMEN Gaming Hub chooses it: see [`second_fan_rpm`].
 
 use crate::error::{Error, Result};
 use crate::sysfs::Hwmon;
+
+/// The firmware's fan table, as omen-kbd-rgb reads it from WMI command 0x2F:
+/// one row per line, fan 1 RPM, fan 2 RPM, noise in dB.
+const FAN_TABLE: &str = "/sys/devices/platform/omen-kbd-rgb/fan_table";
+
+/// (fan 1, fan 2) RPM per row of the firmware's table, lowest first. Empty
+/// without omen-kbd-rgb 0.4.0, or where the firmware has no table.
+pub fn fan_table() -> Vec<(u32, u32)> {
+    std::fs::read_to_string(FAN_TABLE)
+        .map(|s| parse_fan_table(&s))
+        .unwrap_or_default()
+}
+
+fn parse_fan_table(text: &str) -> Vec<(u32, u32)> {
+    text.lines()
+        .filter_map(|line| {
+            let mut it = line.split_whitespace().map(|v| v.parse::<u32>().ok());
+            Some((it.next()??, it.next()??))
+        })
+        .collect()
+}
+
+/// The second fan's setpoint for a first-fan setpoint, as OMEN Gaming Hub
+/// works it out (`SwFanControlTable.GetSameLevelFans`, reached from
+/// `PerformanceControlHelper.SetSwFanControlLevel`): find the last row whose
+/// first-fan speed is not above the target and keep that row's difference.
+/// Below the first row, or with no table, the Hub uses 200 RPM less.
+///
+/// On 8D24 that puts the second fan two or three steps below the first at
+/// the bottom of the table and above it from 2900 RPM up. The Hub's own log
+/// has 3800 going out as 3800/4100 and 2100 as 2100/1900; hp-wmi's fixed
+/// first-row offset would have sent 3800/3600.
+pub fn second_fan_rpm(table: &[(u32, u32)], first: u32) -> u32 {
+    if first == 0 {
+        return 0;
+    }
+    match table.iter().rev().find(|(cpu, _)| *cpu <= first) {
+        Some((_, 0)) => 0,
+        Some((cpu, gpu)) => (first + gpu).saturating_sub(*cpu),
+        None => first.saturating_sub(200),
+    }
+}
 
 /// Names hp-wmi's hwmon may use in its `name` file. "hp" on 7.2; the second
 /// catches a future rename.
@@ -95,6 +143,10 @@ pub struct Fan {
     /// numbers straight out of the EC's memory-mapped RAM. hp-wmi stays the
     /// fallback, and the only thing written to.
     tach: Option<Hwmon>,
+    /// hp-wmi has `pwm2`: the second fan is set separately (7.3 and later).
+    second: bool,
+    /// The firmware's fan table, for the second fan's setpoint.
+    table: Vec<(u32, u32)>,
     min_rpm: u32,
     max_rpm: u32,
 }
@@ -117,12 +169,21 @@ impl Fan {
         let tach = Hwmon::all()
             .into_iter()
             .find(|h| h.name == "omen" && h.has("fan1_input"));
+        let second = hwmon.has("pwm2");
         Ok(Self {
+            table: if second { fan_table() } else { Vec::new() },
             hwmon,
             tach,
+            second,
             min_rpm,
             max_rpm,
         })
+    }
+
+    /// Whether the second fan is set on its own (hp-wmi 7.3 and later), and
+    /// whether that follows the firmware's table rather than a fixed offset.
+    pub fn second_fan(&self) -> (bool, bool) {
+        (self.second, !self.table.is_empty())
     }
 
     pub fn hwmon_path(&self) -> &std::path::Path {
@@ -197,6 +258,10 @@ impl Fan {
         let clamped = rpm.clamp(self.min_rpm, self.max_rpm);
         self.set_mode(PwmMode::Manual)?;
         self.hwmon.write("pwm1", self.rpm_to_pwm(clamped) as i64)?;
+        if self.second {
+            let second = second_fan_rpm(&self.table, clamped).clamp(self.min_rpm, self.max_rpm);
+            self.hwmon.write("pwm2", self.rpm_to_pwm(second) as i64)?;
+        }
         Ok(clamped)
     }
 
@@ -214,9 +279,17 @@ impl Fan {
     /// the fans back up because control never left. omen-space reached the
     /// same conclusion on the same hardware family and never leaves manual
     /// mode either.
+    ///
+    /// From 7.3 hp-wmi clamps every `pwm1`/`pwm2` write to the table's
+    /// lowest speed, so 0 holds the fans at 1800 RPM there rather than
+    /// stopping them; the Hub stops them (both setpoints 0 in its idle mode).
     pub fn set_idle(&self) -> Result<()> {
         self.set_mode(PwmMode::Manual)?;
-        self.hwmon.write("pwm1", 0)
+        self.hwmon.write("pwm1", 0)?;
+        if self.second {
+            self.hwmon.write("pwm2", 0)?;
+        }
+        Ok(())
     }
 
     /// Hands control back to the EC. Safety rule 1: called on every exit path.
@@ -248,9 +321,45 @@ mod tests {
                 name: "hp".into(),
             },
             tach: None,
+            second: false,
+            table: Vec::new(),
             min_rpm: min,
             max_rpm: max,
         }
+    }
+
+    /// 8D24's GM2F, as omen-kbd-rgb prints it (P1F1/P1F2/P1DB in the DSDT).
+    const TABLE_8D24: &str = "1800 1600 22\n2100 1900 25\n2400 2100 28\n2600 2400 31\n\
+        2800 2600 34\n2900 3200 37\n3300 3500 40\n3600 3900 43\n4200 4400 46\n\
+        4500 4700 48\n4800 5100 50\n";
+
+    #[test]
+    fn the_table_parses() {
+        let t = parse_fan_table(TABLE_8D24);
+        assert_eq!(t.len(), 11);
+        assert_eq!(t[0], (1800, 1600));
+        assert_eq!(t[10], (4800, 5100));
+        assert!(parse_fan_table("garbage\n\n").is_empty());
+    }
+
+    #[test]
+    fn the_second_fan_follows_the_hubs_log() {
+        // Pairs OMEN Gaming Hub logged on 8D24 (phase1-findings.md §6.3/6.4).
+        let t = parse_fan_table(TABLE_8D24);
+        assert_eq!(second_fan_rpm(&t, 2100), 1900);
+        assert_eq!(second_fan_rpm(&t, 2400), 2100);
+        assert_eq!(second_fan_rpm(&t, 3800), 4100);
+        assert_eq!(second_fan_rpm(&t, 4400), 4600);
+    }
+
+    #[test]
+    fn the_second_fan_below_the_table_and_without_one() {
+        let t = parse_fan_table(TABLE_8D24);
+        assert_eq!(second_fan_rpm(&t, 0), 0, "off is off");
+        assert_eq!(second_fan_rpm(&t, 1500), 1300);
+        assert_eq!(second_fan_rpm(&[], 3000), 2800);
+        // A row with no second fan asks for none.
+        assert_eq!(second_fan_rpm(&[(1800, 0)], 2000), 0);
     }
 
     #[test]

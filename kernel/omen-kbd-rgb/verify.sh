@@ -158,6 +158,31 @@ else
   no "no cpu_pl1 / unleashed - not 8D24, or not an OMEN by DMI"
 fi
 
+say "8d. Fan table and the GPU power bytes (0.4.0)"
+if [ -e $DEV/fan_table ]; then
+  if ROWS=$(cat $DEV/fan_table 2>/dev/null) && [ -n "$ROWS" ]; then
+    ok "fan_table, $(echo "$ROWS" | wc -l) rows (fan 1 RPM, fan 2 RPM, dB):"
+    echo "$ROWS" | sed 's/^/       /'
+    # 8D24's DSDT: P1F1/P1F2/P1DB start at 18/16/22 and end at 48/51/50.
+    [ "$(echo "$ROWS" | head -1)" = "1800 1600 22" ] && [ "$(echo "$ROWS" | tail -1)" = "4800 5100 50" ] \
+      && ok "first and last rows are the DSDT's" \
+      || info "not 8D24's table - expected on another board"
+  else
+    no "fan_table did not read - see dmesg"
+  fi
+else
+  no "no fan_table - not an OMEN or Victus by DMI, or a module older than 0.4.0"
+fi
+if [ -e $DEV/gpu_ppab ]; then
+  # Same value back: GM22 now goes out as {cTGP, PPAB, 1, 87}, as the Hub sends it.
+  P=$(cat $DEV/gpu_ppab)
+  if echo "$P" > $DEV/gpu_ppab && [ "$(cat $DEV/gpu_ppab)" = "$P" ]; then
+    ok "Dynamic Boost written back through GM22 and read back the same"
+  else
+    no "writing Dynamic Boost back through GM22 failed"
+  fi
+fi
+
 say "9. debugfs"
 mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug
 if [ -r /sys/kernel/debug/omen-kbd-rgb/lighting_regs ]; then

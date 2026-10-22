@@ -1,5 +1,10 @@
 # What OMEN Gaming Hub does that this project did not (8D24)
 
+> Continued in [hub-rea-review.md](hub-rea-review.md): every WMI call site
+> in the Hub checked against what this project sends, three differences
+> fixed (GM 0x22's last two bytes, the second fan, the surface loop's floor
+> and release) and the gaps that are left.
+
 Surveyed 2026-10-06 on the OMEN 16-ap0xxx, Windows 11, OMEN Gaming Hub
 1101.2609.3.0. Three sources, in order of how much they are worth:
 
