@@ -125,6 +125,20 @@ pub struct AutomationConfig {
     #[serde(default, skip_serializing_if = "PowerRule::is_empty")]
     pub gamemode: PowerRule,
 
+    /// While GameMode says a game is running and `gamemode` above names
+    /// nothing, select performance - on mains, with an adapter the firmware
+    /// counts as enough, and not over performance or Unleashed. OMEN Gaming
+    /// Hub's `AutoSwitchToPerformanceMode`, which is on by default there
+    /// too. Needs gamemode.ini to call omenctl (`omenctl gamemode setup`).
+    #[serde(default = "yes")]
+    pub game_performance: bool,
+
+    /// Take an adapter the firmware counts as too weak for battery: the
+    /// `on_battery` rule applies while it is the one plugged in. The Hub's
+    /// `AutoSwitchToEcoMode`, off by default there too.
+    #[serde(default)]
+    pub weak_adapter_is_battery: bool,
+
     /// What the OMEN key does.
     ///
     /// On Windows it opens the Gaming Hub, which is what someone pressing it
@@ -202,6 +216,8 @@ impl Default for AutomationConfig {
             on_ac: PowerRule::default(),
             on_battery: PowerRule::default(),
             gamemode: PowerRule::default(),
+            game_performance: true,
+            weak_adapter_is_battery: false,
             app_scan_secs: default_app_scan(),
         }
     }
@@ -725,6 +741,12 @@ mod tests {
         cfg.validate().unwrap();
         assert_eq!(cfg.fan.algorithm, FanAlgorithm::Curve);
         assert_eq!(cfg.power, crate::limits::PowerConfig::default());
+        let auto = AutomationConfig::default();
+        assert_eq!(cfg.automation.game_performance, auto.game_performance);
+        assert_eq!(
+            cfg.automation.weak_adapter_is_battery,
+            auto.weak_adapter_is_battery
+        );
     }
 
     #[test]

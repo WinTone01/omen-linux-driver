@@ -209,6 +209,14 @@ pub enum Request {
     GameMode { on: bool },
     /// What to do while GameMode is active.
     SetGameModeRule { rule: crate::power::PowerRule },
+    /// The Hub's automatic switches: performance for a game, and a weak
+    /// adapter counted as battery. `None` leaves one as it is.
+    SetAutomationSwitches {
+        #[serde(default)]
+        game_performance: Option<bool>,
+        #[serde(default)]
+        weak_adapter_is_battery: Option<bool>,
+    },
     /// Re-read the config from disk.
     Reload,
 }
@@ -375,6 +383,14 @@ pub struct Snapshot {
     pub gamemode: bool,
     #[serde(default)]
     pub gamemode_rule: crate::power::PowerRule,
+    /// The Hub's two automatic switches (config::AutomationConfig), and
+    /// whether the firmware counts the adapter in use as too weak.
+    #[serde(default)]
+    pub game_performance: bool,
+    #[serde(default)]
+    pub weak_adapter_is_battery: bool,
+    #[serde(default)]
+    pub adapter_weak: bool,
     /// Whether hp-wmi's automatic mode hands the fans to the EC's curve
     /// (fan::auto_hands_over), so a client can say what "EC default" does.
     #[serde(default)]

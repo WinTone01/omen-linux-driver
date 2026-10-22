@@ -64,6 +64,7 @@
 #define OMEN_GRAPHICS_MUX	0x52
 #define DESIGN_DATA_LEN		64
 #define DESIGN_MUX_BYTE		7
+#define DESIGN_TPP_BYTE		8
 
 /*
  * Mode numbering as the firmware uses it, and as OMEN Gaming Hub writes it.
@@ -110,6 +111,12 @@ static bool omen_has_surface_temp;
 static bool omen_has_power_limits;
 /* The shared CPU+GPU limit: as above, and the firmware reports one. */
 static bool omen_has_tpp;
+/*
+ * The shared limit the platform is designed for, in watts: byte 8 of the
+ * system design data, what the Hub calls DefaultConcurrentTdp and adds its
+ * offsets to. 45 on 8D24. Read with the mux byte; 0 when unknown.
+ */
+static u8 omen_tpp_default;
 
 enum lighting_query {
 	LIGHTING_CAPS		= 0x01,	/* LM01 */
@@ -653,6 +660,8 @@ static u8 omen_mux_read_supported(void)
 		pr_debug("system design data unavailable (%d)\n", ret);
 		return 0;
 	}
+	/* The same reply carries the shared limit's design value. */
+	omen_tpp_default = buffer[DESIGN_TPP_BYTE];
 	return buffer[DESIGN_MUX_BYTE];
 }
 
@@ -1225,6 +1234,18 @@ static ssize_t gpu_tpp_store(struct device *dev,
 static DEVICE_ATTR_RW(gpu_tpp);
 
 /*
+ * The shared limit the platform is designed for, from the design data: the
+ * base the Hub adds its performance and Unleashed offsets to. Unlike
+ * gpu_tpp it does not follow the profile.
+ */
+static ssize_t gpu_tpp_default_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%u\n", omen_tpp_default);
+}
+static DEVICE_ATTR_RO(gpu_tpp_default);
+
+/*
  * Unleashed: 1 while HPCM reads 0x04. Writing 0 puts the performance profile
  * back, which is the mode Unleashed sits above; anything else is for
  * platform_profile to choose, and writing it there ends Unleashed too.
@@ -1272,6 +1293,7 @@ static struct attribute *omen_rgb_attrs[] = {
 	&dev_attr_gpu_slowdown_c.attr,
 	&dev_attr_cpu_pl1.attr,
 	&dev_attr_gpu_tpp.attr,
+	&dev_attr_gpu_tpp_default.attr,
 	&dev_attr_unleashed.attr,
 	&dev_attr_fan_table.attr,
 	&dev_attr_adapter.attr,
@@ -1290,6 +1312,8 @@ static umode_t omen_rgb_attr_visible(struct kobject *kobj,
 		return omen_has_power_limits ? attr->mode : 0;
 	if (attr == &dev_attr_gpu_tpp.attr)
 		return omen_has_tpp ? attr->mode : 0;
+	if (attr == &dev_attr_gpu_tpp_default.attr)
+		return omen_has_tpp && omen_tpp_default ? attr->mode : 0;
 	if (attr == &dev_attr_fan_table.attr || attr == &dev_attr_adapter.attr)
 		return omen_is_family ? attr->mode : 0;
 

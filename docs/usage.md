@@ -986,6 +986,16 @@ Feral GameMode runs `omenctl gamemode on` and `off`. While a game is running,
 the rule applies, and it is put back afterwards, the same way an application
 profile is. An application profile that names the game wins over it.
 
+With no rule, a game gets performance, as it does under OMEN Gaming Hub
+(its `AutoSwitchToPerformanceMode`, on by default there too): only on
+mains, only with an adapter the firmware counts as enough, and never over
+performance or Unleashed. `omenctl gamemode auto off` turns that off.
+
+The Hub's other switch, Eco on an adapter that is too weak, is off by
+default there and here. `omenctl power weak-adapter battery` turns it on:
+the `on_battery` rule then applies while such an adapter is plugged in, and
+`omenctl power limits` says when the firmware counts it as too weak.
+
 ### Refresh rate per application or power source
 
 ```bash

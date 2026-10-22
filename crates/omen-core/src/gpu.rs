@@ -372,18 +372,46 @@ pub mod mux {
             .filter(|s| !s.is_empty())
     }
 
-    /// `None` when this machine has no mux, or the module that reports it is
-    /// not loaded.
+    /// Upstream hp-wmi's own control (2026-07, kernel 7.3): the same BIOS
+    /// command, written as the mode's index. Preferred when it is there -
+    /// it is the one that will stay - with omen-kbd-rgb kept for what hp-wmi
+    /// does not say: which modes are supported, and whether one is waiting
+    /// for a reboot.
+    const HP_WMI: &str = "/sys/devices/platform/hp-wmi/gpu_mux_mode";
+
+    /// The firmware's numbering, the same in both drivers.
+    const NAMES: [&str; 4] = ["hybrid", "discrete", "optimus", "uma"];
+
+    fn name_of(index: &str) -> Option<String> {
+        NAMES
+            .get(index.trim().parse::<usize>().ok()?)
+            .map(|n| (*n).to_owned())
+    }
+
+    fn index_of(name: &str) -> Option<usize> {
+        NAMES.iter().position(|n| *n == name)
+    }
+
+    fn hp_wmi_mode() -> Option<String> {
+        name_of(&std::fs::read_to_string(HP_WMI).ok()?)
+    }
+
+    /// `None` when this machine has no mux, or neither module that reports
+    /// it is loaded.
     pub fn discover() -> Option<Mux> {
-        let supported: Vec<String> = read("gpu_mux_supported")?
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect();
+        let supported: Vec<String> = match read("gpu_mux_supported") {
+            Some(list) => list.split_whitespace().map(str::to_owned).collect(),
+            // hp-wmi alone does not say. Hybrid and discrete are what it
+            // assumes itself for a mux without a mode map, and it checks
+            // the firmware's own mask before it writes anything.
+            None if Path::new(HP_WMI).exists() => vec!["hybrid".into(), "discrete".into()],
+            None => return None,
+        };
         if supported.is_empty() {
             return None;
         }
         Some(Mux {
-            current: read("gpu_mux_mode"),
+            current: hp_wmi_mode().or_else(|| read("gpu_mux_mode")),
             pending_reboot: read("gpu_mux_pending_reboot").map(|v| v == "1"),
             supported,
         })
@@ -403,8 +431,26 @@ pub mod mux {
                 mux.supported.join(", ")
             )));
         }
-        let file = path("gpu_mux_mode");
-        std::fs::write(&file, mode).map_err(|source| crate::Error::Write { path: file, source })
+        let (file, value) = match index_of(mode) {
+            Some(index) if Path::new(HP_WMI).exists() => (PathBuf::from(HP_WMI), index.to_string()),
+            _ => (path("gpu_mux_mode"), mode.to_owned()),
+        };
+        std::fs::write(&file, value).map_err(|source| crate::Error::Write { path: file, source })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn the_two_drivers_number_the_modes_alike() {
+            assert_eq!(name_of("0\n").as_deref(), Some("hybrid"));
+            assert_eq!(name_of("3").as_deref(), Some("uma"));
+            assert_eq!(name_of("7"), None);
+            for (i, n) in NAMES.iter().enumerate() {
+                assert_eq!(index_of(n), Some(i));
+            }
+        }
     }
 }
 

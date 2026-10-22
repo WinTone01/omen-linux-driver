@@ -101,10 +101,15 @@ USAGE:
     omenctl power floor performance|unleashed <PERCENT>
                                    Below this on battery, the mode steps down
     omenctl power epp on|off       The CPU's EPP hint follows the profile
+    omenctl power weak-adapter battery|mains
+                                   An adapter the firmware counts as too weak
+                                   gets the battery rule (default: mains)
 
     omenctl gamemode [on|off]      Feral GameMode started / ended (gamemode.ini)
     omenctl gamemode rule <PROFILE> [FAN] [NNhz]
                                    What a game gets while GameMode is on
+    omenctl gamemode auto on|off   With no rule: performance for a game, on
+                                   mains (the Hub's default; on)
     omenctl gamemode setup         The lines to put in gamemode.ini
     omenctl overlay                One status line, for MangoHud's exec=
     omenctl session                Apply the rules' refresh rates in this
@@ -1648,6 +1653,16 @@ fn power_limits(args: &[String], snap: &omen_core::ipc::Snapshot) -> Result<()> 
                     "draining on mains - PL1 held down until the adapter keeps up",
                 );
             }
+            if snap.adapter_weak {
+                field(
+                    "adapter",
+                    if snap.weak_adapter_is_battery {
+                        "too weak for this machine - the battery rule applies"
+                    } else {
+                        "too weak for this machine (omenctl power weak-adapter battery)"
+                    },
+                );
+            }
             println!();
             field("unleashed PL1", format!("{} W", cfg.unleashed_pl1_w));
             field(
@@ -1702,8 +1717,22 @@ fn power_limits(args: &[String], snap: &omen_core::ipc::Snapshot) -> Result<()> 
                 _ => bail!("omenctl power epp on|off"),
             }
         }
+        Some("weak-adapter") => {
+            let on = match args.get(2).map(String::as_str) {
+                Some("battery") | Some("on") => true,
+                Some("mains") | Some("off") => false,
+                _ => bail!("omenctl power weak-adapter battery|mains"),
+            };
+            return client::report(client::send(&Request::SetAutomationSwitches {
+                game_performance: None,
+                weak_adapter_is_battery: Some(on),
+            })?);
+        }
         Some(other) => {
-            bail!("unknown: {other} (ac / battery / limits / pl1 / surface / tpp / floor / epp)")
+            bail!(
+                "unknown: {other} (ac / battery / limits / pl1 / surface / tpp / floor / epp / \
+                 weak-adapter)"
+            )
         }
         None => unreachable!("handled by power_rules"),
     }
@@ -1723,6 +1752,17 @@ fn gamemode(args: &[String]) -> Result<()> {
             };
             client::report(client::send(&Request::SetGameModeRule { rule })?)
         }
+        Some("auto") => {
+            let on = match args.get(2).map(String::as_str) {
+                Some("on") => true,
+                Some("off") => false,
+                _ => bail!("omenctl gamemode auto on|off"),
+            };
+            client::report(client::send(&Request::SetAutomationSwitches {
+                game_performance: Some(on),
+                weak_adapter_is_battery: None,
+            })?)
+        }
         Some("setup") => {
             println!(
                 "Add this to ~/.config/gamemode.ini (or /etc/gamemode.ini):\n\n\
@@ -1734,7 +1774,7 @@ fn gamemode(args: &[String]) -> Result<()> {
             );
             Ok(())
         }
-        Some(other) => bail!("unknown: {other} (on / off / rule / setup)"),
+        Some(other) => bail!("unknown: {other} (on / off / rule / auto / setup)"),
         None => {
             let snap = app_snapshot()?;
             field(
@@ -1745,7 +1785,16 @@ fn gamemode(args: &[String]) -> Result<()> {
                     "off"
                 },
             );
-            field("while on", snap.gamemode_rule.summary());
+            field(
+                "while on",
+                if snap.gamemode_rule.is_empty() && snap.game_performance {
+                    "performance, on mains with an adapter that is enough \
+                     (omenctl gamemode auto off)"
+                        .to_string()
+                } else {
+                    snap.gamemode_rule.summary()
+                },
+            );
             Ok(())
         }
     }

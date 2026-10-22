@@ -152,6 +152,7 @@ if [ -e $DEV/cpu_pl1 ]; then
   else
     no "writing PL1 back through GM29 failed"
   fi
+  [ -e $DEV/gpu_tpp_default ] && ok "shared limit by design $(cat $DEV/gpu_tpp_default) W (design data byte 8; 45 on 8D24)"
   [ -e $DEV/gpu_tpp ] && ok "shared CPU+GPU limit $(cat $DEV/gpu_tpp) W (GM2A)" \
                       || info "no gpu_tpp - the firmware reports no shared limit"
 else

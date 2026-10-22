@@ -309,9 +309,8 @@ impl PowerControl {
             _ => None,
         }
         .map(|offset| {
-            platform::TPP_MIN_W
-                .saturating_add(offset.min(platform::TPP_MAX_OFFSET_W))
-                .min(platform::TPP_MAX_W)
+            let base = limits::tpp_default().unwrap_or(platform::TPP_MIN_W);
+            limits::tpp_raised(base, offset)
         });
 
         let want = match (raised, self.tpp_raised, self.tpp_base) {

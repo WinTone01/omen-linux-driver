@@ -707,6 +707,24 @@ fn dispatch(req: Request, shared: &Shared, config_path: &Path) -> Response {
             })
         }
 
+        Request::SetAutomationSwitches {
+            game_performance,
+            weak_adapter_is_battery,
+        } => {
+            info!(
+                "request: game performance {game_performance:?}, weak adapter as battery \
+                 {weak_adapter_is_battery:?}"
+            );
+            edit_config(config_path, shared, "automatic switches saved", |cfg| {
+                if let Some(on) = game_performance {
+                    cfg.automation.game_performance = on;
+                }
+                if let Some(on) = weak_adapter_is_battery {
+                    cfg.automation.weak_adapter_is_battery = on;
+                }
+            })
+        }
+
         Request::Reload => Response::Done {
             message: if shared.request_reload_sync(APPLY_TIMEOUT) {
                 "the configuration has been re-read".into()

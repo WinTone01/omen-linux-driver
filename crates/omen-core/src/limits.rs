@@ -68,10 +68,10 @@ pub mod platform {
 
     /// The shared CPU+GPU limit the Hub works from on this platform (its
     /// `DefaultConcurrentTdp`, logged as `SetConcurrentTdp - value=45`) and
-    /// the most it allows (`TppMaxValue`). Fixed rather than read: what the
-    /// firmware reports follows the profile - 30 W was read on Linux while
-    /// the Hub saw 45 - and an offset added to a moving base is not the
-    /// setting someone chose.
+    /// the most it allows (`TppMaxValue`). Not the limit in force, which
+    /// follows the profile - 30 W was read on Linux while the Hub saw 45 -
+    /// but the design value: byte 8 of the firmware's design data, which
+    /// [`super::tpp_default`] reads. This is 8D24's, for when it cannot.
     pub const TPP_MIN_W: u8 = 45;
     pub const TPP_MAX_W: u8 = 65;
 
@@ -214,6 +214,21 @@ pub fn set_pl1(watts: u8) -> Result<()> {
 /// The shared CPU+GPU limit in force, in watts.
 pub fn tpp() -> Option<u8> {
     read_u8("gpu_tpp").filter(|w| *w > 0)
+}
+
+/// The shared limit the platform is designed for - byte 8 of the firmware's
+/// design data, the Hub's `DefaultConcurrentTdp`, which it adds the
+/// performance and Unleashed offsets to (omen-kbd-rgb 0.4.0). `None` without
+/// it; [`platform::TPP_MIN_W`], 8D24's value, stands in then.
+pub fn tpp_default() -> Option<u8> {
+    read_u8("gpu_tpp_default").filter(|w| *w > 0)
+}
+
+/// What the shared limit is raised to for an offset: the design value plus
+/// the offset, no further than HP's maximum (`TppMaxValue`).
+pub fn tpp_raised(base: u8, offset: u8) -> u8 {
+    base.saturating_add(offset.min(platform::TPP_MAX_OFFSET_W))
+        .min(platform::TPP_MAX_W)
 }
 
 pub fn set_tpp(watts: u8) -> Result<()> {
@@ -700,6 +715,14 @@ mod tests {
         assert_eq!(d.step(false, 80, 90, 2.0), 45);
         d.step(false, 80, 90, 10.0);
         assert!(!d.limiting());
+    }
+
+    #[test]
+    fn the_shared_limit_is_raised_from_the_design_value() {
+        assert_eq!(tpp_raised(45, 20), 65, "8D24: 45 + 20, HP's maximum");
+        assert_eq!(tpp_raised(45, 0), 45);
+        assert_eq!(tpp_raised(45, 50), 65, "the offset is capped");
+        assert_eq!(tpp_raised(50, 20), 65, "and so is the result");
     }
 
     #[test]

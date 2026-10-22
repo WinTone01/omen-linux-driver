@@ -32,6 +32,7 @@ use omen_core::curve::Governor;
 use omen_core::fan::Fan;
 use omen_core::gpu;
 use omen_core::ipc::{ControlMode, CurveSpec, Snapshot};
+use omen_core::power::PowerRule;
 use omen_core::profile::PlatformProfile;
 use omen_core::thermal::Thermal;
 
@@ -416,9 +417,17 @@ struct Runtime {
     /// Rules that follow the machine's own state. Outranked by an
     /// application profile, and outranking the power rules.
     triggers: triggerwatch::TriggerWatch,
-    /// Last known power source, so a rule is applied on the change rather
-    /// than on every tick - otherwise it could not be overridden.
+    /// Last known power source.
     on_ac: Option<bool>,
+    /// The power source as the mains/battery rule sees it - mains, unless
+    /// the adapter is too weak and the configuration counts that as battery.
+    /// Kept apart so the rule is applied on the change rather than on every
+    /// tick - otherwise it could not be overridden.
+    rule_on_ac: Option<bool>,
+    /// Whether the firmware counts the adapter as too weak, and when that
+    /// was last asked: a WMI call, and the answer changes only with a plug.
+    adapter_weak: bool,
+    adapter_checked: Option<Instant>,
     /// The named curve in force, when a rule replaced the configured one.
     curve_preset: Option<String>,
     /// A dust-clearing run: full power until this passes, then back to the
@@ -522,6 +531,9 @@ impl Runtime {
             apps: appwatch::AppWatch::new(),
             triggers: triggerwatch::TriggerWatch::new(),
             on_ac: None,
+            rule_on_ac: None,
+            adapter_weak: false,
+            adapter_checked: None,
             curve_preset: None,
             cleaning: None,
             zones_checked: Instant::now(),
@@ -913,13 +925,22 @@ impl Runtime {
     /// game asking for performance is a more specific statement than "this
     /// machine is on battery".
     fn apply_power_rule(&mut self) {
-        let now = omen_core::power::on_ac();
-        if now == self.on_ac || now.is_none() {
+        let Some(ac) = omen_core::power::on_ac() else {
+            return;
+        };
+        self.refresh_adapter(ac);
+        self.on_ac = Some(ac);
+        // A weak adapter counts as battery for the rule when asked to: the
+        // Hub's switch to Eco on a low-wattage adapter.
+        let on_ac = ac && !(self.cfg.automation.weak_adapter_is_battery && self.adapter_weak);
+        if Some(on_ac) == self.rule_on_ac {
             return;
         }
-        let first = self.on_ac.is_none();
-        self.on_ac = now;
-        let on_ac = now.unwrap();
+        let first = self.rule_on_ac.is_none();
+        self.rule_on_ac = Some(on_ac);
+        if ac && !on_ac {
+            info!("the adapter is too weak for this machine - the battery rule applies");
+        }
 
         let rule = if on_ac {
             self.cfg.automation.on_ac.clone()
@@ -974,6 +995,34 @@ impl Runtime {
                 (None, Some(_)) => self.use_curve(None),
                 _ => {}
             }
+        }
+    }
+
+    /// Asks the firmware about the adapter: when the power source changes,
+    /// and every half minute on mains - an adapter swapped for another is
+    /// not always a change of source. On battery there is none to judge.
+    fn refresh_adapter(&mut self, on_ac: bool) {
+        const EVERY: Duration = Duration::from_secs(30);
+        if !on_ac {
+            self.adapter_weak = false;
+            self.adapter_checked = None;
+            return;
+        }
+        let changed = self.on_ac != Some(true);
+        if changed || self.adapter_checked.is_none_or(|at| at.elapsed() >= EVERY) {
+            self.adapter_checked = Some(Instant::now());
+            let weak = omen_core::power::adapter_weak();
+            if weak != self.adapter_weak {
+                info!(
+                    "the firmware counts the adapter as {}",
+                    if weak {
+                        "too weak for this machine"
+                    } else {
+                        "enough"
+                    }
+                );
+            }
+            self.adapter_weak = weak;
         }
     }
 
@@ -1283,7 +1332,7 @@ impl Runtime {
     /// the more specific statement and wins - and while one holds, this is
     /// released rather than left applied underneath.
     fn scan_gamemode(&mut self) {
-        let rule = &self.cfg.automation.gamemode;
+        let rule = self.gamemode_rule();
         let holding =
             (self.gamemode && !rule.is_empty() && self.apps.active().is_none()).then(|| {
                 (
@@ -1297,6 +1346,37 @@ impl Runtime {
             });
         let actions = self.game.poll(holding, self.mode);
         self.take_actions(actions);
+    }
+
+    /// GameMode's rule: the configured one, or - when that names nothing -
+    /// the Hub's switch to performance for a game.
+    ///
+    /// The Hub's conditions (`ShouldAutoSwitchToPerformanceMode`): on mains,
+    /// with an adapter the firmware counts as enough, and not when the mode
+    /// is already performance or Unleashed - a switch "up" to performance
+    /// from Unleashed would be a step down. Judged when the game starts;
+    /// once the rule holds, only the power source can end it early.
+    fn gamemode_rule(&self) -> PowerRule {
+        let rule = &self.cfg.automation.gamemode;
+        if !rule.is_empty() || !self.cfg.automation.game_performance || !self.gamemode {
+            return rule.clone();
+        }
+        if self.on_ac != Some(true) || self.adapter_weak {
+            return PowerRule::default();
+        }
+        if self.game.active().is_none() {
+            let current = PlatformProfile::discover().and_then(|p| p.get().ok());
+            if current
+                .as_deref()
+                .is_some_and(|p| p == "performance" || p == omen_core::limits::UNLEASHED)
+            {
+                return PowerRule::default();
+            }
+        }
+        PowerRule {
+            profile: Some("performance".into()),
+            ..PowerRule::default()
+        }
     }
 
     /// The rule in force, most specific first: an application, GameMode, a
@@ -1876,6 +1956,9 @@ impl Runtime {
             cpu_average_c: self.hub.as_ref().and_then(|h| h.cpu_average()),
             gamemode: self.gamemode,
             gamemode_rule: self.cfg.automation.gamemode.clone(),
+            game_performance: self.cfg.automation.game_performance,
+            weak_adapter_is_battery: self.cfg.automation.weak_adapter_is_battery,
+            adapter_weak: self.adapter_weak,
             refresh_hz: self.wanted_refresh(),
             auto_hands_over: omen_core::fan::auto_hands_over(),
             uptime_secs: self.started.elapsed().as_secs(),

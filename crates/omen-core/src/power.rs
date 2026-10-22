@@ -141,6 +141,12 @@ pub fn adapter() -> Option<String> {
     read(Path::new("/sys/devices/platform/omen-kbd-rgb/adapter"))
 }
 
+/// Whether the firmware counts the adapter in use as too weak - what the Hub
+/// calls a low-wattage adapter. `false` when it cannot say.
+pub fn adapter_weak() -> bool {
+    adapter().is_some_and(|a| a == "below" || a == "faulty")
+}
+
 /// Whether the battery is discharging - on mains, the sign that the adapter
 /// is not keeping up with the load. `None` when there is no battery.
 pub fn battery_discharging() -> Option<bool> {

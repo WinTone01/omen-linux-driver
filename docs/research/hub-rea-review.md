@@ -256,23 +256,35 @@ And in the hp-wmi this project builds (fix-auto.sh, revision 2, reported as
   EC when it loads, and HPCM 0x04 is an error there - loaded with Unleashed
   on, hp-wmi silently registers no platform_profile.
 
-## Gaps left open
+## The third pass: what was left
 
-1. **GM 0x10's BIOS protection byte** (over-current, over-temperature): a
-   diagnostic the Hub logs whenever it changes. On 8D24 GM10 only ever
-   returns 2 in byte 0, so there is nothing to read.
-2. **The TPP base from design data byte 8**, for boards other than 8D24
-   (TPP is 8D24-only here today).
-3. **Two mux interfaces.** Upstream hp-wmi gained `gpu_mux_mode` on its
-   platform device in 2026-07; omen-kbd-rgb has its own. Both send the same
-   command. Once a kernel with it is common, omen-core should prefer
-   hp-wmi's and omen-kbd-rgb could stop offering one.
-4. **Switching to performance for a game, and to Eco on a weak adapter.**
-   The Hub does both by default-on settings. Here they are a GameMode rule
-   (`[automation.gamemode] profile = "performance"`) and a power rule, which
-   are off until configured. The adapter state is there to build on.
-5. **GPU slowdown tuning in the Hub's L0/L1 modes** (`IrGpsThreshold`):
-   those modes are not offered on this board.
+* **The TPP base from the design data.** omen-kbd-rgb keeps byte 8 of the
+  design data from the read it already makes for the mux, and offers it as
+  `gpu_tpp_default`; omend adds the offsets to it, as the Hub adds them to
+  `DefaultConcurrentTdp` (its `TppMinValue` when the platform file has none,
+  as this one does). 45 W stays the fallback.
+* **One mux interface.** Where upstream hp-wmi has `gpu_mux_mode` (7.3),
+  omen-core reads and writes the mode there, as the index both drivers
+  number alike; omen-kbd-rgb is kept for what hp-wmi does not say - the
+  supported modes and whether one waits for a reboot - and for older
+  kernels.
+* **The Hub's automatic switches.** `automation.game_performance` (on, as in
+  the Hub): while GameMode reports a game and no GameMode rule is set,
+  performance - with the Hub's conditions, on mains, an adapter the firmware
+  counts as enough, and not over performance or Unleashed.
+  `automation.weak_adapter_is_battery` (off, as in the Hub): the battery
+  rule applies on an adapter the firmware counts as too weak.
+
+## Not taken, and why
+
+1. **GM 0x10's BIOS protection byte** (over-current, over-temperature). On
+   8D24 GM10 builds a four-byte reply with 2 in byte 0 and nothing else, so
+   there is no protection state to read; and the call itself sets OMCC, the
+   "software is driving the fans" flag, which a read-only attribute must not
+   do as a side effect.
+2. **GPU slowdown tuning in the Hub's L0/L1 modes** (`IrGpsThreshold`): the
+   Hub moves the slowdown temperature with the palm rest only in those two
+   modes, which it does not offer on a board with Unleashed.
 
 ## Not on this machine
 

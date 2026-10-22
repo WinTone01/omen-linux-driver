@@ -187,6 +187,18 @@ app_scan_secs = 5
 # on_ac = { profile = "performance" }
 # on_battery = { profile = "low-power", fan = { mode = "curve" }, curve = "quiet" }
 
+# OMEN Gaming Hub's two automatic switches, with its defaults:
+#
+# While GameMode says a game is running and [automation.gamemode] below names
+# nothing, select performance - on mains, with an adapter the firmware counts
+# as enough, and not over performance or Unleashed. Needs gamemode.ini to call
+# omenctl: omenctl gamemode setup.
+game_performance = true
+#
+# An adapter the firmware counts as too weak for this machine gets the
+# on_battery rule, as if unplugged (the Hub's switch to Eco).
+weak_adapter_is_battery = false
+
 # Per-application profiles. While one of these programs is running the machine
 # switches to the settings given here, and goes back to what it was doing when
 # the program exits - to what it was, not to a fixed default. Nothing is
