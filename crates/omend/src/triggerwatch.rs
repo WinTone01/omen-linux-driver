@@ -54,6 +54,10 @@ impl TriggerWatch {
         self.inner.active()
     }
 
+    pub fn applied_profile(&self) -> Option<&str> {
+        self.inner.applied_profile()
+    }
+
     /// How long the machine has been idle, for the status output. Reported
     /// because "idle for 30 min" is a condition people will want to see the
     /// current value of before they trust a rule built on it.

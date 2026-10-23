@@ -95,6 +95,13 @@ Two things can still surprise you, and neither is a bug:
   own, because it genuinely did change.
 * An application can ask PPD to *hold* a profile for its lifetime. While a
   hold is active PPD may re-assert its choice over one made here.
+* Unleashed is entered through performance, and PPD can answer that with a
+  "performance" of its own, which ends Unleashed. omend puts it back: once
+  within the first 15 seconds whatever selected it, and - while a game's
+  rule (or a trigger, or GameMode's) holds Unleashed - every time the
+  profile drops to performance without being asked for through omend, at
+  most every 10 seconds. Choosing a profile in the window, with omenctl or
+  the OMEN key releases that.
 
 ## The discrete GPU is read through the EC
 
@@ -684,8 +691,13 @@ software; only Fn+F4 reaches it. See research/rgb-protocol.md §2.
 
 What else the module does on its own:
 
-* **Colours survive sleep.** They live in the EC, which the firmware may
-  reinitialise; the module writes them back on resume, daemon or not.
+* **Colours survive sleep, and so does the switch.** They live in the EC,
+  which the firmware may reinitialise; the module writes them back on
+  resume, daemon or not, and switches the backlight back on if it was on
+  going in - the firmware brings it back dark. The write is made a moment
+  after waking and checked, and repeated until it holds. If the keyboard
+  still stays dark after a resume, `sudo bash kernel/omen-kbd-rgb/probe-resume.sh`
+  right then says which path to the switch still works.
 * **Writes are folded.** One firmware call carries all four zones, and
   changes that arrive together — a whole keyboard, or an effect frame — go
   out as one.

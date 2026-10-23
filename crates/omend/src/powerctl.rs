@@ -40,6 +40,9 @@ pub struct Ctx<'a> {
     pub discharging: Option<bool>,
     pub surface: Option<f32>,
     pub read_only: bool,
+    /// A rule in force (an application, GameMode, a trigger) selected
+    /// Unleashed, and nobody has asked for another profile through us since.
+    pub hold_unleashed: bool,
 }
 
 /// What the caller has to do about it.
@@ -90,6 +93,9 @@ pub struct PowerControl {
     /// already - see on_profile.
     unleashed_at: Option<Instant>,
     unleashed_reasserted: bool,
+    /// When Unleashed was last put back for a rule that holds it, so a
+    /// program that keeps writing performance is not fought every tick.
+    unleashed_held_at: Option<Instant>,
     /// Who owns EPP when it is not us, as last checked.
     epp_owner: Option<&'static str>,
 }
@@ -97,6 +103,9 @@ pub struct PowerControl {
 /// How soon after Unleashed is entered a drop back to performance is taken
 /// for power-profiles-daemon echoing the profile write, rather than a person.
 const ECHO_WINDOW: Duration = Duration::from_secs(15);
+
+/// How often Unleashed is put back for a rule that holds it, at most.
+const HOLD_EVERY: Duration = Duration::from_secs(10);
 
 impl PowerControl {
     pub fn new() -> Self {
@@ -201,21 +210,48 @@ impl PowerControl {
         // `omenctl profile unleashed` from another profile did not stick, the
         // second did). A drop to performance this soon after entering is
         // taken for that echo, and Unleashed is put back once.
-        if from == Some(UNLEASHED)
-            && to == "performance"
-            && !self.unleashed_reasserted
+        //
+        // While a rule holds Unleashed - a game's profile - the same drop is
+        // put back whenever it happens, not only once: PPD can echo more than
+        // once, and later than the window, and the rule is still in force.
+        // A profile asked for through us clears the hold (ctx.hold_unleashed),
+        // so a person can still leave it. Once every HOLD_EVERY at most.
+        let echo = !self.unleashed_reasserted
             && self
                 .unleashed_at
-                .is_some_and(|at| at.elapsed() < ECHO_WINDOW)
-        {
-            self.unleashed_reasserted = true;
+                .is_some_and(|at| at.elapsed() < ECHO_WINDOW);
+        let dropped = from == Some(UNLEASHED) && to == "performance";
+        let held_recently = self
+            .unleashed_held_at
+            .is_some_and(|at| at.elapsed() < HOLD_EVERY);
+        if dropped && ctx.hold_unleashed && !echo && held_recently {
+            // Put back moments ago and dropped again: wait out the interval
+            // without taking the drop as the new state, so it is looked at
+            // again on the next tick rather than accepted for good.
+            self.applied_for = Some((UNLEASHED.to_owned(), ctx.on_ac));
+            return;
+        }
+        let held = ctx.hold_unleashed && !held_recently;
+        if dropped && (echo || held) {
+            if echo {
+                self.unleashed_reasserted = true;
+            } else {
+                self.unleashed_held_at = Some(Instant::now());
+            }
             match limits::set_unleashed(true) {
                 Ok(()) => {
-                    info!(
-                        "the profile went back to performance within {}s of Unleashed - \
-                         taken for power-profiles-daemon echoing the change; Unleashed put back",
-                        ECHO_WINDOW.as_secs()
-                    );
+                    if echo {
+                        info!(
+                            "the profile went back to performance within {}s of Unleashed - \
+                             taken for power-profiles-daemon echoing the change; Unleashed put back",
+                            ECHO_WINDOW.as_secs()
+                        );
+                    } else {
+                        info!(
+                            "the profile dropped to performance while a rule holds Unleashed, \
+                             without being asked for here; Unleashed put back"
+                        );
+                    }
                     // Still Unleashed: nothing else changes.
                     self.applied_for = Some((UNLEASHED.to_owned(), ctx.on_ac));
                     return;

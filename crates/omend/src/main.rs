@@ -1144,6 +1144,8 @@ impl Runtime {
             discharging: omen_core::power::battery_discharging(),
             surface: self.thermal.surface(),
             read_only: self.read_only,
+            hold_unleashed: self.rule_holds(omen_core::limits::UNLEASHED)
+                && !shared::profile_asked_pending(),
         });
         for what in outcome.problems {
             self.problem(what);
@@ -1319,7 +1321,14 @@ impl Runtime {
         if !self.cfg.apps.is_empty() && self.apps_scanned.elapsed() >= self.cfg.app_scan_interval()
         {
             self.apps_scanned = Instant::now();
+            let before = self.apps.active().is_some();
             let actions = self.apps.poll(&self.cfg.apps, self.mode);
+            // An application profile that arrives while GameMode's rule holds
+            // replaces it (scan_gamemode releases it next), and when the game
+            // ends it should go back to what was there before either rule.
+            if !before && self.apps.active().is_some() && self.game.active().is_some() {
+                self.apps.inherit_previous(&self.game);
+            }
             self.take_actions(actions);
         }
         self.scan_gamemode();
@@ -1377,6 +1386,19 @@ impl Runtime {
             profile: Some("performance".into()),
             ..PowerRule::default()
         }
+    }
+
+    /// Whether the rule in force selected `profile`.
+    fn rule_holds(&self, profile: &str) -> bool {
+        [
+            self.apps.applied_profile(),
+            self.game.applied_profile(),
+            self.triggers.applied_profile(),
+        ]
+        .into_iter()
+        .flatten()
+        .next()
+            == Some(profile)
     }
 
     /// The rule in force, most specific first: an application, GameMode, a

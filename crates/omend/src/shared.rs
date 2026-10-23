@@ -32,6 +32,12 @@ pub fn take_profile_asked() -> bool {
     PROFILE_ASKED.swap(false, Ordering::SeqCst)
 }
 
+/// The same, without taking it: for a check that runs before the one that
+/// owns the flag, in the same tick.
+pub fn profile_asked_pending() -> bool {
+    PROFILE_ASKED.load(Ordering::SeqCst)
+}
+
 #[derive(Debug, Default)]
 pub struct Inner {
     /// The mode the client asked for. `None` -> nothing pending.

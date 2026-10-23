@@ -263,6 +263,14 @@ struct omen_rgb {
 	u64 zone_ns_total;
 	u64 zone_ns_max;
 	struct delayed_work poll_work;
+	/*
+	 * After a resume: the colours and the switch put back, checked, and
+	 * tried again until they hold - see omen_resume_work().
+	 */
+	struct delayed_work resume_work;
+	unsigned int resume_tries;
+	/* Whether the keyboard was lit going into the suspend. */
+	bool lit_at_suspend;
 	/* The extended EC RAM lighting block, 8D24 only - see debugfs below. */
 	void __iomem *h2ra;
 	/* The fan tachometers in the same RAM, 8D24 only - see omen_hwmon_read. */
@@ -1714,10 +1722,14 @@ static void omen_debugfs_init(struct omen_rgb *rgb)
 
 /* --- probe --- */
 
+static void omen_resume_work(struct work_struct *work);
+
 static void omen_cancel_poll(void *data)
 {
 	struct omen_rgb *rgb = data;
 
+	/* First: it schedules the poll when it finishes. */
+	cancel_delayed_work_sync(&rgb->resume_work);
 	cancel_delayed_work_sync(&rgb->poll_work);
 }
 
@@ -1725,6 +1737,7 @@ static void omen_cancel_work(void *data)
 {
 	struct omen_rgb *rgb = data;
 
+	cancel_delayed_work_sync(&rgb->resume_work);
 	cancel_delayed_work_sync(&rgb->poll_work);
 	cancel_delayed_work_sync(&rgb->zone_work);
 }
@@ -1739,6 +1752,7 @@ static int omen_lighting_probe(struct omen_rgb *rgb)
 
 	INIT_DELAYED_WORK(&rgb->zone_work, omen_zone_work);
 	INIT_DELAYED_WORK(&rgb->poll_work, omen_poll_work);
+	INIT_DELAYED_WORK(&rgb->resume_work, omen_resume_work);
 	/*
 	 * Registered before the LEDs, so it runs after they are unregistered:
 	 * nothing can queue work once this has cancelled it.
@@ -1881,36 +1895,88 @@ static int omen_rgb_suspend(struct device *dev)
 	if (!omen_has_lighting)
 		return 0;
 
+	cancel_delayed_work_sync(&rgb->resume_work);
 	cancel_delayed_work_sync(&rgb->poll_work);
 	flush_delayed_work(&rgb->zone_work);
+
+	/* Asked now, not taken from the poll, which can be two seconds old. */
+	scoped_guard(mutex, &rgb->lock) {
+		u8 hw;
+
+		if (!omen_backlight_read(&hw))
+			rgb->hw = hw;
+		rgb->lit_at_suspend = rgb->hw > 0;
+	}
 	return 0;
 }
 
 /*
- * Puts the colours back after sleep.
+ * Puts the keyboard back after sleep: the colours, and the switch as it was
+ * going in.
  *
- * The firmware is free to reinitialise the EC across a suspend or a
- * hibernation, and the colours were only ever in the EC. Writing them from
- * here means the keyboard comes back right with or without the daemon. The
- * switch is left alone - whether the keyboard should be lit after resume is
- * the firmware's call, and the poll reports what it decided.
+ * Reported on 8D24 (kernel 7.3): after a resume the keyboard stayed dark and
+ * nothing would light it. The colours and the switch live in the EC's
+ * memory-mapped RAM (H2RA, LRGB and LBRT), and a write made from the resume
+ * callback itself can land before the EC has that window back. So the work
+ * is done a moment later, from a work item, and checked: LBRT is read back,
+ * and the whole write is repeated until it holds or the tries run out.
+ *
+ * The switch used to be left to the firmware. Under Windows the keyboard
+ * comes back lit - the vendor software does nothing on resume - and on Linux
+ * the firmware brings it back dark, so the state it went into the suspend
+ * with is put back here.
  */
+#define RESUME_DELAY_MS		500
+#define RESUME_RETRY_MS		1000
+#define RESUME_TRIES		5
+
+static void omen_resume_work(struct work_struct *work)
+{
+	struct omen_rgb *rgb = container_of(to_delayed_work(work),
+					    struct omen_rgb, resume_work);
+	bool held = false;
+	u8 hw = 0;
+	int ret;
+
+	scoped_guard(mutex, &rgb->lock) {
+		ret = omen_write_zones(rgb);
+		if (!ret && rgb->lit_at_suspend)
+			ret = omen_backlight_set(true);
+		if (!ret)
+			ret = omen_backlight_read(&hw);
+		if (!ret)
+			held = !rgb->lit_at_suspend || hw > 0;
+	}
+
+	rgb->resume_tries++;
+	if (!held && rgb->resume_tries < RESUME_TRIES) {
+		schedule_delayed_work(&rgb->resume_work,
+				      msecs_to_jiffies(RESUME_RETRY_MS));
+		return;
+	}
+	if (!held)
+		dev_warn(rgb->dev,
+			 "the keyboard did not come back after resume (%d, %u tries)\n",
+			 ret, rgb->resume_tries);
+	else if (rgb->resume_tries > 1)
+		dev_info(rgb->dev, "keyboard restored after resume, on try %u\n",
+			 rgb->resume_tries);
+
+	/* The poll picks the switch's state up and tells the desktop. */
+	if (poll_ms)
+		schedule_delayed_work(&rgb->poll_work, 0);
+}
+
 static int omen_rgb_resume(struct device *dev)
 {
 	struct omen_rgb *rgb = dev_get_drvdata(dev);
-	int ret;
 
 	if (!omen_has_lighting)
 		return 0;
 
-	scoped_guard(mutex, &rgb->lock) {
-		ret = omen_write_zones(rgb);
-		if (ret)
-			dev_warn(dev, "could not restore the zone colours: %d\n", ret);
-	}
-
-	if (poll_ms)
-		schedule_delayed_work(&rgb->poll_work, 0);
+	rgb->resume_tries = 0;
+	schedule_delayed_work(&rgb->resume_work,
+			      msecs_to_jiffies(RESUME_DELAY_MS));
 	return 0;
 }
 

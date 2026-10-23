@@ -102,6 +102,26 @@ impl Takeover {
         self.active.as_ref().map(|(name, _, _)| name.as_str())
     }
 
+    /// The profile the rule in force selected, if it selected one.
+    pub fn applied_profile(&self) -> Option<&str> {
+        self.active
+            .as_ref()
+            .and_then(|(_, _, applied)| applied.profile.as_deref())
+    }
+
+    /// Takes over what `other` remembered as the state before it, when both
+    /// hold. For a rule that replaces another mid-way - an application
+    /// profile arriving while GameMode's rule holds - so that the end of it
+    /// goes back to what was there before either, not to the other rule's
+    /// setting.
+    pub fn inherit_previous(&mut self, other: &Takeover) {
+        if let (Some((_, previous, _)), Some((_, theirs, _))) =
+            (self.active.as_mut(), other.active.as_ref())
+        {
+            previous.profile = theirs.profile.clone();
+        }
+    }
+
     /// One evaluation. `holding` is the rule that should be in force now -
     /// its name and what it wants - or `None` when nothing should be.
     ///

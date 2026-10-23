@@ -34,6 +34,15 @@ impl AppWatch {
         self.inner.active()
     }
 
+    pub fn applied_profile(&self) -> Option<&str> {
+        self.inner.applied_profile()
+    }
+
+    /// See [`Takeover::inherit_previous`].
+    pub fn inherit_previous(&mut self, other: &Takeover) {
+        self.inner.inherit_previous(other);
+    }
+
     /// One scan. `mode` is the daemon's current fan mode.
     pub fn poll(&mut self, profiles: &[AppProfile], mode: ControlMode) -> Actions {
         let running = apps::running_processes();
