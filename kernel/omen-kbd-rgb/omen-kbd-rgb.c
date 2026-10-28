@@ -107,7 +107,7 @@ static bool omen_has_dgpu_temp;
 static bool omen_has_gpu_power;
 /* EC 0x48 holds a believable skin temperature - see omen_surface_detect. */
 static bool omen_has_surface_temp;
-/* Unleashed and PL1: 8D24, whose DSDT these were read out of. */
+/* Unleashed and PL1: 8D24, whose DSDT these were read out of, and 8E35. */
 static bool omen_has_power_limits;
 /* The shared CPU+GPU limit: as above, and the firmware reports one. */
 static bool omen_has_tpp;
@@ -1477,9 +1477,11 @@ static const struct dmi_system_id omen_family[] = {
  *
  * A research tool, kept because it is how the backlight switch was found
  * (rgb-protocol.md §5): dump it with the backlight off, then on, and diff.
- * It lives in debugfs because nothing depends on it, and only on 8D24
- * because the address is that board's DSDT (OperationRegion H2RA); on
- * another board the same address is someone else's registers.
+ * It lives in debugfs because nothing depends on it, and only on boards
+ * whose DSDT declares the same OperationRegion H2RA: 8D24, where it was
+ * read out, and 8E35, whose H2RA and ERAM fields sit at the same offsets
+ * and whose GM1A, GM23 and GM29 are the same methods. On another board
+ * the same address is someone else's registers.
  */
 #define H2RA_BASE	0xFE700000
 #define H2RA_LIGHTING	0xEE0
@@ -1488,6 +1490,8 @@ static const struct dmi_system_id omen_family[] = {
 static const struct dmi_system_id omen_h2ra_boards[] = {
 	{ .matches = { DMI_MATCH(DMI_BOARD_VENDOR, "HP"),
 		       DMI_EXACT_MATCH(DMI_BOARD_NAME, "8D24") } },
+	{ .matches = { DMI_MATCH(DMI_BOARD_VENDOR, "HP"),
+		       DMI_EXACT_MATCH(DMI_BOARD_NAME, "8E35") } },
 	{ }
 };
 
