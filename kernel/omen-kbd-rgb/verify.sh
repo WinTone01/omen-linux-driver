@@ -163,7 +163,7 @@ say "8d. Fan table and the GPU power bytes (0.4.0)"
 if [ -e $DEV/fan_table ]; then
   if ROWS=$(cat $DEV/fan_table 2>/dev/null) && [ -n "$ROWS" ]; then
     ok "fan_table, $(echo "$ROWS" | wc -l) rows (fan 1 RPM, fan 2 RPM, dB):"
-    echo "$ROWS" | sed 's/^/       /'
+    printf '       %s\n' "${ROWS//$'\n'/$'\n'       }"
     # 8D24's DSDT: P1F1/P1F2/P1DB start at 18/16/22 and end at 48/51/50.
     [ "$(echo "$ROWS" | head -1)" = "1800 1600 22" ] && [ "$(echo "$ROWS" | tail -1)" = "4800 5100 50" ] \
       && ok "first and last rows are the DSDT's" \
