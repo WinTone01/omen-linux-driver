@@ -212,6 +212,9 @@ fn run(args: Args) -> Result<()> {
 
     let hot_above_c = cfg.safety.stall_temp_c;
     let has_fan = fan.is_some();
+    // The guard gets the sources found above: discovering them again could
+    // come back empty if a hwmon went away in between.
+    let guard_thermal = thermal.clone();
     let mut rt = Runtime::new(fan.clone(), thermal, cfg, read_only, &args.config)?;
     rt.caps = Some(caps);
     if has_fan {
@@ -220,13 +223,7 @@ fn run(args: Args) -> Result<()> {
     rt.apply_startup_profile();
 
     // Nothing to restore on exit when nothing was ever driven.
-    let mut keeper = fan.map(|fan| {
-        AutoRestore::new(
-            fan,
-            Thermal::discover().expect("a temperature source was found a moment ago"),
-            hot_above_c,
-        )
-    });
+    let mut keeper = fan.map(|fan| AutoRestore::new(fan, guard_thermal, hot_above_c));
     if read_only {
         if let Some(keeper) = keeper.as_mut() {
             keeper.disarm();

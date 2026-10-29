@@ -1,6 +1,6 @@
 [package]
 name = "omenctl"
-description = "OMEN 16-ap0xxx fan ve termal durum araci"
+description = "OMEN 16-ap0xxx fan and thermal status tool"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
