@@ -219,12 +219,22 @@ fn hardware() -> Section {
     });
 
     let board = read("/sys/class/dmi/id/board_name").unwrap_or_else(|| "unknown".into());
-    checks.push(if board == "8D24" {
+    checks.push(if board == crate::caps::VERIFIED_BOARD {
         Check::new(
             "board",
             "Board",
             Verdict::Ok,
             format!("{board}, the one this is built for"),
+        )
+    } else if crate::caps::H2RA_BOARDS.contains(&board.as_str()) {
+        Check::new(
+            "board",
+            "Board",
+            Verdict::Ok,
+            format!(
+                "{board}, whose firmware matches {} (docs/acpi/{board})",
+                crate::caps::VERIFIED_BOARD
+            ),
         )
     } else {
         Check::new(
@@ -908,10 +918,11 @@ fn power(snapshot: &DaemonView) -> Section {
     let rgb = about::module_status("omen_kbd_rgb");
     let board = read("/sys/class/dmi/id/board_name").unwrap_or_default();
 
-    // On 8D24 the controls are expected; elsewhere their absence is the
-    // answer, not a fault.
+    // On the H2RA boards the controls are expected; elsewhere their absence
+    // is the answer, not a fault.
     let limits_here = crate::limits::has_unleashed();
-    checks.push(match (limits_here, board.as_str(), rgb.loaded) {
+    let h2ra_board = crate::caps::H2RA_BOARDS.contains(&board.as_str());
+    checks.push(match (limits_here, h2ra_board, rgb.loaded) {
         (true, _, _) => Check::new(
             "power_limits",
             "Unleashed and PL1",
@@ -921,7 +932,7 @@ fn power(snapshot: &DaemonView) -> Section {
                 crate::limits::pl1().map_or("unreadable".into(), |w| format!("{w} W"))
             ),
         ),
-        (false, "8D24", true) => Check::new(
+        (false, true, true) => Check::new(
             "power_limits",
             "Unleashed and PL1",
             Verdict::Warn,
@@ -931,7 +942,7 @@ fn power(snapshot: &DaemonView) -> Section {
             "./install.sh updates the module; then \
              sudo modprobe -r omen-kbd-rgb && sudo modprobe omen-kbd-rgb",
         ),
-        (false, "8D24", false) => Check::new(
+        (false, true, false) => Check::new(
             "power_limits",
             "Unleashed and PL1",
             Verdict::Skip,
@@ -941,7 +952,7 @@ fn power(snapshot: &DaemonView) -> Section {
             "power_limits",
             "Unleashed and PL1",
             Verdict::Skip,
-            "only on board 8D24, whose firmware they were read from",
+            "only on 8D24, whose firmware they were read from, and 8E35, which matches it",
         ),
     });
 

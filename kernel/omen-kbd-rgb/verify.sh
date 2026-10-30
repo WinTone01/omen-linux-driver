@@ -156,7 +156,7 @@ if [ -e $DEV/cpu_pl1 ]; then
   [ -e $DEV/gpu_tpp ] && ok "shared CPU+GPU limit $(cat $DEV/gpu_tpp) W (GM2A)" \
                       || info "no gpu_tpp - the firmware reports no shared limit"
 else
-  no "no cpu_pl1 / unleashed - not 8D24, or not an OMEN by DMI"
+  no "no cpu_pl1 / unleashed - not 8D24 or 8E35, or not an OMEN by DMI"
 fi
 
 say "8d. Fan table and the GPU power bytes (0.4.0)"

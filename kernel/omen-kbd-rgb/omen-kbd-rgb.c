@@ -271,9 +271,9 @@ struct omen_rgb {
 	unsigned int resume_tries;
 	/* Whether the keyboard was lit going into the suspend. */
 	bool lit_at_suspend;
-	/* The extended EC RAM lighting block, 8D24 only - see debugfs below. */
+	/* The extended EC RAM lighting block, H2RA boards only - see debugfs. */
 	void __iomem *h2ra;
-	/* The fan tachometers in the same RAM, 8D24 only - see omen_hwmon_read. */
+	/* The fan tachometers in the same RAM, H2RA boards only - see below. */
 	void __iomem *fans;
 	struct dentry *debugfs;
 };
@@ -1124,10 +1124,10 @@ static bool omen_nvidia_gpu_present(void)
  * The Hub sends PL1 in both of the first two bytes on AMD - "60,60,255,255"
  * is its performance default - so this does too.
  *
- * Writes go through the firmware's own methods; the EC is only read. 8D24
- * only: the registers behind these commands are this board's DSDT, and
- * omen-space keeps 8D24 on its list of boards where a wrong EC access ends
- * in a Caps Lock panic.
+ * Writes go through the firmware's own methods; the EC is only read. Only on
+ * omen_h2ra_boards: the registers behind these commands are those boards'
+ * DSDT, and omen-space keeps 8D24 on its list of boards where a wrong EC
+ * access ends in a Caps Lock panic.
  */
 #define OMEN_THERMAL_PROFILE	0x1A
 #define OMEN_POWER_LIMITS_SET	0x29
@@ -1361,7 +1361,8 @@ static const struct attribute_group *omen_rgb_groups[] = {
  * reading it here is the same number without the trip through ACPI. The Hub
  * caps PL1 and shapes its fan tables on it; a palm rest is what it measures.
  *
- * 8D24 only, for the same reason as the fans: the address is that board's.
+ * omen_h2ra_boards only, for the same reason as the fans: the address is
+ * those boards'.
  */
 #define EC_SURFACE_TEMP		0x48
 
@@ -1590,7 +1591,8 @@ static const struct file_operations zone_stats_fops = {
 
 /*
  * The fan handover, for docs/research/ec-handover.md. Research tools, like
- * the rest of debugfs: nothing depends on them, and they exist on 8D24 only.
+ * the rest of debugfs: nothing depends on them, and they exist on
+ * omen_h2ra_boards only.
  *
  * fan_state reads the registers the handover is about. Every one is a read:
  *

@@ -7,7 +7,7 @@
 **Fans, thermals, RGB and graphics switching for the HP OMEN 16-ap0xxx on Linux —
 built by reading the firmware, not by guessing.**
 
-[![Board](https://img.shields.io/badge/board-8D24-e81123)](#target-hardware)
+[![Board](https://img.shields.io/badge/board-8D24%20%7C%208E35-e81123)](#which-machines)
 [![Interfaces](https://img.shields.io/badge/interfaces-hwmon%20%C2%B7%20platform__profile%20%C2%B7%20leds--multicolor-2dd4bf)](#how-it-fits-together)
 [![Built with](https://img.shields.io/badge/rust%20%2B%20C-daemon%20%C2%B7%20CLI%20%C2%B7%20GUI%20%C2%B7%20kernel%20module-a855f7)](#layout)
 [![License](https://img.shields.io/badge/license-GPL--2.0--only-lightgrey)](LICENSE)
@@ -75,9 +75,12 @@ in the window and as <code>omenctl doctor</code>.</sub>
 
 ## Which machines
 
-Everything here was **measured on one board** — 8D24, the OMEN 16-ap0xxx — and
-that is the only machine anything is verified on. It is built to work across
-the family anyway, and the installer adapts to the machine it runs on:
+Everything here was **measured on one board** — 8D24, the OMEN 16-ap0xxx.
+The same model also ships on **8E35**, whose firmware was compared with 8D24's
+field by field ([`docs/acpi/8E35`](docs/acpi/8E35)) and tested on the machine,
+so it gets Unleashed, PL1, the shared CPU+GPU limit and the surface sensor
+too. It is built to work across the family anyway, and the installer adapts
+to the machine it runs on:
 
 | | On any OMEN / Victus |
 |---|---|
@@ -87,6 +90,7 @@ the family anyway, and the installer adapts to the machine it runs on:
 | Keyboard lighting | The module asks the firmware whether the lighting group answers, rather than matching a board list. |
 | Graphics mux | Asked of the firmware the same way; absent machines simply do not show it. |
 | Discrete GPU temperature | One EC register, read on OMEN and Victus only — corroborated across the family, measured on one of them. |
+| Unleashed, PL1, surface sensor | Only on boards whose firmware has 8D24's layout — 8D24 and 8E35 — because the module reads registers at that firmware's addresses. |
 
 What stays board-specific: the fan's real RPM range (`omenctl calibrate`
 measures yours), and the four-zone keyboard layout. `omenctl caps` says what

@@ -188,7 +188,7 @@ fn write(file: &str, value: impl std::fmt::Display) -> Result<()> {
     std::fs::write(&p, value.to_string()).map_err(|source| Error::Write { path: p, source })
 }
 
-/// Whether this machine has Unleashed (omen-kbd-rgb 0.3.0 on 8D24).
+/// Whether this machine has Unleashed (omen-kbd-rgb 0.3.0 on 8D24 and 8E35).
 pub fn has_unleashed() -> bool {
     path("unleashed").exists()
 }

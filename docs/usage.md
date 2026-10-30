@@ -715,7 +715,7 @@ Module files, under `/sys/devices/platform/omen-kbd-rgb/`:
 | `gpu_mux_pending_reboot` | 1 when the mode differs from the one in force at load |
 
 The raw lighting block of the extended EC RAM that the research used is in
-debugfs now, on 8D24 only: `/sys/kernel/debug/omen-kbd-rgb/lighting_regs`.
+debugfs now, on 8D24 and 8E35 only: `/sys/kernel/debug/omen-kbd-rgb/lighting_regs`.
 
 ## Status
 

@@ -69,6 +69,13 @@ impl std::fmt::Display for Level {
 /// The board this project was built and verified on.
 pub const VERIFIED_BOARD: &str = "8D24";
 
+/// The boards omen-kbd-rgb's `omen_h2ra_boards` lists: their DSDT has 8D24's
+/// H2RA and ERAM layout, so Unleashed, PL1, the surface sensor and the fan
+/// tachometers are offered on them. 8E35's was compared field by field
+/// (docs/acpi/8E35); the fan range and the EC handover were measured on 8D24
+/// only, which is what [`VERIFIED_BOARD`] still stands for.
+pub const H2RA_BOARDS: &[&str] = &["8D24", "8E35"];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Caps {
     pub vendor: Option<String>,
