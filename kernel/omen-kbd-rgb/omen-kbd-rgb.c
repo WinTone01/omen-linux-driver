@@ -271,7 +271,7 @@ struct omen_rgb {
 	unsigned int resume_tries;
 	/* Whether the keyboard was lit going into the suspend. */
 	bool lit_at_suspend;
-	/* The extended EC RAM lighting block, H2RA boards only - see debugfs. */
+	/* The extended EC RAM lighting block, H2RA boards only - see below. */
 	void __iomem *h2ra;
 	/* The fan tachometers in the same RAM, H2RA boards only - see below. */
 	void __iomem *fans;

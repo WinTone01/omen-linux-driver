@@ -58,14 +58,16 @@ jobs:
       # The hp-wmi change is meant to be sent upstream, and upstream's first
       # gate is checkpatch. Failing it here is cheaper than failing it on a
       # mailing list.
+      # -f because without it a rate limit (429) is saved as checkpatch.pl and
+      # perl fails on "429:" with nothing to say why; --retry waits it out.
       - name: Fetch checkpatch
         run: |
           mkdir -p .ci
-          curl -sSL -o .ci/checkpatch.pl \
+          curl -fsSL --retry 5 --retry-delay 10 -o .ci/checkpatch.pl \
             https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl
-          curl -sSL -o .ci/spelling.txt \
+          curl -fsSL --retry 5 --retry-delay 10 -o .ci/spelling.txt \
             https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt
-          curl -sSL -o .ci/const_structs.checkpatch \
+          curl -fsSL --retry 5 --retry-delay 10 -o .ci/const_structs.checkpatch \
             https://raw.githubusercontent.com/torvalds/linux/master/scripts/const_structs.checkpatch
           chmod +x .ci/checkpatch.pl
 
@@ -136,7 +138,8 @@ jobs:
         run: |
           mkdir -p .ci
           for f in checkpatch.pl spelling.txt const_structs.checkpatch; do
-            curl -sSL -o ".ci/$f" "https://raw.githubusercontent.com/torvalds/linux/master/scripts/$f"
+            curl -fsSL --retry 5 --retry-delay 10 -o ".ci/$f" \
+              "https://raw.githubusercontent.com/torvalds/linux/master/scripts/$f"
           done
           perl .ci/checkpatch.pl --no-tree --strict -f kernel/omen-kbd-rgb/omen-kbd-rgb.c
 
