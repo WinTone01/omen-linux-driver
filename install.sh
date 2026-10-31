@@ -303,6 +303,18 @@ install_userspace() {
 }
 
 enable_service() {
+    # The board this disk was installed on. A disk that later boots on
+    # another computer leaves omend and omen-session skipped there - see
+    # omen-core's machine.rs. --force is passed on only when this installer
+    # was itself forced onto a machine that is not an OMEN or Victus.
+    local record=(/usr/bin/omend --record-machine)
+    (( FORCE )) && record+=(--force)
+    if sudo "${record[@]}" >/dev/null; then
+        ok "this machine is recorded: $(dmi sys_vendor) $(dmi board_name)"
+    else
+        warn "could not record this machine - omend falls back to checking for an OMEN or Victus"
+    fi
+
     sudo systemctl daemon-reload
     sudo systemd-sysusers >/dev/null 2>&1 || true
     sudo udevadm control --reload >/dev/null 2>&1 || true

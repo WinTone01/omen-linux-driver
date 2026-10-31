@@ -50,6 +50,9 @@ install -Dm644 ui/src-tauri/icons/128x128.png /usr/share/icons/hicolor/128x128/a
 install -Dm644 ui/src-tauri/icons/32x32.png   /usr/share/icons/hicolor/32x32/apps/omen-control.png
 
 say "4. Activating"
+# The board this disk belongs to; on another computer omend stays skipped.
+/usr/bin/omend --record-machine || \
+  echo "  not recorded - omend falls back to checking for an OMEN or Victus"
 systemd-sysusers
 systemctl daemon-reload
 udevadm control --reload

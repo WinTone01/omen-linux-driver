@@ -1,4 +1,14 @@
+# The board this disk belongs to, so that booting it on another computer
+# leaves omend skipped there. Only when there is no record yet: an upgrade
+# must not move it, and install.sh has usually just written it. omend refuses
+# on anything but an OMEN or Victus, which is what a package installed on a
+# desktop should get.
+record_machine() {
+  [ -e /etc/omen/machine ] || /usr/bin/omend --record-machine >/dev/null 2>&1 || true
+}
+
 post_install() {
+  record_machine
   cat <<'MSG'
 
   omend is installed but not started. Before enabling it, make sure the
@@ -19,6 +29,8 @@ MSG
 }
 
 post_upgrade() {
+  record_machine
+
   # Restart it rather than print a reminder. The daemon keeps running the old
   # binary until it is restarted, so without this the fix you just installed
   # is still not the code that is running - and the reminder is read by

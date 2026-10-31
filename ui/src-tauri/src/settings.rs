@@ -88,7 +88,7 @@ impl Settings {
 
     /// Autostart is a file, not a setting: the desktop looks for a .desktop
     /// entry in ~/.config/autostart, so writing the JSON is not enough.
-    fn apply_autostart(&self) -> Result<(), String> {
+    pub fn apply_autostart(&self) -> Result<(), String> {
         let path = autostart_path();
         if !self.autostart {
             match std::fs::remove_file(&path) {
@@ -109,7 +109,7 @@ impl Settings {
              Type=Application\n\
              Name=OMEN Control\n\
              Comment=Fan curve, thermal profile and RGB keyboard control\n\
-             Exec=omen-ui\n\
+             Exec=omen-ui --autostart\n\
              Icon=omen-control\n\
              Terminal=false\n\
              X-GNOME-Autostart-enabled=true\n\

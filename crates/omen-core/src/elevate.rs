@@ -49,6 +49,9 @@ pub enum Action {
     /// Add this user to the `omen` group, so the socket is reachable without
     /// sudo. Takes effect at the next login, which the caller is told.
     JoinOmenGroup,
+    /// Record this machine as the one the installation belongs to - after a
+    /// motherboard replacement, the record names a board that is gone.
+    RecordMachine,
 }
 
 impl Action {
@@ -60,6 +63,7 @@ impl Action {
             Self::ReloadRgb => "reload-rgb",
             Self::LoadEcSys => "load-ec-sys",
             Self::JoinOmenGroup => "join-omen-group",
+            Self::RecordMachine => "record-machine",
         }
     }
 
@@ -71,6 +75,7 @@ impl Action {
             "reload-rgb" => Self::ReloadRgb,
             "load-ec-sys" => Self::LoadEcSys,
             "join-omen-group" => Self::JoinOmenGroup,
+            "record-machine" => Self::RecordMachine,
             _ => return None,
         })
     }
@@ -83,6 +88,7 @@ impl Action {
             Action::ReloadRgb,
             Action::LoadEcSys,
             Action::JoinOmenGroup,
+            Action::RecordMachine,
         ]
     }
 
@@ -95,6 +101,7 @@ impl Action {
             Self::ReloadRgb => "Reload omen-kbd-rgb",
             Self::LoadEcSys => "Load ec_sys (read-only)",
             Self::JoinOmenGroup => "Join the 'omen' group",
+            Self::RecordMachine => "Record this machine as the one installed on",
         }
     }
 
@@ -121,6 +128,10 @@ impl Action {
             Self::JoinOmenGroup => {
                 "The daemon's socket belongs to that group; without it every command needs sudo. \
                  Log out and back in afterwards."
+            }
+            Self::RecordMachine => {
+                "The installation names another board, so the service skips this one. Only \
+                 for the same laptop after a motherboard replacement."
             }
         }
     }
@@ -163,6 +174,9 @@ impl Action {
                 "modprobe -r omen-kbd-rgb && modprobe omen-kbd-rgb",
             ]),
             Self::LoadEcSys => owned(&["modprobe", "ec_sys", "write_support=0"]),
+            // No --force, ever: omend refuses anything but an OMEN or Victus,
+            // so this cannot pin the installation to a desktop.
+            Self::RecordMachine => owned(&["/usr/bin/omend", "--record-machine"]),
             Self::JoinOmenGroup => {
                 vec![
                     "usermod".into(),
@@ -186,8 +200,12 @@ impl Action {
             // Installed and out of date with what is on disk. The daemon
             // keeps running the binary it started with, which after an
             // upgrade is the old one.
-            Self::RestartDaemon => service_installed() && service_active() && daemon_is_stale(),
-            Self::EnableDaemon => service_installed() && !service_active(),
+            // On a machine the installation does not belong to the service
+            // is skipped on purpose; starting it would only be skipped again.
+            Self::RestartDaemon => {
+                service_installed() && service_active() && daemon_is_stale() && machine_allowed()
+            }
+            Self::EnableDaemon => service_installed() && !service_active() && machine_allowed(),
             Self::ReloadHpWmi => crate::about::module_status("hp_wmi").stale(),
             Self::ReloadRgb => crate::about::module_status("omen_kbd_rgb").stale(),
             // Only worth offering where it would buy something: the GPU
@@ -199,6 +217,12 @@ impl Action {
                     && !crate::sysfs::Hwmon::all().iter().any(|h| h.name == "omen")
             }
             Self::JoinOmenGroup => group_exists() && !in_omen_group(),
+            // Only where the refusal has a remedy: an OMEN whose record names
+            // another board. A desktop is never offered it.
+            Self::RecordMachine => {
+                let verdict = crate::machine::check();
+                verdict.remedy(&crate::machine::Dmi::read()).is_some()
+            }
         }
     }
 }
@@ -314,6 +338,10 @@ pub fn run(action: Action) -> Result<String, String> {
         stderr,
         action.command()
     ))
+}
+
+fn machine_allowed() -> bool {
+    crate::machine::check().allowed()
 }
 
 fn service_installed() -> bool {

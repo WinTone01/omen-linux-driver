@@ -492,6 +492,36 @@ line in a DMI table would help nobody. What it cannot do, it says it cannot
 do — the status reports no fan mode, and a fan request is answered with the
 reason and the remedy instead of being queued.
 
+### A disk that boots on another computer
+
+That is for an OMEN that can do less. A computer that is not the one the disk
+was installed on is a different case: the same system booted on a desktop
+would still find a `coretemp` and start at `telemetry-only`, and some of what
+the daemon drives is generic. It finds the dGPU by NVIDIA's vendor ID, and on
+a desktop that is the card driving the screen.
+
+So the installer records the board in `/etc/omen/machine`, and on any other
+board nothing is driven:
+
+| | On another computer |
+|---|---|
+| `omen-kbd-rgb`, `hp-wmi` | not loaded: both need HP's WMI GUID, so they return `-ENODEV` without one (this was already the case) |
+| `omend`, `omen-session` | `ExecCondition=omend --check-machine` exits 1, and systemd logs the units as *skipped*, not failed: no restart loop, nothing red, and the reason in the journal |
+| `omend` started by hand | the same check at startup; it says why and exits 0 |
+| The window | autostart does not open it; opened by hand, it says why the service is absent |
+| `omenctl doctor` | *Installed on* says which machine this belongs to, and which this is |
+
+Without a record (a package installed on its own, or an installation older
+than this) the check is install.sh's: an HP OMEN or Victus passes, anything
+else does not. After a motherboard replacement the record names a board that
+is gone; `omenctl fix record-machine` writes the new one. It is offered only
+on an OMEN or Victus, and it refuses anything else, so it cannot pin the
+installation to a desktop.
+
+`omend --restore-auto`, which hands the fan back to the EC when the service
+stops, ignores the record on purpose: a record rewritten while the daemon held
+the fan must not leave the fan in manual mode.
+
 ### `pwm1` reads back the speed, not the setpoint
 
 Worth knowing before building anything on this interface. Writing `pwm1` sets

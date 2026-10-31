@@ -13,6 +13,12 @@ Type=simple
 # CAP_CHOWN is gone anyway. systemd refuses to start the unit if the group is
 # missing, so the sysusers file must be installed.
 Group=omen
+# The disk may boot on another computer. On anything but the machine it was
+# installed on (or, with no record, an OMEN or Victus) this exits 1 and
+# systemd skips the unit: "skipped", not "failed", so there is no restart
+# loop and nothing red in the journal - and nothing is driven. omend checks
+# again at startup for a daemon run by hand. See omen-core's machine.rs.
+ExecCondition=/usr/bin/omend --check-machine
 ExecStart=/usr/bin/omend --config /etc/omen/omend.toml
 Restart=on-failure
 RestartSec=5

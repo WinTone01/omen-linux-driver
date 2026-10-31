@@ -193,6 +193,28 @@ fn hardware() -> Section {
     // the verified one, half these checks are expected to fail and the
     // difference between "broken" and "not applicable here" is the whole
     // point.
+    // Before even that: on a machine the installation does not belong to,
+    // nothing below is driven, and every failure further down is the
+    // intended result rather than something to fix.
+    let verdict = crate::machine::check();
+    checks.push({
+        let check = Check::new(
+            "machine",
+            "Installed on",
+            match &verdict {
+                v if v.allowed() => Verdict::Ok,
+                crate::machine::Verdict::BadRecord(_) => Verdict::Fail,
+                // Not broken: this is the protection working.
+                _ => Verdict::Warn,
+            },
+            verdict.describe(),
+        );
+        match verdict.remedy(&crate::machine::Dmi::read()) {
+            Some(remedy) => check.with_fix(remedy),
+            None => check,
+        }
+    });
+
     let caps = crate::caps::Caps::detect();
     checks.push(match caps.level() {
         crate::caps::Level::Full => Check::new(

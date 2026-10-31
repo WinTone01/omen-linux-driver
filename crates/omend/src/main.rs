@@ -50,6 +50,10 @@ OPTIONS:
         --dry-run        Write nothing; log what would be done
         --once           Run a single iteration and exit (for diagnostics)
         --restore-auto   Return the fan to automatic and exit (systemd ExecStopPost)
+        --check-machine  Exit 0 if this is the machine it was installed on, 1 if
+                         not (systemd ExecCondition)
+        --record-machine Record this machine as the one it belongs to (root);
+                         refused on anything but an OMEN or Victus without --force
     -h, --help           Show this text
 
 EXAMPLE:
@@ -61,6 +65,9 @@ struct Args {
     dry_run: bool,
     once: bool,
     restore_auto: bool,
+    check_machine: bool,
+    record_machine: bool,
+    force: bool,
 }
 
 fn parse_args() -> Result<Option<Args>> {
@@ -69,6 +76,9 @@ fn parse_args() -> Result<Option<Args>> {
         dry_run: false,
         once: false,
         restore_auto: false,
+        check_machine: false,
+        record_machine: false,
+        force: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -81,6 +91,9 @@ fn parse_args() -> Result<Option<Args>> {
             "--dry-run" => args.dry_run = true,
             "--once" => args.once = true,
             "--restore-auto" => args.restore_auto = true,
+            "--check-machine" => args.check_machine = true,
+            "--record-machine" => args.record_machine = true,
+            "--force" => args.force = true,
             other => anyhow::bail!("unknown option: {other}\n\n{USAGE}"),
         }
     }
@@ -101,6 +114,27 @@ fn main() -> ExitCode {
         }
     };
 
+    // Before anything else, and with its own exit code: systemd's
+    // ExecCondition skips the unit on 1-254 and fails it on anything else, so
+    // a refusal here is "not this machine", never "broken".
+    if args.check_machine {
+        let verdict = omen_core::machine::check();
+        if verdict.allowed() {
+            return ExitCode::SUCCESS;
+        }
+        info!("{}", verdict.describe());
+        return ExitCode::from(1);
+    }
+    if args.record_machine {
+        return match record_machine(args.force) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                error!("{e:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     match run(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -114,13 +148,23 @@ fn run(args: Args) -> Result<()> {
     // Safety rule 1, third door: on SIGKILL `Drop` does not run. systemd
     // ExecStopPost calls this, so the fan returns to automatic no matter how
     // the daemon died. It deliberately ignores the configuration - a broken
-    // file must not make the recovery step fail.
+    // file must not make the recovery step fail. It ignores the machine
+    // record for the same reason: a record rewritten while the daemon held
+    // the fan must not leave the fan in manual mode on the way out.
     if args.restore_auto {
-        let fan = Fan::discover(
+        let fan = match Fan::discover(
             omen_core::fan::DEFAULT_MIN_RPM,
             omen_core::fan::DEFAULT_MAX_RPM,
-        )
-        .context("fan not found")?;
+        ) {
+            Ok(fan) => fan,
+            // systemd runs ExecStopPost after an ExecCondition skip too. On
+            // another computer there is no fan to hand back, and an error
+            // there would read as a fault on a unit that never started.
+            // Only the absence of a fan is excused: one that exists is
+            // parked whatever the record says.
+            Err(_) if !omen_core::machine::check().allowed() => return Ok(()),
+            Err(e) => return Err(e).context("fan not found"),
+        };
         // Same decision as the in-process exit path, and the same code, so
         // the two cannot drift apart. Defaults rather than the config file:
         // a broken config must not make the recovery step fail.
@@ -131,6 +175,20 @@ fn run(args: Args) -> Result<()> {
         );
         return Ok(());
     }
+
+    // The unit's ExecCondition asks this already; asked again for a daemon
+    // started by hand, or by a unit file older than the condition. Exit 0,
+    // not an error: Restart=on-failure must not keep trying a machine that
+    // will never be the right one.
+    let verdict = omen_core::machine::check();
+    if !verdict.allowed() {
+        warn!("{}", verdict.describe());
+        if let Some(remedy) = verdict.remedy(&omen_core::machine::Dmi::read()) {
+            warn!("{remedy}");
+        }
+        return Ok(());
+    }
+    info!("machine: {}", verdict.describe());
 
     let cfg = Config::load(&args.config).with_context(|| {
         format!(
@@ -306,6 +364,36 @@ fn run(args: Args) -> Result<()> {
     info!("shutting down");
     let _ = std::fs::remove_file(omen_core::ipc::socket_path());
     // `keeper` drops here and returns the fan to automatic.
+    Ok(())
+}
+
+/// Writes the machine record from what DMI says now.
+///
+/// Refused on anything but an OMEN or a Victus unless forced: this is what
+/// `omenctl fix record-machine` runs, and a button that pins the
+/// installation to a desktop would undo what the record is for. install.sh
+/// passes --force only when it was itself forced onto such a machine.
+fn record_machine(force: bool) -> Result<()> {
+    use omen_core::machine::{Dmi, Identity, RECORD_PATH};
+
+    let dmi = Dmi::read();
+    let id = dmi
+        .identity()
+        .context("DMI does not name this machine's vendor and board")?;
+    if !dmi.omen_family() && !force {
+        anyhow::bail!("{id} is not an HP OMEN or Victus; not recording it (--force to insist)");
+    }
+    let path = std::path::Path::new(RECORD_PATH);
+    match Identity::load(path) {
+        Ok(Some(old)) if old == id => {
+            println!("{id} is already the recorded machine");
+            return Ok(());
+        }
+        Ok(Some(old)) => println!("was {old}"),
+        _ => {}
+    }
+    id.save(path)?;
+    println!("recorded {id} in {RECORD_PATH}");
     Ok(())
 }
 

@@ -31,6 +31,7 @@ pub mod keys;
 pub mod lastboot;
 pub mod leds;
 pub mod limits;
+pub mod machine;
 pub mod power;
 pub mod profile;
 pub mod rapl;

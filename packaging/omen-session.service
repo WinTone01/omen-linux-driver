@@ -11,6 +11,9 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
+# Skipped on a machine this was not installed on, like omend itself: the
+# disk may boot on another computer, and there the daemon is not running.
+ExecCondition=/usr/bin/omend --check-machine
 ExecStart=/usr/bin/omenctl session
 Restart=on-failure
 RestartSec=10

@@ -944,7 +944,10 @@ fn fix(args: &[String]) -> Result<()> {
             }
             println!("  {:<18} $ {}\n", "", action.command());
         }
-        if offered == 0 {
+        let verdict = omen_core::machine::check();
+        if offered == 0 && !verdict.allowed() {
+            println!("  Nothing: {}.\n", verdict.describe());
+        } else if offered == 0 {
             println!("  Nothing. The service is installed and running, the modules are");
             println!("  loaded, and you are in the 'omen' group.\n");
         }

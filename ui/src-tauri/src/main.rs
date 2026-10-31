@@ -230,6 +230,20 @@ fn daemon_hint(e: &client::ClientError) -> Option<String> {
                 "<code>root:omen</code>, mode 0660."
             ),
         },
+        // Skipped on purpose on a machine the installation does not belong
+        // to; telling people to start it would send them after a fault that
+        // is not there.
+        ErrorKind::NotFound | ErrorKind::ConnectionRefused
+            if !omen_core::machine::check().allowed() =>
+        {
+            // DMI strings are the firmware's; the banner is HTML.
+            let why = omen_core::machine::check()
+                .describe()
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            return Some(format!("The service does not run on this computer: {why}."));
+        }
         ErrorKind::NotFound | ErrorKind::ConnectionRefused => concat!(
             "The service does not appear to be running. Start it with ",
             "<code>sudo systemctl enable --now omend</code>."
@@ -950,6 +964,14 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .cloned();
 
+    // Started by the session's autostart on a computer this was not
+    // installed on - the disk moved. Nothing here can be driven, so no
+    // window. Opened by hand it still comes up, and says why.
+    if args.iter().any(|a| a == "--autostart") && !omen_core::machine::check().allowed() {
+        eprintln!("{}", omen_core::machine::check().describe());
+        return;
+    }
+
     if !single::claim(tab.as_deref()) {
         return;
     }
@@ -962,6 +984,16 @@ fn main() {
                     "no tray icon ({e}); closing the window will quit. \
                      Install libappindicator-gtk3 for one."
                 ),
+            }
+
+            // An autostart entry written before --autostart existed opens the
+            // window on every computer the disk boots on. Rewriting it is
+            // cheap and makes the check above apply to it.
+            let settings = settings::Settings::load();
+            if settings.autostart {
+                if let Err(e) = settings.apply_autostart() {
+                    eprintln!("could not refresh the autostart entry: {e}");
+                }
             }
 
             single::listen(app.handle());
